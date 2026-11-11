@@ -166,6 +166,7 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 						...action,
 						description: "Example intro",
 						item_title: "Example lender intro",
+						due_on: "2026-03-20",
 						source_ref: "example:1",
 						item_bullets: JSON.stringify([
 							{ date: null, kind: "status", text: "Example" },
@@ -295,7 +296,7 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 					{
 						id: item.id,
 						title: "Example lender intro",
-						due_on: null,
+						due_on: "2026-03-20",
 						status: "open",
 						bullets: [{ date: null, kind: "status", text: "Example" }],
 						source_ref: "example:1",
@@ -416,7 +417,15 @@ test("open deals leave out closed and lost ones, sort, and filter", () =>
 			],
 		);
 		assert.equal(all[2]?.parked_at, "2026-01-05T00:00:00+00:00");
+		assert.equal(all[1]?.next_step_required, true);
 		assert.equal(all[3]?.next_step_required, true);
+		for (const workspace of [null, ""] as const) {
+			const board = await readBoard(tx, { actor: partner.slug, workspace });
+			assert.deepEqual(
+				board.deals.filter((d) => d.id && mine.includes(d.id)),
+				all,
+			);
+		}
 		assert.deepEqual(
 			(await read("team")).map((d) => d.id),
 			[flagged, later, parked, undated],
