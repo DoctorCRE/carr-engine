@@ -3,12 +3,16 @@ import { Kysely, PostgresDialect, sql, type Transaction } from "kysely";
 import pg from "pg";
 import type { DB } from "./database.d.ts";
 
-const url = process.env.TEST_DATABASE_URL;
-if (!url)
+const configured = process.env.TEST_DATABASE_URL;
+if (!configured)
 	throw new Error("Run npm run check to restore the test database first");
+export const url = configured;
 const db = new Kysely<DB>({
 	dialect: new PostgresDialect({
-		pool: new pg.Pool({ connectionString: url }),
+		pool: new pg.Pool({
+			connectionString: url,
+			options: "-c TimeZone=America/Chicago",
+		}),
 	}),
 });
 after(() => db.destroy());

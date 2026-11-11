@@ -346,6 +346,81 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 		},
 	));
 
+test("a deal's vendors sort by role, then company, then contact", () =>
+	withRows(async ({ tx, tag, partner, audit, party, client, deal }) => {
+		const id = await deal((await client("Example Owner")).id, "Example Deal", {
+			owner: partner.slug,
+		});
+		await tx
+			.insertInto("vendor_category")
+			.values({ slug: `bank-${tag}`, label: "Example", sort: 1 })
+			.execute();
+		await tx
+			.insertInto("vendor_disposition")
+			.values({
+				slug: `ready-${tag}`,
+				label: "Example",
+				workable: true,
+				sort: 1,
+			})
+			.execute();
+		const assign = async (
+			role: string,
+			company: string,
+			contact: string,
+			fixed?: string,
+		) => {
+			const vendor = await party(`Example vendor for ${contact}`, {
+				...(fixed ? { id: fixed } : {}),
+			});
+			await tx
+				.insertInto("vendor")
+				.values({
+					party_id: vendor.id,
+					category: `bank-${tag}`,
+					disposition: `ready-${tag}`,
+					...audit,
+				})
+				.execute();
+			await tx
+				.insertInto("deal_vendor_assignment")
+				.values({
+					deal_id: id,
+					party_id: vendor.id,
+					role,
+					company_party_id: company,
+					contact_party_id: (await party(contact, { kind: "person" })).id,
+					updated_by: partner.id,
+				})
+				.execute();
+			return vendor.id;
+		};
+		const a = (await party("Example Lender A")).id;
+		const b = (await party("Example Lender B")).id;
+		const zeta = (await party("Example Zeta")).id;
+		const lenderB = await assign("lender", b, "Pat Example");
+		const sam = "00000000-0000-4000-8000-000000000001";
+		await assign("lender", a, "Sam Example", sam);
+		const design = await assign("architect", zeta, "Lee Example");
+		const kim = "00000000-0000-4000-8000-000000000002";
+		await assign("lender", a, "Kim Example", kim);
+		const board = await readBoard(tx, {
+			actor: partner.slug,
+			workspace: "team",
+		});
+		assert.deepEqual(
+			board.deals
+				.find((d) => d.id === id)
+				?.vendors.map((v) => [v.role, v.party_id]),
+			[
+				["architect", design],
+				["lender", kim],
+				["lender", sam],
+				["lender", lenderB],
+			],
+		);
+	}));
+
 test("open deals leave out closed and lost ones, sort, and filter", () =>
 	withRows(async ({ tx, partner, client, deal }) => {
 		const team = await client("Example Team Client");

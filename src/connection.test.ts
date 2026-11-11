@@ -2,11 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import pg from "pg";
+import { withSnapshot } from "../scripts/test-database.ts";
+import { url } from "./test-rollback.ts";
 import worker from "./worker.ts";
-
-const url = process.env.TEST_DATABASE_URL;
-if (!url)
-	throw new Error("Run npm run check to restore the test database first");
 
 const actor = { slug: "test-partner", display: "Test Partner" };
 const CARR = {
@@ -23,11 +21,12 @@ async function ask(database?: { connectionString: string }) {
 }
 
 async function withLogin(
+	database: string,
 	grant: boolean,
 	run: (login: string) => Promise<void>,
 ) {
 	const name = `engine_probe_${randomUUID().replaceAll("-", "")}`;
-	const admin = new pg.Client({ connectionString: url });
+	const admin = new pg.Client({ connectionString: database });
 	await admin.connect();
 	try {
 		await admin.query(`CREATE ROLE ${name} LOGIN`);
@@ -36,7 +35,7 @@ async function withLogin(
 			await admin.query(
 				`GRANT SELECT ON public.v_open_deal_room_board TO ${name}`,
 			);
-		const login = new URL(url as string);
+		const login = new URL(database);
 		login.username = name;
 		await run(login.href);
 	} finally {
@@ -48,17 +47,19 @@ async function withLogin(
 
 for (const grant of [true, false])
 	test(`a login ${grant ? "with" : "without"} the board grant gets a read-only UTC snapshot`, async () => {
-		await withLogin(grant, async (connectionString) => {
-			assert.deepEqual(await ask({ connectionString }), {
-				status: 200,
-				body: {
-					read_only: true,
-					isolation: "repeatable read",
-					time_zone: "UTC",
-					board_view_readable: grant,
-				},
-			});
-		});
+		await withSnapshot((database) =>
+			withLogin(database, grant, async (connectionString) => {
+				assert.deepEqual(await ask({ connectionString }), {
+					status: 200,
+					body: {
+						read_only: true,
+						isolation: "repeatable read",
+						time_zone: "UTC",
+						board_view_readable: grant,
+					},
+				});
+			}),
+		);
 	});
 
 test("no binding and an unreachable database both answer 503 with a fixed body", async () => {
