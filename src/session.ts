@@ -46,6 +46,7 @@ async function equalTokens(
 }
 
 export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
+	c.header("Cache-Control", "no-store");
 	let renewed: string[] = [];
 	const protect = () => {
 		c.header("Cache-Control", "no-store");
@@ -87,15 +88,23 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 		);
 		renewed = response.headers.getSetCookie();
 	} catch (error) {
-		return unavailable(error instanceof Error ? error.name : "unknown");
+		return unavailable(
+			error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name)
+				? error.name
+				: "unknown",
+		);
 	}
 	if (response.status === 401) return refuse("unauthorized", 401);
 	if (response.status !== 200) return unavailable(`status ${response.status}`);
 	let session: Session;
 	try {
 		session = parseSession(await response.json());
-	} catch {
-		return unavailable("malformed");
+	} catch (error) {
+		return unavailable(
+			error instanceof Error && error.name === "TimeoutError"
+				? "TimeoutError"
+				: "malformed",
+		);
 	}
 
 	if (c.req.method !== "GET" && c.req.method !== "HEAD") {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, mock, test } from "node:test";
+import { format } from "node:util";
 import { Hono } from "hono";
 import { requireSession, type SessionEnv } from "./session.ts";
 import worker from "./worker.ts";
@@ -69,6 +70,7 @@ for (const value of [
 		assert.deepEqual(await response.json(), { error: "unauthorized" });
 		assert.equal(response.headers.get("Cache-Control"), "no-store");
 		assert.equal(fake.requests.length, 0);
+		assert.equal(warnings.mock.callCount(), 0);
 	});
 }
 
@@ -85,6 +87,7 @@ for (const status of [401, 302, 500]) {
 			error: status === 401 ? "unauthorized" : "sign_in_unavailable",
 		});
 		assert.equal(response.headers.get("Cache-Control"), "no-store");
+		assert.equal(warnings.mock.callCount(), status === 401 ? 0 : 1);
 	});
 }
 
@@ -127,30 +130,49 @@ for (const body of [
 	});
 }
 
-test("CARR that never answers is sign-in unavailable within the time limit", {
-	timeout: 1000,
-}, async (t) => {
-	const limits: number[] = [];
-	t.mock.method(AbortSignal, "timeout", (ms: number) => {
-		limits.push(ms);
-		return AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
-	});
-	const fake = binding(({ signal }) => {
-		return new Promise((_, reject) => {
-			if (signal.aborted) reject(signal.reason);
-			signal.addEventListener("abort", () => reject(signal.reason));
+function onAbort(signal: AbortSignal, fail: (reason: unknown) => void) {
+	if (signal.aborted) fail(signal.reason);
+	signal.addEventListener("abort", () => fail(signal.reason));
+}
+
+for (const [name, reply] of [
+	[
+		"never answers",
+		({ signal }) => new Promise((_, reject) => onAbort(signal, reject)),
+	],
+	[
+		"stalls in the body",
+		({ signal }) =>
+			new Response(
+				new ReadableStream({
+					start: (controller) => onAbort(signal, (e) => controller.error(e)),
+				}),
+			),
+	],
+] satisfies [string, (request: Request) => Response | Promise<Response>][]) {
+	test(`CARR that ${name} is sign-in unavailable at the time limit`, {
+		timeout: 1000,
+	}, async (t) => {
+		const limits: number[] = [];
+		t.mock.method(AbortSignal, "timeout", (ms: number) => {
+			limits.push(ms);
+			return AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
 		});
+		const response = await worker.request(
+			path,
+			{ headers: { Cookie: cookie } },
+			binding(reply).env,
+		);
+		assert.equal(response.status, 503);
+		assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
+		assert.deepEqual(limits, [3000]);
+		assert.equal(warnings.mock.callCount(), 1);
+		assert.equal(
+			format(...(warnings.mock.calls[0]?.arguments ?? [])),
+			"sign-in check unavailable: TimeoutError",
+		);
 	});
-	const response = await worker.request(
-		path,
-		{ headers: { Cookie: cookie } },
-		fake.env,
-	);
-	assert.equal(response.status, 503);
-	assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
-	assert.equal(limits.length, 1);
-	assert.ok((limits[0] ?? Infinity) <= 5000);
-});
+}
 
 for (const [kind, reply] of [
 	["status 500", () => new Response(cookie, { status: 500 })],
@@ -162,6 +184,14 @@ for (const [kind, reply] of [
 	],
 	["malformed", () => Response.json({ ...session, csrf_token: "" })],
 	["malformed", () => new Response(cookie)],
+	[
+		"unknown",
+		() => {
+			const error = new Error("made-up failure");
+			error.name = cookie;
+			throw error;
+		},
+	],
 ] satisfies [string, () => Response][]) {
 	test(`CARR failure logs only its kind (${kind})`, async () => {
 		const response = await worker.request(
@@ -171,7 +201,7 @@ for (const [kind, reply] of [
 		);
 		assert.equal(response.status, 503);
 		assert.equal(warnings.mock.callCount(), 1);
-		const logged = JSON.stringify(warnings.mock.calls[0]?.arguments);
+		const logged = format(...(warnings.mock.calls[0]?.arguments ?? []));
 		assert.ok(logged.includes(kind));
 		for (const secret of ["made-up-session", "made-up-csrf", actor.slug])
 			assert.ok(!logged.includes(secret), `${secret} was logged`);
@@ -349,4 +379,21 @@ test("a protected handler that throws stays a server error", async (t) => {
 	assert.equal(response.status, 500);
 	assert.equal(response.headers.get("Cache-Control"), "no-store");
 	assert.equal(warnings.mock.callCount(), 0);
+});
+
+test("an error inside the sign-in check still carries no-store", async (t) => {
+	t.mock.method(console, "error", () => {});
+	const broken = {
+		headers: new Headers(),
+		get status(): number {
+			throw new Error("made-up failure");
+		},
+	};
+	const response = await writes.request(
+		path,
+		{ headers: { Cookie: cookie } },
+		binding(() => broken as Response).env,
+	);
+	assert.equal(response.status, 500);
+	assert.equal(response.headers.get("Cache-Control"), "no-store");
 });
