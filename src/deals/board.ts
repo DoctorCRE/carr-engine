@@ -4,7 +4,7 @@ import type { DB } from "../database.d.ts";
 
 type BoardInputs = {
 	actor: string;
-	workspace?: "team" | "national_account" | "all";
+	workspace?: "team" | "national_account" | "all" | "" | null;
 	account_client_id?: string | null;
 };
 
@@ -46,8 +46,9 @@ export function shortName(deal: {
 
 export async function readBoard(
 	db: Kysely<DB>,
-	{ actor, workspace = "all", account_client_id }: BoardInputs,
+	{ actor, workspace, account_client_id }: BoardInputs,
 ) {
+	const scope = workspace || "all";
 	const account = account_client_id || null;
 	const deals = await db
 		.selectFrom("v_open_deal_room_board as b")
@@ -186,9 +187,7 @@ export async function readBoard(
 					.orderBy("e.id", "desc"),
 			).as("field_base"),
 		])
-		.$if(workspace !== "all", (q) =>
-			q.where("b.workspace_kind", "=", workspace),
-		)
+		.$if(scope !== "all", (q) => q.where("b.workspace_kind", "=", scope))
 		.$if(account !== null, (q) => q.where("b.account_client_id", "=", account))
 		.orderBy("b.attention", "desc")
 		.orderBy("b.next_date", (o) => o.asc().nullsLast())
