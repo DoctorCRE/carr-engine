@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 
-import { requireSession, type SessionEnv } from "./session.ts";
+import { type DealsEnv, deals } from "./deals/routes.ts";
+import { requireSession } from "./session.ts";
 
-type WorkerEnv = SessionEnv & {
+type WorkerEnv = DealsEnv & {
 	Bindings: { CF_VERSION_METADATA: { id: string } };
 };
 
@@ -14,5 +15,6 @@ app.get("/health", (c) =>
 
 app.use("/api/engine/*", requireSession);
 app.get("/api/engine/whoami", (c) => c.json(c.get("partner")));
+app.route("/api/engine", deals);
 
 export default app;
