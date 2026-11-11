@@ -18,7 +18,12 @@ async function catalog(connectionString: string) {
 		await db.query("SET LOCAL search_path TO pg_catalog");
 		const result = await db.query<{ name: string; definition: string }>(sql);
 		await db.query("ROLLBACK");
-		return new Map(result.rows.map((row) => [row.name, row.definition]));
+		return new Map(
+			result.rows.map((row) => [
+				row.name,
+				row.definition.replace(/'(?:''|[^'])*'/g, "'<literal>'"),
+			]),
+		);
 	} finally {
 		await db.end();
 	}

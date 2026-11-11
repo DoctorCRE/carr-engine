@@ -26,8 +26,10 @@ The target connection starts read-only, uses a read-only transaction, and querie
 only PostgreSQL catalogs. It prints differing or missing object names, never
 values or definitions. Exit codes are 0 for a match, 1 for drift and 2 for failure.
 It compares public columns, defaults, constraints, indexes, public-function
-triggers, policies, views,
-sequences and functions belonging to the snapshot. Unrelated extra relations and
-functions are outside this selected snapshot. Scrubbed definitions will differ
-from their private originals and are reported by name too. This command does not
-update the snapshot or apply any schema change to its target.
+triggers, policies, views, sequences and functions belonging to the snapshot.
+Unrelated extra relations and functions are outside this selected snapshot.
+Before comparison, both catalogs replace every quoted SQL string literal in each
+definition with the same placeholder. Literal-only changes, including privacy
+scrubbing, do not report drift. This also excludes changes to literal values in
+function bodies, defaults and constraints from drift detection. This command does
+not update the snapshot or apply any schema change to its target.

@@ -146,6 +146,18 @@ test("drift compares catalogs read-only and prints object names", async () => {
 	const target = new pg.Client({ connectionString: url });
 	await target.connect();
 	try {
+		const definition = await target.query<{ definition: string }>(
+			"SELECT pg_get_functiondef('public.carr_is_partner_actor(uuid)'::regprocedure) AS definition",
+		);
+		const original = definition.rows[0]?.definition;
+		assert.ok(original);
+		assert.ok(original.includes("'partner_one'"));
+		await target.query(
+			original.replace("'partner_one'", "'example partner''s slug'"),
+		);
+		const literalOnly = run();
+		assert.equal(literalOnly.status, 0, literalOnly.stderr);
+		assert.equal(literalOnly.stdout, "");
 		await target.query(
 			`ALTER TABLE public.party ADD COLUMN example_drift text;
 			ALTER TABLE public.party ADD CONSTRAINT example_drift_check CHECK (example_drift <> 'example');
