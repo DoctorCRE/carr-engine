@@ -1,0 +1,93 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+permissions: {}
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Deploy to staging, then production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          log() { echo "$1" | tee -a "$RUNNER_TEMP/deploy.log"; }
+          hide() { sed -E 's#[a-z0-9.-]+\.workers\.dev#<hidden>.workers.dev#g'; }
+          live_version() {
+            npx wrangler deployments status "$@" --json | jq -er '.versions | max_by(.percentage) | .version_id'
+          }
+          healthy() {
+            for _ in $(seq 12); do
+              [ "$(curl -sS --max-time 10 "$1/health" | jq -r 'select(.ok == true) | .version' 2>/dev/null)" = "$2" ] && return 0
+              sleep 5
+            done
+            return 1
+          }
+          ship() {
+            local name=$2 out="$RUNNER_TEMP/$2.jsonl" before version preview live host
+            local cfg=(--env "$1" --name "$2")
+            if ! before=$(live_version "${cfg[@]}"); then
+              log "$name: no live version yet, so a plain deploy creates the Worker first"
+              npx wrangler deploy "${cfg[@]}" 2>&1 | hide
+              before=$(live_version "${cfg[@]}")
+            fi
+            log "$name: uploading $GITHUB_SHA"
+            WRANGLER_OUTPUT_FILE_PATH=$out npx wrangler versions upload "${cfg[@]}" \
+              --tag "${GITHUB_SHA::7}" --message "$GITHUB_SHA" 2>&1 | hide
+            version=$(jq -er 'select(.type == "version-upload") | .version_id' "$out")
+            preview=$(jq -er 'select(.type == "version-upload") | .preview_url' "$out")
+            live="https://${preview#"https://${version::8}-"}"
+            host=${live#"https://$name."}
+            echo "::add-mask::${host%.workers.dev}"
+            log "$name: uploaded $version without traffic; live is $before"
+            if ! healthy "$preview" "$version"; then
+              log "$name: preview check failed; live traffic never moved"
+              return 1
+            fi
+            npx wrangler versions deploy "$version@100" "${cfg[@]}" --yes --message "$GITHUB_SHA"
+            log "$name: promoted $version"
+            if ! healthy "$live" "$version"; then
+              log "$name: live check failed; rolling back to $before"
+              npx wrangler rollback "$before" "${cfg[@]}" --yes --message "Live check failed for $GITHUB_SHA"
+              log "$name: rolled back to $before"
+              return 1
+            fi
+            log "$name: live check passed"
+          }
+          ship staging doctorcre-engine-staging
+          ship "" doctorcre-engine
+      - name: Open an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "The deploy of $GITHUB_SHA failed."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/deploy.log" 2>/dev/null || echo "It stopped before any Worker changed."
+            echo '```'
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/issue.md"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "A deploy failed" --body-file "$RUNNER_TEMP/issue.md"
