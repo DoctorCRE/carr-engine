@@ -24,6 +24,8 @@ SET client_min_messages = warning;
 
 SET row_security = off;
 
+CREATE SCHEMA ops;
+
 CREATE SCHEMA IF NOT EXISTS public;
 
 SET default_tablespace = '';
@@ -320,6 +322,21 @@ begin
   insert into public.vendor_market_key(key,market_slug) values(new.slug,new.slug);
   return new;
 end $$;
+
+CREATE TABLE ops.client_portal (
+    slug text NOT NULL,
+    client_id uuid NOT NULL,
+    deal_id uuid NOT NULL,
+    password_hash text NOT NULL,
+    disabled_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    failed_attempts integer DEFAULT 0 NOT NULL,
+    attempt_window_started_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT client_portal_failed_attempts_check CHECK (((failed_attempts >= 0) AND (failed_attempts <= 5))),
+    CONSTRAINT client_portal_password_hash_check CHECK ((password_hash ~ '^\$2[aby]\$12\$[./A-Za-z0-9]{53}$'::text)),
+    CONSTRAINT client_portal_slug_check CHECK ((slug ~ '^[a-z0-9][a-z0-9-]{0,62}$'::text))
+);
 
 CREATE TABLE public.rule (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
@@ -2184,6 +2201,12 @@ CREATE VIEW public.v_deal_board AS
      LEFT JOIN public.actor lead_actor ON ((lead_actor.id = dp.actor_id)))
      LEFT JOIN public.v_last_touch lt ON (((lt.subject_type = 'deal'::text) AND (lt.subject_id = d.id))));
 
+CREATE VIEW public.v_deal_client_portal AS
+ SELECT deal_id,
+    ('https://share.example.com/'::text || slug) AS client_portal_url
+   FROM ops.client_portal
+  WHERE (disabled_at IS NULL);
+
 CREATE VIEW public.v_deal_current_action AS
  SELECT DISTINCT ON (subject_id) subject_id AS deal_id,
     id,
@@ -3391,6 +3414,9 @@ CREATE TABLE public.vendor_relationship_level (
 
 ALTER TABLE ONLY public.room_dispatch_link ALTER COLUMN id SET DEFAULT nextval('public.room_dispatch_link_id_seq'::regclass);
 
+ALTER TABLE ONLY ops.client_portal
+    ADD CONSTRAINT client_portal_pkey PRIMARY KEY (slug);
+
 ALTER TABLE ONLY public.activity_kind
     ADD CONSTRAINT activity_kind_pkey PRIMARY KEY (slug);
 
@@ -3832,6 +3858,8 @@ ALTER TABLE ONLY public.vendor_stage
 ALTER TABLE ONLY public.vendor
     ADD CONSTRAINT vendor_vendor_ref_key UNIQUE (vendor_ref);
 
+CREATE UNIQUE INDEX client_portal_one_active_per_deal ON ops.client_portal USING btree (deal_id) WHERE (disabled_at IS NULL);
+
 CREATE UNIQUE INDEX activity_calendar_event_deal_uidx ON public.activity USING btree (calendar_event_key, deal_id) WHERE (calendar_event_key IS NOT NULL);
 
 CREATE INDEX activity_deal_idx ON public.activity USING btree (deal_id, occurred_at DESC);
@@ -4119,6 +4147,12 @@ CREATE TRIGGER space_touch BEFORE UPDATE ON public.space FOR EACH ROW EXECUTE FU
 CREATE TRIGGER vendor_market_canonical_key AFTER INSERT ON public.vendor_market FOR EACH ROW EXECUTE FUNCTION public.vendor_market_canonical_key();
 
 CREATE TRIGGER vendor_touch BEFORE UPDATE ON public.vendor FOR EACH ROW EXECUTE FUNCTION public.trg_touch_row();
+
+ALTER TABLE ONLY ops.client_portal
+    ADD CONSTRAINT client_portal_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.client(id);
+
+ALTER TABLE ONLY ops.client_portal
+    ADD CONSTRAINT client_portal_deal_id_fkey FOREIGN KEY (deal_id) REFERENCES public.deal(id);
 
 ALTER TABLE ONLY public.activity
     ADD CONSTRAINT activity_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);

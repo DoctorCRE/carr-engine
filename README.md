@@ -14,18 +14,21 @@ random database, and drops it in `finally`. Never point it at a shared server.
 Each check restores `schema/business.sql`, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
-query typing and is reserved here for catalog inspection and trigger controls.
-The snapshot contains 102 empty tables, 51 views, 6 sequences and 32 triggers.
-Its reviewed literals use fictional partners and tenants. SQL comments and psql
-transport directives are removed. The old process schema, its triggers on public
-tables and three dependent public views are excluded.
+query typing and is reserved here for catalog inspection, trigger controls and
+test rows in `ops.client_portal`, which the generated types leave out.
+The snapshot contains 103 empty tables, 52 views, 6 sequences and 32 triggers.
+Its reviewed literals use fictional partners, tenants and domains. SQL comments
+and psql transport directives are removed. Of the old process schema it keeps
+only `ops.client_portal`, which `v_deal_client_portal` reads, without that
+table's triggers. The rest of that schema, its triggers on public tables and two
+dependent public views are excluded.
 
 To compare a catalog outside CI, set `SCHEMA_DATABASE_URL` in the environment and
 run `npm run schema:drift`. It also needs the local throwaway server above.
 The target connection starts read-only, uses a read-only transaction, and queries
 only PostgreSQL catalogs. It prints differing or missing object names, never
 values or definitions. Exit codes are 0 for a match, 1 for drift and 2 for failure.
-It compares public columns, defaults, constraints, indexes, public-function
+It compares public and ops columns, defaults, constraints, indexes, public-function
 triggers, policies, views, sequences and functions belonging to the snapshot.
 Unrelated extra relations and functions are outside this selected snapshot.
 Before comparison, both catalogs replace every quoted SQL string literal in each
