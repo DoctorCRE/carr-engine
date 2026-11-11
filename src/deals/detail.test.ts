@@ -1,32 +1,9 @@
 import assert from "node:assert/strict";
-import { after, test } from "node:test";
-import { Kysely, PostgresDialect, sql, type Transaction } from "kysely";
-import pg from "pg";
+import { test } from "node:test";
+import { sql, type Transaction } from "kysely";
 import type { DB } from "../database.d.ts";
+import { withRollback } from "../test-rollback.ts";
 import { readDealDetail } from "./detail.ts";
-
-const url = process.env.TEST_DATABASE_URL;
-if (!url)
-	throw new Error("Run npm run check to restore the test database first");
-const db = new Kysely<DB>({
-	dialect: new PostgresDialect({
-		pool: new pg.Pool({ connectionString: url }),
-	}),
-});
-after(() => db.destroy());
-
-class Rollback extends Error {}
-
-async function rolledBack(run: (tx: Transaction<DB>) => Promise<void>) {
-	await assert.rejects(
-		db.transaction().execute(async (tx) => {
-			await sql`set local time zone 'UTC'`.execute(tx);
-			await run(tx);
-			throw new Rollback();
-		}),
-		Rollback,
-	);
-}
 
 async function seed(tx: Transaction<DB>, deal: { invoiced_on?: string } = {}) {
 	const actor = await tx
@@ -86,7 +63,7 @@ async function seed(tx: Transaction<DB>, deal: { invoiced_on?: string } = {}) {
 }
 
 test("an open deal reads with text dates, decimal strings and capped history", async () => {
-	await rolledBack(async (tx) => {
+	await withRollback(async (tx) => {
 		const { actor, audit, party, deal } = await seed(tx);
 		await tx
 			.insertInto("deal_note")
@@ -283,7 +260,7 @@ test("an open deal reads with text dates, decimal strings and capped history", a
 });
 
 test("email threads keep the newest message per conversation", async () => {
-	await rolledBack(async (tx) => {
+	await withRollback(async (tx) => {
 		const { actor, deal } = await seed(tx);
 		await tx
 			.insertInto("activity_kind")
@@ -338,7 +315,7 @@ test("email threads keep the newest message per conversation", async () => {
 });
 
 test("people, premises, rounds, documents, lease and activity read like the old panel", async () => {
-	await rolledBack(async (tx) => {
+	await withRollback(async (tx) => {
 		const { actor, audit, party, client, deal } = await seed(tx);
 		await tx
 			.insertInto("participant_role")
@@ -581,7 +558,7 @@ test("people, premises, rounds, documents, lease and activity read like the old 
 });
 
 test("activities and documents sort by time across a clock change", async () => {
-	await rolledBack(async (tx) => {
+	await withRollback(async (tx) => {
 		const { actor, deal } = await seed(tx);
 		await sql`set local time zone 'America/Chicago'`.execute(tx);
 		const earlier = "2030-11-03T06:30:00Z";
@@ -643,7 +620,7 @@ test("activities and documents sort by time across a clock change", async () => 
 });
 
 test("an invoiced deal reads through the archived shape", async () => {
-	await rolledBack(async (tx) => {
+	await withRollback(async (tx) => {
 		const { deal, client } = await seed(tx, { invoiced_on: "2030-04-30" });
 		const detail = await readDealDetail(tx, deal, "detail-agent");
 		assert.ok(!("error" in detail));
@@ -658,7 +635,7 @@ test("an invoiced deal reads through the archived shape", async () => {
 });
 
 test("refusals name what went wrong", async () => {
-	await rolledBack(async (tx) => {
+	await withRollback(async (tx) => {
 		const { deal, client, audit, party } = await seed(tx);
 		assert.deepEqual(await readDealDetail(tx, deal, "nobody"), {
 			error: "unauthenticated",
@@ -726,7 +703,7 @@ test("refusals name what went wrong", async () => {
 });
 
 test("each lookup step resolves or refuses like the old resolver", async () => {
-	await rolledBack(async (tx) => {
+	await withRollback(async (tx) => {
 		const { audit, client, deal } = await seed(tx);
 		const party = (name: string, extra: { ref?: string; city?: string } = {}) =>
 			tx
