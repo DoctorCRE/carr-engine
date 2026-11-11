@@ -65,3 +65,50 @@ test("reads the old system and the engine through the one app URL", () => {
 	assert.deepEqual(Object.keys(settings).sort(), ["app", "session", "target"]);
 	assert.equal(settings.app.origin, "https://app.example.test");
 });
+
+test("the app URL is an origin, with no path, query or fragment", () => {
+	const staging = { ...base, COMPARE_TARGET: "staging" };
+	assert.equal(
+		readSettings({ ...staging, COMPARE_APP_URL: "https://app.example.test/" })
+			.app.href,
+		"https://app.example.test/",
+	);
+	for (const value of [
+		"https://app.example.test/secretmarker",
+		"https://app.example.test/?secretmarker=1",
+		"https://app.example.test/#secretmarker",
+		"https://secretmarker@app.example.test/",
+	])
+		assert.throws(
+			() => readSettings({ ...staging, COMPARE_APP_URL: value }),
+			(error: Error) =>
+				/COMPARE_APP_URL/.test(error.message) &&
+				!error.message.includes("secretmarker"),
+		);
+});
+
+test("the session is one cookie value, so a pasted value cannot add cookies", () => {
+	const staging = { ...base, COMPARE_TARGET: "staging" };
+	assert.equal(
+		readSettings({ ...staging, COMPARE_SESSION: "made-up.Session_9~+/=" })
+			.session,
+		"made-up.Session_9~+/=",
+	);
+	for (const value of [
+		"secretmarker; other=1",
+		"secretmarker,other=1",
+		"secret marker",
+		"secretmarker\t",
+		"secretmarker\n",
+		"secretmarker\x00",
+		"secretmarker\x7f",
+		'"secretmarker"',
+		"secret\\marker",
+	])
+		assert.throws(
+			() => readSettings({ ...staging, COMPARE_SESSION: value }),
+			(error: Error) =>
+				/COMPARE_SESSION/.test(error.message) &&
+				!error.message.includes("secretmarker"),
+		);
+});
