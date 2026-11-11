@@ -36,3 +36,13 @@ definition with the same placeholder. Literal-only changes, including privacy
 scrubbing, do not report drift. This also excludes changes to literal values in
 function bodies, defaults and constraints from drift detection. This command does
 not update the snapshot or apply any schema change to its target.
+
+To compare the old system's and the engine's Deals answers outside CI, set
+`COMPARE_TARGET` to `staging` or `production`, `COMPARE_ENGINE_URL` and
+`COMPARE_OLD_URL` to the two https base URLs and `COMPARE_SESSION` to a signed-in
+partner's session cookie value, then run `npm run compare`. Production also needs
+`COMPARE_CONFIRM_PRODUCTION=read-only`. It only reads, one request a second, asks
+the engine before and after the old system and sets a request aside as unsettled
+when the engine's two answers differ. It prints counts, field paths and record IDs,
+never values, bodies or the cookie. Exit codes are 0 for a match, 1 for differences
+or unsettled requests and 2 for failure.
