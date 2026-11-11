@@ -3,5 +3,7 @@
 	"name": "doctorcre-engine",
 	"main": "src/worker.ts",
 	"compatibility_date": "2026-11-11",
-	"send_metrics": false
+	"send_metrics": false,
+	"compatibility_flags": ["nodejs_compat"],
+	"services": [{ "binding": "CARR", "service": "carr-mcp" }]
 }
