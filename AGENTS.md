@@ -38,6 +38,22 @@ When a pull request adds a dependency or a script, say in one line which of 1 an
 
 This repo has one check, one ruleset and this file. Do not add hooks, gates, extra CI jobs or workflows, bots, rule files, registries, receipts, proofs, checks that test other checks, or new sections here. Changing `AGENTS.md`, `.github/` or the scripts in `package.json` needs an issue in which the owner asked for that change.
 
+## Skills
+
+Build work starts in pstack's poteto-mode: `/pstack:poteto-mode` in Claude Code, `$poteto-mode` in Codex. Use pstack and the other installed skills straight from upstream. Never copy or wrap a skill in this repo.
+
+This file wins over any skill or global rule. A skill's advice to add a lint, check, script or rule is advice about product code only; it never overrides "Do not build process machinery". The old system's Cards, Work Requests, standing orders and team memory do not apply here.
+
+## Who does what
+
+A Claude session coordinates: it slices issues, briefs workers, reviews and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
+
+Claude Opus 5.5 builds. Reasoning effort is high, never higher.
+
+Before a pull request merges, a separate Claude session that did not write the change reviews it. The builder fixes what the review finds, then turns on auto-merge. The owner does not review code.
+
+Check which models are available each time you start a worker. Never write a provider's usage or balance into this repo.
+
 ## The old system
 
 Read `carr-system` to learn what a feature does. Never copy its code. Port the behavior the partners use, write it fresh and small, and prove it matches by comparing old and new answers on the same input.
