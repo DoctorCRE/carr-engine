@@ -303,14 +303,18 @@ test("email threads keep the newest message per conversation", async () => {
 					["email_in", "t-1", "Old", "2030-01-01T00:00:00Z"],
 					["email_out", "t-1", "New", "2030-01-03T00:00:00Z"],
 					["email_in", "", "Loose one", "2030-01-02T00:00:00Z"],
-					["email_in", null, "Loose two", "2030-01-02T12:00:00Z"],
+					["email_in", undefined, "Loose two", "2030-01-02T12:00:00Z"],
+					["email_in", null, "Loose three", "2030-01-02T18:00:00Z"],
 				].map(([kind, thread, subject, at]) => ({
 					kind: String(kind),
 					summary: "Example email",
 					occurred_at: String(at),
 					actor_id: actor,
 					deal_id: deal,
-					email_context: { conversation_id: thread, subject },
+					email_context:
+						thread === undefined
+							? { subject }
+							: { conversation_id: thread, subject },
 				})),
 			)
 			.execute();
@@ -320,14 +324,320 @@ test("email threads keep the newest message per conversation", async () => {
 			detail.email_threads.map((t) => [t.conversation_id, t.subject]),
 			[
 				["t-1", "New"],
+				[null, "Loose three"],
 				[null, "Loose two"],
 				[null, "Loose one"],
 			],
 		);
-		assert.equal(detail.activities.length, 4);
+		assert.equal(detail.activities.length, 5);
 		assert.equal(
 			detail.email_threads[0]?.latest_message_at,
 			"2030-01-03T00:00:00+00:00",
+		);
+	});
+});
+
+test("people, premises, rounds, documents, lease and activity read like the old panel", async () => {
+	await rolledBack(async (tx) => {
+		const { actor, audit, party, client, deal } = await seed(tx);
+		await tx
+			.insertInto("participant_role")
+			.values(["a", "b"].map((slug) => ({ slug, label: `Example ${slug}` })))
+			.execute();
+		const person = await party("Example Participant");
+		const ended = await party("Example Ended");
+		await tx
+			.insertInto("deal_participant")
+			.values([
+				{ deal_id: deal, role: "b", actor_id: actor, set_by: actor },
+				{ deal_id: deal, role: "a", party_id: person.id, set_by: actor },
+				{
+					deal_id: deal,
+					role: "a",
+					party_id: ended.id,
+					set_by: actor,
+					to_at: "2030-01-01T00:00:00Z",
+				},
+			])
+			.execute();
+		const building = await tx
+			.insertInto("building")
+			.values({
+				name: "Example Tower",
+				address: "1 Example Way",
+				city: "Exampleton",
+				state: "EX",
+				...audit,
+			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		const [space, annexSpace] = await tx
+			.insertInto("space")
+			.values(
+				[
+					["100", "1200.5"],
+					["050", "75"],
+				].map(([suite, area_amount]) => ({
+					building_id: building.id,
+					suite,
+					area_amount,
+					area_basis: "rentable",
+					...audit,
+				})),
+			)
+			.returning("id")
+			.execute();
+		const [annex, suite] = await tx
+			.insertInto("premises")
+			.values(
+				[
+					["Example Annex", "2030-02-01T00:00:00Z"],
+					["Example Suite", "2030-01-01T00:00:00Z"],
+				].map(([label, created_at]) => ({
+					deal_id: deal,
+					label: String(label),
+					created_at: String(created_at),
+					created_by: actor,
+				})),
+			)
+			.returning("id")
+			.execute();
+		assert.ok(annex && suite && space && annexSpace);
+		await tx
+			.insertInto("premises_space")
+			.values([
+				{ premises_id: suite.id, space_id: space.id },
+				{ premises_id: annex.id, space_id: annexSpace.id },
+			])
+			.execute();
+		await tx
+			.insertInto("negotiation_round")
+			.values(
+				Array.from({ length: 7 }, (_, i) => ({
+					deal_id: deal,
+					round_no: i + 1,
+					side: "tenant",
+					proposed_on: `2030-01-0${7 - i}`,
+					rate_amount: "2.04",
+					rate_basis: "usd_sf_mo",
+					ti_amount: "40",
+					ti_basis: "usd_sf",
+					free_rent_months: "2.5",
+					created_by: actor,
+				})),
+			)
+			.execute();
+		const template = await tx
+			.insertInto("doc_template")
+			.values({
+				slug: "detail-template",
+				name: "Example template",
+				source_path: "example/template",
+				template_version: "1",
+				field_map: JSON.stringify({}),
+				created_by: actor,
+			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		await tx
+			.insertInto("document")
+			.values(
+				Array.from({ length: 21 }, (_, i) => ({
+					deal_id: deal,
+					template_id: template.id,
+					prepared_by: actor,
+					prepared_at: new Date(Date.UTC(2030, 0, 1, 0, i)).toISOString(),
+					lint_passed: i % 2 === 0,
+					leak_check_passed: false,
+				})),
+			)
+			.execute();
+		const lease = {
+			deal_id: deal,
+			client_id: client,
+			owner_id: actor,
+			executed_on: "2029-12-01",
+			commencement_on: "2030-01-01",
+			expiration_on: "2035-12-31",
+			evidence_kind: "executed_lease",
+			evidence_ref: "example-ref",
+			source: "example-source",
+			options_note: "Example option",
+			created_by: actor,
+		};
+		const current = await tx
+			.insertInto("lease")
+			.values([
+				{ ...lease, status: "superseded", expiration_on: "2031-12-31" },
+				{ ...lease, status: "current" },
+			])
+			.returning(["id", "status"])
+			.execute();
+		await tx
+			.insertInto("activity_kind")
+			.values({ slug: "detail-call", label: "Example", is_contact: true })
+			.execute();
+		await tx
+			.insertInto("activity")
+			.values(
+				Array.from({ length: 501 }, (_, i) => ({
+					deal_id: deal,
+					actor_id: actor,
+					kind: "detail-call",
+					summary: `Example call ${i}`,
+					detail: "Example detail",
+					occurred_at: new Date(Date.UTC(2030, 0, 1, 0, 0, i)).toISOString(),
+					email_context: { conversation_id: "t-9", extra: { n: i } },
+				})),
+			)
+			.execute();
+
+		const detail = await readDealDetail(tx, deal, "detail-agent");
+		assert.ok(!("error" in detail));
+		assert.deepEqual(detail.participants, [
+			{
+				role: "a",
+				name: "Example Participant",
+				actor: null,
+				party_id: person.id,
+			},
+			{ role: "b", name: "Example A", actor: "detail-agent", party_id: null },
+		]);
+		const tower = {
+			building_name: "Example Tower",
+			address: "1 Example Way",
+			city: "Exampleton",
+			state: "EX",
+			area_basis: "rentable",
+		};
+		assert.deepEqual(detail.premises, [
+			{
+				id: suite.id,
+				label: "Example Suite",
+				...tower,
+				suite: "100",
+				area_amount: "1200.5",
+			},
+			{
+				id: annex.id,
+				label: "Example Annex",
+				...tower,
+				suite: "050",
+				area_amount: "75.0",
+			},
+		]);
+		assert.deepEqual(
+			detail.negotiation_rounds.map((r) => r.round_no),
+			[7, 6, 5, 4, 3, 2],
+		);
+		assert.deepEqual(
+			[detail.negotiation_rounds[0]].map((r) => [
+				r?.rate_norm_sf_yr,
+				r?.ti_amount,
+				r?.free_rent_months,
+				r?.proposed_on,
+			]),
+			[["24.48", "40.00", "2.5", "2030-01-01"]],
+		);
+		assert.equal(detail.documents.length, 20);
+		assert.deepEqual(detail.documents[0], {
+			id: detail.documents[0]?.id,
+			sent_status: "draft",
+			lint_passed: true,
+			leak_check_passed: false,
+			prepared_at: "2030-01-01T00:20:00+00:00",
+			note: null,
+		});
+		assert.equal(
+			detail.documents[19]?.prepared_at,
+			"2030-01-01T00:01:00+00:00",
+		);
+		assert.equal(detail.documents[19]?.lint_passed, false);
+		assert.deepEqual(detail.lease, {
+			id: current.find((l) => l.status === "current")?.id,
+			version: 1,
+			status: "current",
+			executed_on: "2029-12-01",
+			commencement_on: "2030-01-01",
+			expiration_on: "2035-12-31",
+			options_note: "Example option",
+			evidence_kind: "executed_lease",
+			evidence_ref: "example-ref",
+			source: "example-source",
+		});
+		assert.equal(detail.activities.length, 500);
+		assert.equal(detail.activities_truncated, true);
+		assert.deepEqual(detail.activities[0], {
+			id: detail.activities[0]?.id,
+			occurred_at: "2030-01-01T00:08:20+00:00",
+			actor: "detail-agent",
+			kind: "detail-call",
+			summary: "Example call 500",
+			detail: "Example detail",
+			source: "stated",
+			email_context: { conversation_id: "t-9", extra: { n: 500 } },
+		});
+	});
+});
+
+test("activities and documents sort by time across a clock change", async () => {
+	await rolledBack(async (tx) => {
+		const { actor, deal } = await seed(tx);
+		await sql`set local time zone 'America/Chicago'`.execute(tx);
+		const earlier = "2030-11-03T06:30:00Z";
+		const later = "2030-11-03T07:10:00Z";
+		await tx
+			.insertInto("activity_kind")
+			.values({ slug: "detail-call", label: "Example", is_contact: true })
+			.execute();
+		await tx
+			.insertInto("activity")
+			.values(
+				[earlier, later].map((occurred_at) => ({
+					deal_id: deal,
+					actor_id: actor,
+					kind: "detail-call",
+					summary: "Example call",
+					occurred_at,
+				})),
+			)
+			.execute();
+		const template = await tx
+			.insertInto("doc_template")
+			.values({
+				slug: "detail-template",
+				name: "Example template",
+				source_path: "example/template",
+				template_version: "1",
+				field_map: JSON.stringify({}),
+				created_by: actor,
+			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		await tx
+			.insertInto("document")
+			.values(
+				[earlier, later].map((prepared_at) => ({
+					deal_id: deal,
+					template_id: template.id,
+					prepared_by: actor,
+					prepared_at,
+				})),
+			)
+			.execute();
+		const detail = await readDealDetail(tx, deal, "detail-agent");
+		assert.ok(!("error" in detail));
+		const newestFirst = [
+			"2030-11-03T01:10:00-06:00",
+			"2030-11-03T01:30:00-05:00",
+		];
+		assert.deepEqual(
+			detail.activities.map((a) => a.occurred_at),
+			newestFirst,
+		);
+		assert.deepEqual(
+			detail.documents.map((d) => d.prepared_at),
+			newestFirst,
 		);
 	});
 });

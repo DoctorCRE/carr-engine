@@ -127,20 +127,20 @@ export async function readDealDetail(
 			.orderBy("id")
 			.execute(),
 		db
-			.selectFrom("v_deal_room_activity")
+			.selectFrom("v_deal_room_activity as a")
 			.select((eb) => [
-				"id",
-				asText(eb.ref("occurred_at")).as("occurred_at"),
-				"actor",
-				"kind",
-				"summary",
-				"detail",
-				"source",
-				"email_context",
+				"a.id",
+				asText(eb.ref("a.occurred_at")).as("occurred_at"),
+				"a.actor",
+				"a.kind",
+				"a.summary",
+				"a.detail",
+				"a.source",
+				"a.email_context",
 			])
-			.where("deal_id", "=", id)
-			.orderBy("occurred_at", "desc")
-			.orderBy("id", "desc")
+			.where("a.deal_id", "=", id)
+			.orderBy("a.occurred_at", "desc")
+			.orderBy("a.id", "desc")
 			.limit(HISTORY_CAP + 1)
 			.execute(),
 		db
@@ -208,17 +208,17 @@ export async function readDealDetail(
 			.limit(6)
 			.execute(),
 		db
-			.selectFrom("v_deal_room_document")
+			.selectFrom("v_deal_room_document as d")
 			.select((eb) => [
-				"id",
-				"sent_status",
-				"lint_passed",
-				"leak_check_passed",
-				asText(eb.ref("prepared_at")).as("prepared_at"),
-				"note",
+				"d.id",
+				"d.sent_status",
+				"d.lint_passed",
+				"d.leak_check_passed",
+				asText(eb.ref("d.prepared_at")).as("prepared_at"),
+				"d.note",
 			])
-			.where("deal_id", "=", id)
-			.orderBy("prepared_at", "desc")
+			.where("d.deal_id", "=", id)
+			.orderBy("d.prepared_at", "desc")
 			.limit(20)
 			.execute(),
 		db
