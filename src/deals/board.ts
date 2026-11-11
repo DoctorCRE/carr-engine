@@ -1,6 +1,16 @@
-import { type Expression, expressionBuilder, type Kysely, sql } from "kysely";
+import { type Kysely, sql } from "kysely";
 import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../database.d.ts";
+import {
+	asText,
+	phaseChangeOf,
+	phaseStartedOn,
+	phaseStartsOf,
+	shortName,
+	vendorsOf,
+} from "./shared.ts";
+
+export { shortName };
 
 type BoardInputs = {
 	actor: string;
@@ -15,35 +25,6 @@ const EDITABLE_FIELDS = [
 	"next_date",
 	"operating_state",
 ];
-const eb = expressionBuilder<DB>();
-const text = (value: Expression<unknown>) =>
-	sql<string | null>`to_jsonb(${value})#>>'{}'`;
-
-const vendors = (dealId: Expression<string | null>) =>
-	jsonArrayFrom(
-		eb
-			.selectFrom("v_deal_room_vendor as v")
-			.select(["party_id", "role", "company", "contact", "note", "updated_at"])
-			.where("v.deal_id", "=", dealId)
-			.orderBy("v.role")
-			.orderBy(sql`v.company->>'name'`)
-			.orderBy(sql`v.contact->>'name'`)
-			.orderBy("v.party_id"),
-	);
-
-export function shortName(deal: {
-	client_name: string | null;
-	market: string | null;
-	name: string | null;
-}) {
-	const contact = (deal.client_name ?? "")
-		.replace(/\s*\([^)]*\)\s*$/u, "")
-		.trim();
-	const doctor = /^Dr\.?\s+(\p{L}+(?:[ .'-]\p{L}+)*)$/u.exec(contact)?.[1];
-	if (!doctor || !deal.market) return deal.name;
-	return `Dr. ${doctor.split(/\s+/u).at(-1)}'s ${deal.market} Deal`;
-}
-
 export async function readBoard(
 	db: Kysely<DB>,
 	{ actor, workspace, account_client_id }: BoardInputs,
@@ -66,15 +47,15 @@ export async function readBoard(
 			"b.owner",
 			"b.attention",
 			"r.base_version",
-			vendors(q.ref("b.id")).as("vendors"),
-			text(q.ref("b.next_date")).as("next_date"),
+			jsonArrayFrom(vendorsOf(db, q.ref("b.id"))).as("vendors"),
+			asText(q.ref("b.next_date")).as("next_date"),
 			"b.next_step",
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			jsonArrayFrom(
 				q
 					.selectFrom("v_deal_room_action as i")
 					.select(["i.id", "i.item_title as title"])
-					.select((s) => text(s.ref("i.due_on")).as("due_on"))
+					.select((s) => asText(s.ref("i.due_on")).as("due_on"))
 					.select(["i.status", "i.item_bullets as bullets", "i.source_ref"])
 					.whereRef("i.deal_id", "=", "b.id")
 					.where("i.item_title", "is not", null)
@@ -86,7 +67,7 @@ export async function readBoard(
 				q
 					.selectFrom("v_deal_room_action as n")
 					.select(["n.id", "n.item_id", "n.owner", "n.description"])
-					.select((s) => text(s.ref("n.due_on")).as("due_on"))
+					.select((s) => asText(s.ref("n.due_on")).as("due_on"))
 					.whereRef("n.deal_id", "=", "b.id")
 					.where("n.status", "=", "open")
 					.where("n.item_title", "is", null)
@@ -126,7 +107,7 @@ export async function readBoard(
 							.as("step"),
 					)
 					.select(["step.kind", "step.summary"])
-					.select((s) => text(s.ref("step.occurred_at")).as("occurred_at"))
+					.select((s) => asText(s.ref("step.occurred_at")).as("occurred_at"))
 					.orderBy("step.occurred_at", "desc")
 					.orderBy("step.mutation_order", (o) => o.desc().nullsLast())
 					.orderBy("step.id", "desc")
@@ -148,37 +129,26 @@ export async function readBoard(
 			"b.account_name",
 			"b.account_owner",
 			"b.market_agent",
-			text(q.ref("b.last_touch")).as("last_touch"),
-			text(q.ref("b.last_review_at")).as("last_review_at"),
+			asText(q.ref("b.last_touch")).as("last_touch"),
+			asText(q.ref("b.last_review_at")).as("last_review_at"),
 			"b.workspace_kind",
 			"b.operating_state",
 			"b.parking_reason",
 			"b.parking_note",
-			text(q.ref("b.invoiced_on")).as("invoiced_on"),
-			text(q.ref("b.closed_on")).as("closed_on"),
+			asText(q.ref("b.invoiced_on")).as("invoiced_on"),
+			asText(q.ref("b.closed_on")).as("closed_on"),
 			"b.lane",
 			"b.outcome",
-			jsonObjectFrom(
-				q
-					.selectFrom("v_deal_room_phase_change as pc")
-					.selectAll("pc")
-					.whereRef("pc.deal_id", "=", "b.id"),
-			).as("phase_change"),
-			jsonArrayFrom(
-				q
-					.selectFrom("v_deal_room_phase_start as ps")
-					.select("ps.phase")
-					.select((s) => text(s.ref("ps.started_on")).as("started_on"))
-					.whereRef("ps.deal_id", "=", "b.id"),
-			).as("phase_started_on"),
-			text(q.ref("b.parked_at")).as("parked_at"),
+			jsonObjectFrom(phaseChangeOf(db, q.ref("b.id"))).as("phase_change"),
+			jsonArrayFrom(phaseStartsOf(db, q.ref("b.id"))).as("phase_started_on"),
+			asText(q.ref("b.parked_at")).as("parked_at"),
 			"b.parked_by",
 			jsonArrayFrom(
 				q
 					.selectFrom("v_deal_room_event as e")
 					.distinctOn("e.field")
 					.select(["e.field", "e.id"])
-					.select((s) => text(s.ref("e.recorded_at")).as("recorded_at"))
+					.select((s) => asText(s.ref("e.recorded_at")).as("recorded_at"))
 					.where("e.subject_type", "=", "deal")
 					.whereRef("e.subject_id", "=", "b.id")
 					.where("e.field", "in", EDITABLE_FIELDS)
@@ -207,12 +177,12 @@ export async function readBoard(
 			"b.client_ref",
 			"b.client_name",
 			"b.deal_type as type",
-			vendors(q.ref("b.id")).as("vendors"),
+			jsonArrayFrom(vendorsOf(db, q.ref("b.id"))).as("vendors"),
 			"b.phase",
 			"b.outcome",
 			"b.lead_owner as owner",
-			text(q.ref("b.closed_on")).as("closed_on"),
-			text(q.ref("b.invoiced_on")).as("invoiced_on"),
+			asText(q.ref("b.closed_on")).as("closed_on"),
+			asText(q.ref("b.invoiced_on")).as("invoiced_on"),
 			"a.account_client_id",
 			q
 				.case()
@@ -256,7 +226,7 @@ export async function readBoard(
 			"a.attention_deals",
 			"a.overdue_deals",
 			"a.stale_deals",
-			text(q.ref("a.last_review_at")).as("last_review_at"),
+			asText(q.ref("a.last_review_at")).as("last_review_at"),
 			"a.parked_deals",
 			"ce.client_status",
 			"ce.client_version",
@@ -277,7 +247,7 @@ export async function readBoard(
 			"session_id",
 			"workspace_kind",
 			"account_client_id",
-			text(q.ref("started_at")).as("started_at"),
+			asText(q.ref("started_at")).as("started_at"),
 		])
 		.where("started_by", "=", actor)
 		.where("status", "=", "open")
@@ -298,9 +268,7 @@ export async function readBoard(
 		actor,
 		deals: deals.map((deal) => ({
 			...deal,
-			phase_started_on: Object.fromEntries(
-				deal.phase_started_on.map((start) => [start.phase, start.started_on]),
-			),
+			phase_started_on: phaseStartedOn(deal.phase_started_on),
 			field_base: Object.fromEntries(
 				deal.field_base.map(({ field, ...base }) => [field, base]),
 			),
