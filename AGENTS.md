@@ -38,6 +38,12 @@ When a pull request adds a dependency or a script, say in one line which of 1 an
 
 This repo has one check, one ruleset and this file. Do not add hooks, gates, extra CI jobs or workflows, bots, rule files, registries, receipts, proofs, checks that test other checks, or new sections here. Changing `AGENTS.md`, `.github/` or the scripts in `package.json` needs an issue in which the owner asked for that change.
 
+## What waits for the owner
+
+You may merge changes to `src/`, `wrangler.jsonc` and `package-lock.json` on your own. Every other file belongs to the owner in `.github/CODEOWNERS`, and a pull request that touches any of them waits for the owner. That includes `package.json`, so a new package waits too.
+
+Put an owned change in its own small pull request. Start its description with the rule or setting it changes and why. Leave auto-merge off. The owner merges it from the pull request page. Never merge with `--admin` or any other bypass yourself.
+
 ## The old system
 
 Read `carr-system` to learn what a feature does. Never copy its code. Port the behavior the partners use, write it fresh and small, and prove it matches by comparing old and new answers on the same input.
