@@ -1,4 +1,4 @@
-# CARR Engine
+# DoctorCRE Engine
 
 The engine behind the DoctorCRE app. It serves the partners' business records (deals, clients, leads, contacts, vendors, activity) to the app, to background jobs and to agents. It is replacing the old system in `DoctorCRE/carr-system` one piece at a time. Both run against the same database until the old one serves nothing.
 
