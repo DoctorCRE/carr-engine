@@ -40,7 +40,7 @@ This repo has one check, one ruleset and this file. Do not add hooks, gates, ext
 
 ## What waits for the owner
 
-`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them waits for the owner to merge it from the pull request page. Never merge one with `--admin` or any other bypass.
+`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them waits for the owner to merge it from the pull request page. You never merge one yourself, and you never use `--admin` or any other bypass.
 
 ## Skills
 
