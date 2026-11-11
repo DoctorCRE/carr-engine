@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mock, test } from "node:test";
 import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
@@ -21,11 +22,17 @@ const signedIn = (slug: string) => ({
 });
 
 async function seed(url: string) {
-	const db = new Kysely<DB>({
-		dialect: new PostgresDialect({
-			pool: new pg.Pool({ connectionString: url }),
-		}),
-	});
+	// pg.Pool's end() resolves before its sockets close, and withSnapshot's
+	// forced drop would then kill a still-open connection with an error nothing
+	// listens for. Closing waits for every connection to end.
+	const pool = new pg.Pool({ connectionString: url });
+	const closed: Promise<unknown>[] = [];
+	pool.on("connect", (client) => closed.push(once(client, "end")));
+	const db = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+	const close = async () => {
+		await db.destroy();
+		await Promise.all(closed);
+	};
 	try {
 		const actor = await db
 			.insertInto("actor")
@@ -120,10 +127,10 @@ async function seed(url: string) {
 					.set({ merged_into: survivor.id })
 					.where("id", "=", client.id)
 					.execute(),
-			close: () => db.destroy(),
+			close,
 		};
 	} catch (error) {
-		await db.destroy();
+		await close();
 		throw error;
 	}
 }
