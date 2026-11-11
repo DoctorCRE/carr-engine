@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../../scripts/test-database.ts";
@@ -85,6 +85,27 @@ async function seed(url: string) {
 		await deal("Example Route/Slash Deal");
 		await deal("Example Twin Deal A");
 		await deal("Example Twin Deal B");
+		const other = await db
+			.insertInto("actor")
+			.values({
+				slug: "routes-other",
+				kind: "human",
+				display_name: "Example B",
+			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		const session = async (started_by: string) =>
+			(
+				await db
+					.insertInto("deal_review_session")
+					.values({ workspace_kind: "team", started_by })
+					.returning("id")
+					.executeTakeFirstOrThrow()
+			).id;
+		const sessions = {
+			"routes-agent": await session(actor.id),
+			"routes-other": await session(other.id),
+		};
 		const survivor = await db
 			.insertInto("client")
 			.values({ party_id: (await party("Example Survivor")).id, ...audit })
@@ -92,6 +113,7 @@ async function seed(url: string) {
 			.executeTakeFirstOrThrow();
 		return {
 			deal: first.id,
+			sessions,
 			mergeClient: () =>
 				db
 					.updateTable("client")
@@ -201,11 +223,20 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 						fields: ["workspace"],
 					});
 				await refused(await get("/deals?account_client_id=not-a-uuid"), 400, {
-					error: "unhandled_verb_failure",
-					hint: "The operation failed. Quote the correlation_id when reporting it.",
-					verb: "deal-room-board",
+					error: "database_refused_the_statement",
+					hint: "The operation could not be completed. Quote the correlation_id when reporting it.",
 				});
 			});
+
+			await t.test(
+				"each partner's board carries their own open review session",
+				async () => {
+					for (const [slug, id] of Object.entries(rows.sessions)) {
+						const board = await json(await get("/deals", slug));
+						assert.equal(board.open_session?.session_id, id);
+					}
+				},
+			);
 
 			await t.test(
 				"each deal refusal maps to its status and old payload",
@@ -213,6 +244,11 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 					await refused(await get("/deals/No%20Such%20Example"), 404, {
 						error: "unhandled_verb_failure",
 						hint: "The operation failed. Quote the correlation_id when reporting it.",
+					});
+					await refused(await get("/deals/"), 400, {
+						error: "missing_required",
+						hint: "Supply the named required fields from the tool's documented input.",
+						fields: ["deal"],
 					});
 					await refused(await get("/deals/C-9001"), 422, {
 						error: "not_a_deal",
@@ -282,4 +318,41 @@ test("a request with no session is refused before any read", async () => {
 		assert.deepEqual(await response.json(), { error: "unauthorized" });
 	}
 	assert.equal(sessionChecks, 0);
+});
+
+test("a failed read answers a fixed body and logs no input", async () => {
+	const warnings = mock.method(console, "warn", () => {});
+	const secrets = [
+		"Secret Example Name",
+		"0f0e0d0c-0b0a-4908-8706-050403020100",
+	] as const;
+	try {
+		for (const path of [
+			`/deals?account_client_id=${secrets[1]}`,
+			`/deals/${encodeURIComponent(secrets[0])}`,
+		]) {
+			const response = await worker.request(
+				`https://app.example.test/api/engine${path}`,
+				{ headers: { Cookie: cookie } },
+				{
+					CARR: signedIn("routes-agent"),
+					DATABASE: { connectionString: "postgres://made-up@127.0.0.1:1/none" },
+				},
+			);
+			assert.equal(response.status, 500);
+			assert.equal(response.headers.get("Cache-Control"), "no-store");
+			assert.deepEqual(await response.json(), { error: "read_failed" });
+		}
+		assert.deepEqual(
+			warnings.mock.calls.map((call) => call.arguments),
+			[
+				["deals read failed:", "Error"],
+				["deals read failed:", "Error"],
+			],
+		);
+		const logged = JSON.stringify(warnings.mock.calls.map((c) => c.arguments));
+		for (const secret of secrets) assert.ok(!logged.includes(secret));
+	} finally {
+		warnings.mock.restore();
+	}
 });

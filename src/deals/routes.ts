@@ -20,6 +20,10 @@ const HINTS = {
 		"Use a value from the field's documented vocabulary.",
 	unhandled_verb_failure:
 		"The operation failed. Quote the correlation_id when reporting it.",
+	database_refused_the_statement:
+		"The operation could not be completed. Quote the correlation_id when reporting it.",
+	missing_required:
+		"Supply the named required fields from the tool's documented input.",
 };
 
 class Refusal {
@@ -41,15 +45,36 @@ const WORKSPACES = ["team", "national_account", "all"] as const;
 const isWorkspace = (value: string): value is (typeof WORKSPACES)[number] =>
 	(WORKSPACES as readonly string[]).includes(value);
 
-const invalidInput = (error: unknown) =>
+const refuse = (c: Context<DealsEnv>, refusal: Refusal) =>
+	c.json(
+		{
+			error: refusal.error,
+			correlation_id: crypto.randomUUID(),
+			hint: HINTS[refusal.error],
+			...refusal.extra,
+		},
+		refusal.status,
+	);
+
+const sqlState = (error: unknown) =>
 	typeof error === "object" &&
 	error !== null &&
 	"code" in error &&
-	error.code === "22P02";
+	typeof error.code === "string" &&
+	/^[0-9A-Z]{5}$/.test(error.code)
+		? error.code
+		: undefined;
+
+// Only the SQLSTATE or the error's class name: messages and details can carry
+// the request's input or row values.
+const failureKind = (error: unknown) =>
+	sqlState(error) ??
+	(error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name)
+		? error.name
+		: "unknown");
 
 async function answer(
 	c: Context<DealsEnv>,
-	verb: string,
 	read: (db: Reader) => Promise<unknown>,
 ) {
 	const database = c.env.DATABASE;
@@ -59,23 +84,18 @@ async function answer(
 	try {
 		result = await readSnapshot(database.connectionString, read);
 	} catch (error) {
-		// The old system let PostgreSQL reject a malformed id and answered with
-		// its generic failure.
-		if (!invalidInput(error)) throw error;
-		result = new Refusal(400, "unhandled_verb_failure", { verb });
+		// The old system turned PostgreSQL's refusal of a malformed id into this
+		// public error.
+		if (sqlState(error) === "22P02")
+			result = new Refusal(400, "database_refused_the_statement");
+		else {
+			console.warn("deals read failed:", failureKind(error));
+			return c.json({ error: "read_failed" }, 500);
+		}
 	} finally {
 		c.header("Server-Timing", `db;dur=${performance.now() - started}`);
 	}
-	if (!(result instanceof Refusal)) return c.json(result);
-	return c.json(
-		{
-			error: result.error,
-			correlation_id: crypto.randomUUID(),
-			hint: HINTS[result.error],
-			...result.extra,
-		},
-		result.status,
-	);
+	return result instanceof Refusal ? refuse(c, result) : c.json(result);
 }
 
 export const deals = new Hono<DealsEnv>();
@@ -83,18 +103,15 @@ export const deals = new Hono<DealsEnv>();
 deals.get("/deals", async (c) => {
 	const workspace = c.req.query("workspace");
 	if (workspace !== undefined && !isWorkspace(workspace))
-		return c.json(
-			{
-				error: "value_not_in_declared_vocabulary",
-				correlation_id: crypto.randomUUID(),
-				hint: HINTS.value_not_in_declared_vocabulary,
+		return refuse(
+			c,
+			new Refusal(400, "value_not_in_declared_vocabulary", {
 				allowed_values: WORKSPACES,
 				fields: ["workspace"],
-			},
-			400,
+			}),
 		);
 	const actor = c.get("partner").slug;
-	return answer(c, "deal-room-board", async (db) => {
+	return answer(c, async (db) => {
 		const known = await db
 			.selectFrom("actor")
 			.select("id")
@@ -109,8 +126,12 @@ deals.get("/deals", async (c) => {
 	});
 });
 
+deals.get("/deals/", (c) =>
+	refuse(c, new Refusal(400, "missing_required", { fields: ["deal"] })),
+);
+
 deals.get("/deals/:deal{.+}", (c) =>
-	answer(c, "get-deal-room", async (db) => {
+	answer(c, async (db) => {
 		const detail = await readDealDetail(
 			db,
 			c.req.param("deal"),
