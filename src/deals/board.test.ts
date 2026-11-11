@@ -1,32 +1,14 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { after, test } from "node:test";
-import { type Insertable, Kysely, PostgresDialect, sql } from "kysely";
-import pg from "pg";
+import { test } from "node:test";
+import type { Insertable, Kysely } from "kysely";
 import type { DB } from "../database.d.ts";
+import { withRollback } from "../test-database.ts";
 import { readBoard, shortName } from "./board.ts";
 
-const url = process.env.TEST_DATABASE_URL;
-if (!url)
-	throw new Error("Run npm run check to restore the test database first");
-const db = new Kysely<DB>({
-	dialect: new PostgresDialect({
-		pool: new pg.Pool({ connectionString: url }),
-	}),
-});
-after(() => db.destroy());
-
-async function withRows(
+const withRows = (
 	run: (rows: Awaited<ReturnType<typeof seed>>) => Promise<void>,
-) {
-	const tx = await db.startTransaction().execute();
-	try {
-		await sql`set local time zone 'UTC'`.execute(tx);
-		await run(await seed(tx));
-	} finally {
-		await tx.rollback().execute();
-	}
-}
+) => withRollback(async (tx) => run(await seed(tx)));
 
 async function seed(tx: Kysely<DB>) {
 	const tag = randomUUID().slice(0, 8);
