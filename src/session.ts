@@ -47,13 +47,27 @@ async function equalTokens(
 
 export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 	c.header("Cache-Control", "no-store");
+	let renewed: string[] = [];
+	const protect = () => {
+		c.header("Cache-Control", "no-store");
+		for (const value of renewed)
+			c.header("Set-Cookie", value, { append: true });
+	};
+	const refuse = (error: string, status: 401 | 403 | 503) => {
+		protect();
+		return c.json({ error }, status);
+	};
+	const unavailable = (kind: string) => {
+		console.warn("sign-in check unavailable:", kind);
+		return refuse("sign_in_unavailable", 503);
+	};
 	const cookie = c.req
 		.header("Cookie")
 		?.split(";")
 		.map((part) => part.trim())
 		.find((part) => part.startsWith(`${SESSION_COOKIE}=`));
 	if (!cookie || cookie === `${SESSION_COOKIE}=`)
-		return c.json({ error: "unauthorized" }, 401);
+		return refuse("unauthorized", 401);
 
 	const url = new URL(c.req.url);
 	const browserOrigin = url.origin;
@@ -62,19 +76,35 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 	const headers = new Headers({ Cookie: cookie, Host: url.host });
 	const origin = c.req.header("Origin");
 	if (origin !== undefined) headers.set("Origin", origin);
+	let response: Response;
+	try {
+		response = await c.env.CARR.fetch(
+			new Request(url, {
+				method: "GET",
+				headers,
+				redirect: "manual",
+				signal: AbortSignal.timeout(3000),
+			}),
+		);
+		renewed = response.headers.getSetCookie();
+	} catch (error) {
+		return unavailable(
+			error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name)
+				? error.name
+				: "unknown",
+		);
+	}
+	if (response.status === 401) return refuse("unauthorized", 401);
+	if (response.status !== 200) return unavailable(`status ${response.status}`);
 	let session: Session;
 	try {
-		const response = await c.env.CARR.fetch(
-			new Request(url, { method: "GET", headers, redirect: "manual" }),
-		);
-		for (const cookie of response.headers.getSetCookie())
-			c.header("Set-Cookie", cookie, { append: true });
-		if (response.status === 401) return c.json({ error: "unauthorized" }, 401);
-		if (response.status !== 200)
-			return c.json({ error: "sign_in_unavailable" }, 503);
 		session = parseSession(await response.json());
-	} catch {
-		return c.json({ error: "sign_in_unavailable" }, 503);
+	} catch (error) {
+		return unavailable(
+			error instanceof Error && error.name === "TimeoutError"
+				? "TimeoutError"
+				: "malformed",
+		);
 	}
 
 	if (c.req.method !== "GET" && c.req.method !== "HEAD") {
@@ -85,8 +115,9 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 			!token ||
 			!(await equalTokens(session.csrf_token, token))
 		)
-			return c.json({ error: "forbidden" }, 403);
+			return refuse("forbidden", 403);
 	}
 	c.set("partner", session.actor);
 	await next();
+	protect();
 });
