@@ -1,15 +1,20 @@
-import { type Expression, type Kysely, sql } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
 import { resolveSubject } from "./detail/resolve.ts";
+import {
+	asText,
+	phaseChangeOf,
+	phaseStartedOn,
+	phaseStartsOf,
+	shortName,
+	vendorsOf,
+} from "./shared.ts";
 
 const HISTORY_CAP = 500;
 const PLACEHOLDERS = new Set([
 	"sf_commission_placeholder",
 	"sf_close_date_placeholder",
 ]);
-
-const asText = (value: Expression<unknown>) =>
-	sql<string | null>`to_jsonb(${value})#>>'{}'`;
 
 export async function readDealDetail(
 	db: Kysely<DB>,
@@ -32,35 +37,9 @@ export async function readDealDetail(
 
 	const [vendors, phaseChange, phaseStarts, thread, criticalDates] =
 		await Promise.all([
-			db
-				.selectFrom("v_deal_room_vendor")
-				.select([
-					"party_id",
-					"role",
-					"company",
-					"contact",
-					"note",
-					"updated_at",
-				])
-				.where("deal_id", "=", id)
-				.orderBy("role")
-				.orderBy(sql`company->>'name'`)
-				.orderBy(sql`contact->>'name'`)
-				.orderBy("party_id")
-				.execute(),
-			db
-				.selectFrom("v_deal_room_phase_change")
-				.selectAll()
-				.where("deal_id", "=", id)
-				.executeTakeFirst(),
-			db
-				.selectFrom("v_deal_room_phase_start")
-				.select((eb) => [
-					"phase",
-					asText(eb.ref("started_on")).as("started_on"),
-				])
-				.where("deal_id", "=", id)
-				.execute(),
+			vendorsOf(db, id).execute(),
+			phaseChangeOf(db, id).executeTakeFirst(),
+			phaseStartsOf(db, id).execute(),
 			db
 				.selectFrom("v_deal_room_note")
 				.select((eb) => [
@@ -248,10 +227,11 @@ export async function readDealDetail(
 		...("operating_state" in record
 			? { phase_change: phaseChange ?? null }
 			: {}),
-		phase_started_on: Object.fromEntries(
-			phaseStarts.map((s) => [s.phase, s.started_on]),
-		),
-		short_name: shortName(record),
+		phase_started_on: phaseStartedOn(phaseStarts),
+		short_name: shortName({
+			...record,
+			market: "city" in record ? record.city : null,
+		}),
 		thread: thread.slice(0, HISTORY_CAP),
 		thread_truncated: thread.length > HISTORY_CAP,
 		critical_dates: criticalDates,
@@ -373,19 +353,6 @@ function archivedDeal(db: Kysely<DB>, id: string) {
 		])
 		.where("b.id", "=", id)
 		.executeTakeFirst();
-}
-
-function shortName(deal: {
-	name: string | null;
-	client_name: string | null;
-	city?: string | null;
-}) {
-	const contact = (deal.client_name ?? "")
-		.replace(/\s*\([^)]*\)\s*$/u, "")
-		.trim();
-	const doctor = /^Dr\.?\s+([\p{L}]+(?:[ .'-][\p{L}]+)*)$/u.exec(contact)?.[1];
-	if (!doctor || !deal.city) return deal.name;
-	return `Dr. ${doctor.split(/\s+/u).at(-1)}'s ${deal.city} Deal`;
 }
 
 function latestPerThread(
