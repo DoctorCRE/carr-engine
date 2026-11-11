@@ -40,9 +40,23 @@ This repo has one check, one ruleset and this file. Do not add hooks, gates, ext
 
 ## What waits for the owner
 
-You may merge changes to `src/`, `wrangler.jsonc` and `package-lock.json` on your own. Every other file belongs to the owner in `.github/CODEOWNERS`, and a pull request that touches any of them waits for the owner. That includes `package.json`, so a new package waits too.
+`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them waits for the owner to merge it from the pull request page. Never merge one with `--admin` or any other bypass.
 
-Put an owned change in its own small pull request. Start its description with the rule or setting it changes and why. Leave auto-merge off. The owner merges it from the pull request page. Never merge with `--admin` or any other bypass yourself.
+## Skills
+
+Build work starts in pstack's poteto-mode: `/pstack:poteto-mode` in Claude Code, `$poteto-mode` in Codex. Use pstack and the other installed skills straight from upstream. Never copy or wrap a skill in this repo.
+
+This file wins over any skill or global rule. A skill's advice to add a lint, check, script or rule is advice about product code only; it never overrides "Do not build process machinery". The old system's Cards, Work Requests, standing orders and team memory do not apply here.
+
+## Who does what
+
+A Claude session coordinates: it slices issues, briefs workers, reviews and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
+
+Claude Opus 5.5 builds. Reasoning effort is high, never higher.
+
+Before a pull request merges, a separate Claude session that did not write the change reviews it. The builder fixes what the review finds, then turns on auto-merge. The owner does not review code.
+
+Check which models are available each time you start a worker. Never write a provider's usage or balance into this repo.
 
 ## The old system
 

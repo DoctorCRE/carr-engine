@@ -1,6 +1,3 @@
-# The owner reviews every file except the paths below that list no owner.
-* @jbookout
-
-/src/
-/wrangler.jsonc
-/package-lock.json
+/AGENTS.md @jbookout
+/CLAUDE.md @jbookout
+/.github/ @jbookout
