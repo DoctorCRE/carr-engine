@@ -38,6 +38,10 @@ When a pull request adds a dependency or a script, say in one line which of 1 an
 
 This repo has one check, one ruleset and this file. Do not add hooks, gates, extra CI jobs or workflows, bots, rule files, registries, receipts, proofs, checks that test other checks, or new sections here. Changing `AGENTS.md`, `.github/` or the scripts in `package.json` needs an issue in which the owner asked for that change.
 
+## What waits for the owner
+
+`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them waits for the owner to merge it from the pull request page. You never merge one yourself, and you never use `--admin` or any other bypass.
+
 ## Skills
 
 Build work starts in pstack's poteto-mode: `/pstack:poteto-mode` in Claude Code, `$poteto-mode` in Codex. Use pstack and the other installed skills straight from upstream. Never copy or wrap a skill in this repo.
