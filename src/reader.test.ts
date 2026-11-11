@@ -1,52 +1,51 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { sql } from "kysely";
+import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
+import { withSnapshot } from "../scripts/test-database.ts";
+import type { DB } from "./database.d.ts";
+import { readBoard } from "./deals/board.ts";
+import { readDealDetail } from "./deals/detail.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url)
 	throw new Error("Run npm run check to restore the test database first");
 
-// The engine login's whole read grant: the base tables behind the Deals board
-// and the deal page (plan on #17). v_deal_client_portal and
-// v_requirement_request join it once the test copy has them.
+// The engine login's whole read grant: every relation the board and deal
+// reads name. The views read their tables with their owner's rights.
 const readable = [
-	"activity",
-	"activity_kind",
 	"actor",
-	"attachment",
-	"building",
-	"capture_post_call_action",
-	"client",
-	"commission",
-	"critical_date",
-	"deal",
-	"deal_market_assignment",
-	"deal_note",
-	"deal_participant",
-	"deal_phase",
-	"deal_review_item",
-	"deal_review_session",
-	"deal_vendor_assignment",
-	"doctrine_section",
-	"document",
-	"event",
-	"lead",
-	"lease",
-	"national_account_owner",
-	"negotiation_round",
-	"next_action",
-	"party",
-	"premises",
-	"premises_space",
-	"space",
-	"vendor",
+	"v_client_account",
+	"v_client_engagement_status",
+	"v_deal_board",
+	"v_deal_reconciliation_read",
+	"v_deal_room_account",
+	"v_deal_room_action",
+	"v_deal_room_activity",
+	"v_deal_room_board",
+	"v_deal_room_critical_date",
+	"v_deal_room_current_lease",
+	"v_deal_room_document",
+	"v_deal_room_event",
+	"v_deal_room_negotiation",
+	"v_deal_room_note",
+	"v_deal_room_participant",
+	"v_deal_room_phase_change",
+	"v_deal_room_phase_start",
+	"v_deal_room_premises",
+	"v_deal_room_session",
+	"v_deal_room_vendor",
+	"v_open_deal_room_board",
+	"v_ref_index",
 ];
 
-async function withAdmin<T>(run: (admin: pg.Client) => Promise<T>) {
-	const admin = new pg.Client({ connectionString: url });
+async function withAdmin<T>(
+	run: (admin: pg.Client) => Promise<T>,
+	connectionString = url,
+) {
+	const admin = new pg.Client({ connectionString });
 	await admin.connect();
 	try {
 		return await run(admin);
@@ -56,6 +55,7 @@ async function withAdmin<T>(run: (admin: pg.Client) => Promise<T>) {
 }
 
 async function withReaderLogin(
+	database: string,
 	run: (login: string, name: string) => Promise<void>,
 ) {
 	const name = `engine_reader_${randomUUID().replaceAll("-", "")}`;
@@ -66,61 +66,144 @@ async function withReaderLogin(
 			await admin.query(
 				`GRANT SELECT ON ${readable.map((t) => `public.${t}`).join(", ")} TO ${name}`,
 			);
-			const login = new URL(url as string);
+			const login = new URL(database);
 			login.username = name;
 			await run(login.href, name);
 		} finally {
 			await admin.query(`DROP OWNED BY ${name}`);
 			await admin.query(`DROP ROLE ${name}`);
 		}
-	});
+	}, database);
 }
 
-test("the reader login reads only the planned tables and changes nothing", async () => {
-	await withReaderLogin(async (login, name) => {
-		assert.deepEqual(
-			await readSnapshot(login, (db) =>
-				db
-					.selectFrom("deal")
-					.select("id")
-					.where("id", "=", randomUUID())
-					.execute(),
-			),
-			[],
-		);
-		const visible = await withAdmin((admin) =>
-			admin.query<{ relname: string }>(
-				`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-				WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'p')
-				AND has_table_privilege($1, c.oid, 'SELECT') ORDER BY c.relname`,
-				[name],
-			),
-		);
-		assert.deepEqual(
-			visible.rows.map((r) => r.relname),
-			readable,
-		);
-		await assert.rejects(
-			readSnapshot(login, (db) =>
-				db.selectFrom("schema_migrations").selectAll().execute(),
-			),
-			{ code: "42501" },
-		);
-		const client = new pg.Client({ connectionString: login });
-		await client.connect();
-		try {
-			for (const write of [
-				"INSERT INTO public.deal_phase (slug, label) VALUES ('example-refused', 'Example')",
-				"UPDATE public.deal SET name = 'Example' WHERE false",
-				"DELETE FROM public.party WHERE false",
-			]) {
-				await assert.rejects(client.query(write), { code: "42501" }, write);
-			}
-		} finally {
-			await client.end();
-		}
+async function seedDeal(database: string) {
+	const db = new Kysely<DB>({
+		dialect: new PostgresDialect({
+			pool: new pg.Pool({ connectionString: database }),
+		}),
 	});
-});
+	try {
+		return await db.transaction().execute(async (tx) => {
+			const actor = await tx
+				.insertInto("actor")
+				.values({
+					slug: "reader-agent",
+					kind: "human",
+					display_name: "Example",
+				})
+				.returning(["id", "slug"])
+				.executeTakeFirstOrThrow();
+			const audit = { created_by: actor.id, updated_by: actor.id };
+			await tx
+				.insertInto("contact_state")
+				.values({
+					slug: "active",
+					label: "Example",
+					contactable: true,
+					sort: 1,
+				})
+				.execute();
+			await tx
+				.insertInto("deal_type_ref")
+				.values({ slug: "reader-lease", label: "Example", sort: 1 })
+				.execute();
+			await tx
+				.insertInto("deal_phase")
+				.values({ slug: "reader-open", label: "Example" })
+				.execute();
+			const party = await tx
+				.insertInto("party")
+				.values({ kind: "org", name: "Example Clinic", ...audit })
+				.returning("id")
+				.executeTakeFirstOrThrow();
+			const client = await tx
+				.insertInto("client")
+				.values({ party_id: party.id, ...audit })
+				.returning("id")
+				.executeTakeFirstOrThrow();
+			const deal = await tx
+				.insertInto("deal")
+				.values({
+					client_id: client.id,
+					name: "Example Reader Deal",
+					deal_type: "reader-lease",
+					phase: "reader-open",
+					owner: actor.slug,
+					next_date: "2030-01-15",
+					...audit,
+				})
+				.returning("id")
+				.executeTakeFirstOrThrow();
+			await tx
+				.insertInto("deal_note")
+				.values({
+					deal_id: deal.id,
+					kind: "note",
+					text: "Example reader note",
+					actor_id: actor.id,
+				})
+				.execute();
+			return { actor: actor.slug, deal: deal.id };
+		});
+	} finally {
+		await db.destroy();
+	}
+}
+
+test("the reader login reads the board and a deal and changes nothing", () =>
+	withSnapshot(async (database) => {
+		const seeded = await seedDeal(database);
+		await withReaderLogin(database, async (login, name) => {
+			const board = await readSnapshot(login, (db) =>
+				readBoard(db, { actor: seeded.actor, workspace: "all" }),
+			);
+			assert.deepEqual(
+				board.deals.map((d) => [d.id, d.name, d.next_date]),
+				[[seeded.deal, "Example Reader Deal", "2030-01-15"]],
+			);
+			const detail = await readSnapshot(login, (db) =>
+				readDealDetail(db, seeded.deal, seeded.actor),
+			);
+			assert.ok("deal_id" in detail, JSON.stringify(detail));
+			assert.equal(detail.deal_id, seeded.deal);
+			assert.deepEqual(
+				detail.thread.map((n) => n.text),
+				["Example reader note"],
+			);
+			const visible = await withAdmin(
+				(admin) =>
+					admin.query<{ relname: string }>(
+						`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+						WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'p')
+						AND has_table_privilege($1, c.oid, 'SELECT') ORDER BY c.relname`,
+						[name],
+					),
+				database,
+			);
+			assert.deepEqual(
+				visible.rows.map((r) => r.relname),
+				readable,
+			);
+			for (const outside of ["deal", "schema_migrations"] as const) {
+				await assert.rejects(
+					readSnapshot(login, (db) =>
+						db.selectFrom(outside).selectAll().execute(),
+					),
+					{ code: "42501" },
+					outside,
+				);
+			}
+			await withAdmin(async (client) => {
+				for (const write of [
+					"INSERT INTO public.deal_phase (slug, label) VALUES ('example-refused', 'Example')",
+					"UPDATE public.deal SET name = 'Example' WHERE false",
+					"DELETE FROM public.party WHERE false",
+				]) {
+					await assert.rejects(client.query(write), { code: "42501" }, write);
+				}
+			}, login);
+		});
+	}));
 
 test("an answer reads one read-only snapshot", async () => {
 	const slug = `example-${randomUUID()}`;
@@ -149,6 +232,10 @@ test("an answer reads one read-only snapshot", async () => {
 			),
 			{ code: "25006" },
 		);
+		await assert.rejects(
+			readSnapshot(url, (db) => sql`set transaction read write`.execute(db)),
+			{ code: "25001" },
+		);
 		assert.deepEqual(await readSnapshot(url, count), { n: "1" });
 	} finally {
 		await withAdmin((admin) =>
@@ -157,31 +244,65 @@ test("an answer reads one read-only snapshot", async () => {
 	}
 });
 
+test("an answer closes its connection, even one the server drops", async () => {
+	const key = Math.floor(Math.random() * 2 ** 31);
+	await readSnapshot(url, (db) =>
+		sql`select pg_advisory_lock(${key})`.execute(db),
+	);
+	await withAdmin(async (admin) => {
+		await admin.query("SET lock_timeout = '2s'");
+		await admin.query("SELECT pg_advisory_lock($1)", [key]);
+	});
+	await assert.rejects(
+		readSnapshot(url, async (db) => {
+			const { rows } = await sql<{
+				pid: number;
+			}>`select pg_backend_pid() as pid`.execute(db);
+			await withAdmin((admin) =>
+				admin.query("SELECT pg_terminate_backend($1)", [rows[0]?.pid]),
+			);
+			return sql`select 1`.execute(db);
+		}),
+	);
+});
+
 test("values come back in the old system's text forms", async () => {
-	await withReaderLogin(async (login) => {
+	await withReaderLogin(url, async (login) => {
 		const row = await readSnapshot(
 			login,
 			async (db) =>
 				(
 					await sql<Record<string, unknown>>`select
 				1.50::numeric as amount,
+				'{1.50,NULL,9007199254740993.25}'::numeric[] as amounts,
 				9007199254740993::bigint as big,
 				'2026-03-08'::date as due_on,
+				'{2026-03-08,NULL,2026-03-09}'::date[] as due_dates,
+				'2026-03-08 07:30:00.123456+00'::timestamptz as stamp,
+				'infinity'::timestamptz as forever,
+				'{"2026-03-08 07:30:00.123456+00"}'::timestamptz[] as stamps,
+				'2026-03-08 07:30:00.123456'::timestamp as local_stamp,
+				'{"2026-03-08 07:30:00.123456"}'::timestamp[] as local_stamps,
 				'2026-03-08 07:30:00.123456+00'::timestamptz::text as stamp_text,
 				to_jsonb('2026-03-08 07:30:00.123456+00'::timestamptz) as stamp_json,
 				jsonb_build_object('amount', 1.50::numeric, 'count', 3::bigint) as built,
-				'2026-03-08 07:30:00.123+00'::timestamptz as stamp,
 				current_setting('TimeZone') as zone`.execute(db)
 				).rows[0],
 		);
 		assert.deepEqual(row, {
 			amount: "1.50",
+			amounts: ["1.50", null, "9007199254740993.25"],
 			big: "9007199254740993",
 			due_on: "2026-03-08",
+			due_dates: ["2026-03-08", null, "2026-03-09"],
+			stamp: "2026-03-08 07:30:00.123456+00",
+			forever: "infinity",
+			stamps: ["2026-03-08 07:30:00.123456+00"],
+			local_stamp: "2026-03-08 07:30:00.123456",
+			local_stamps: ["2026-03-08 07:30:00.123456"],
 			stamp_text: "2026-03-08 07:30:00.123456+00",
 			stamp_json: "2026-03-08T07:30:00.123456+00:00",
 			built: { amount: 1.5, count: 3 },
-			stamp: new Date("2026-03-08T07:30:00.123Z"),
 			zone: "UTC",
 		});
 	});
