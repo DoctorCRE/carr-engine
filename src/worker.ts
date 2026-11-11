@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 
+import { connection } from "./connection.ts";
 import { type DealsEnv, deals } from "./deals/routes.ts";
 import { requireSession } from "./session.ts";
 
@@ -15,6 +16,7 @@ app.get("/health", (c) =>
 
 app.use("/api/engine/*", requireSession);
 app.get("/api/engine/whoami", (c) => c.json(c.get("partner")));
+app.route("/api/engine", connection);
 app.route("/api/engine", deals);
 
 export default app;
