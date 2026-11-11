@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 
+import { connection } from "./connection.ts";
 import { requireSession, type SessionEnv } from "./session.ts";
 
 type WorkerEnv = SessionEnv & {
@@ -14,5 +15,6 @@ app.get("/health", (c) =>
 
 app.use("/api/engine/*", requireSession);
 app.get("/api/engine/whoami", (c) => c.json(c.get("partner")));
+app.route("/api/engine", connection);
 
 export default app;
