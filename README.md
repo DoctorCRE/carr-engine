@@ -1,4 +1,4 @@
-# carr-engine
+# doctorcre-engine
 
 Engine for the DoctorCRE app. See `AGENTS.md` for how work happens here.
 
