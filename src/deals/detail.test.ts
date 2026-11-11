@@ -122,19 +122,54 @@ test("an open deal reads with text dates and capped history", async () => {
 				})),
 			)
 			.execute();
+		const event = {
+			subject_type: "deal",
+			subject_id: deal,
+			verb: "example-verb",
+			cause: "system",
+			actor_id: actor,
+			occurred_at: "2030-01-02T03:04:05.678Z",
+		};
 		await tx
 			.insertInto("event")
-			.values({
-				subject_type: "deal",
-				subject_id: deal,
-				verb: "example-verb",
-				cause: "system",
-				actor_id: actor,
-				occurred_at: "2030-01-02T03:04:05.678Z",
-				new_value: {
-					kept: { phase: "detail-open", sf_close_date_placeholder: "x" },
+			.values([
+				...Array.from({ length: 499 }, (_, i) => ({
+					...event,
+					recorded_at: new Date(Date.UTC(2029, 0, 1, 0, 0, i)).toISOString(),
+				})),
+				{
+					...event,
+					recorded_at: "2030-02-01T00:00:00Z",
+					new_value: {
+						kept: { phase: "detail-open", sf_close_date_placeholder: "x" },
+					},
 				},
+			])
+			.execute();
+		const phaseEvent = await tx
+			.insertInto("event")
+			.values({
+				...event,
+				cause: "human_stated",
+				field: "phase",
+				old_value: { phase: "detail-intake" },
+				new_value: { phase: "detail-open" },
+				recorded_at: "2030-01-02T03:04:06Z",
 			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		const [later, sooner] = await tx
+			.insertInto("critical_date")
+			.values(
+				["2030-06-01", "2030-05-01"].map((due_on) => ({
+					deal_id: deal,
+					kind: "example-deadline",
+					due_on,
+					source: "example-source",
+					created_by: actor,
+				})),
+			)
+			.returning("id")
 			.execute();
 		const company = await party("Example Title Co");
 		const contact = await party("Example Closer");
@@ -185,10 +220,37 @@ test("an open deal reads with text dates and capped history", async () => {
 			detail.items.map((i) => [i.title, i.due_on]),
 			[["Example open item", "2030-03-01"]],
 		);
+		assert.equal(detail.events.length, 500);
+		assert.equal(detail.events_truncated, true);
+		assert.equal(detail.events[0]?.recorded_at, "2030-02-01T00:00:00+00:00");
 		assert.deepEqual(detail.events[0]?.new_value, {
 			kept: { phase: "detail-open" },
 		});
-		assert.equal(detail.events[0]?.recorded_at?.endsWith("+00:00"), true);
+		assert.deepEqual(
+			detail.critical_dates,
+			[
+				[sooner?.id, "2030-05-01"],
+				[later?.id, "2030-06-01"],
+			].map(([id, due_on]) => ({
+				id,
+				kind: "example-deadline",
+				due_on,
+				note: null,
+				source: "example-source",
+				status: "open",
+			})),
+		);
+		assert.deepEqual(detail.phase_started_on, { "detail-open": "2030-01-01" });
+		assert.deepEqual(detail.phase_change, {
+			deal_id: deal,
+			event_id: phaseEvent.id,
+			prior_phase: "detail-intake",
+			phase: "detail-open",
+			automatic: false,
+			reason: "phase changed",
+			evidence_date: "2030-01-02T03:04:05.678+00:00",
+			recorded_at: "2030-01-02T03:04:06+00:00",
+		});
 		assert.deepEqual(
 			detail.vendors.map((v) => [v.role, v.company, v.contact]),
 			[
@@ -199,7 +261,6 @@ test("an open deal reads with text dates and capped history", async () => {
 				],
 			],
 		);
-		assert.deepEqual(detail.phase_change, null);
 	});
 });
 
@@ -231,8 +292,14 @@ test("refusals name what went wrong", async () => {
 		const byName = await readDealDetail(tx, "Example Detail", "detail-agent");
 		assert.ok(!("error" in byName));
 		assert.equal(byName.deal_id, deal);
-		const missing = await readDealDetail(tx, "No Such Example", "detail-agent");
-		assert.equal("error" in missing && missing.error, "subject_not_found");
+		assert.deepEqual(
+			await readDealDetail(tx, "No Such Example", "detail-agent"),
+			{
+				error: "subject_not_found",
+				ref: "No Such Example",
+				hint: "use find first; refs look like L-204 / C-127 / V-CPA-006 / P-0948 or a deal name",
+			},
+		);
 		await tx
 			.insertInto("deal")
 			.values({
@@ -244,7 +311,24 @@ test("refusals name what went wrong", async () => {
 			})
 			.execute();
 		const twice = await readDealDetail(tx, "Example Detail", "detail-agent");
-		assert.equal("error" in twice && twice.error, "needs_disambiguation");
+		assert.ok("candidates" in twice);
+		assert.deepEqual(
+			{ ...twice, candidates: twice.candidates.map((c) => c.name).sort() },
+			{
+				error: "needs_disambiguation",
+				ref: "Example Detail",
+				candidates: ["Example Detail Deal", "Example Detail Deal Two"],
+				hint: "pass the exact ref or full name",
+			},
+		);
+		assert.deepEqual(
+			twice.candidates.find((c) => c.name === "Example Detail Deal"),
+			{
+				name: "Example Detail Deal",
+				phase: "detail-open",
+				client_ref: "C-9001",
+			},
+		);
 		const survivor = await tx
 			.insertInto("client")
 			.values({ party_id: (await party("Example Survivor")).id, ...audit })
@@ -260,5 +344,139 @@ test("refusals name what went wrong", async () => {
 			table: "deal",
 			id: deal,
 		});
+	});
+});
+
+test("each lookup step resolves or refuses like the old resolver", async () => {
+	await rolledBack(async (tx) => {
+		const { audit, client, deal } = await seed(tx);
+		const party = (name: string, extra: { ref?: string; city?: string } = {}) =>
+			tx
+				.insertInto("party")
+				.values({ kind: "person", name, ...extra, ...audit })
+				.returning("id")
+				.executeTakeFirstOrThrow();
+		await tx
+			.insertInto("lead_stage")
+			.values({ slug: "detail-new", label: "Example new" })
+			.execute();
+		const leadParty = await party("Example Zed", { city: "Exampleton" });
+		const lead = await tx
+			.insertInto("lead")
+			.values({
+				party_id: leadParty.id,
+				stage: "detail-new",
+				registry_ref: "L-9001",
+				...audit,
+			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		await tx
+			.insertInto("vendor_disposition")
+			.values({ slug: "detail-ok", label: "Example", workable: true, sort: 1 })
+			.execute();
+		const vendor = async (name: string, vendor_ref: string) =>
+			tx
+				.insertInto("vendor")
+				.values({
+					party_id: (await party(name)).id,
+					category: "title",
+					disposition: "detail-ok",
+					vendor_ref,
+					...audit,
+				})
+				.returning("id")
+				.executeTakeFirstOrThrow();
+		const zedVendor = await vendor("Example Zed Supply", "V-EX-001");
+		const teeVendor = await vendor("Example Tee Vendor", "T-EX-002");
+		await tx
+			.insertInto("client")
+			.values({
+				party_id: (await party("Example Zed Gone")).id,
+				status: "detail-active",
+				...audit,
+			})
+			.execute();
+		await tx
+			.updateTable("party")
+			.set({ merged_into: leadParty.id })
+			.where("name", "=", "Example Zed Gone")
+			.execute();
+		const bare = await party("Example Bare", { ref: "P-9001" });
+		await party("Example Bare Annex");
+		await tx
+			.insertInto("deal")
+			.values({
+				id: lead.id,
+				client_id: client,
+				name: "Example Shared Id Deal",
+				deal_type: "detail-lease",
+				phase: "detail-open",
+				...audit,
+			})
+			.execute();
+		const notADeal = (type: string, id: string) => ({
+			error: "not_a_deal",
+			resolved: { type, id },
+		});
+		const pickOne = "pass the exact ref or full name";
+		const cases: [string, unknown][] = [
+			["L-9001", notADeal("lead", lead.id)],
+			["V-EX-001", notADeal("vendor", zedVendor.id)],
+			["T-EX-002", notADeal("vendor", teeVendor.id)],
+			["P-9001", notADeal("party", bare.id)],
+			[client, notADeal("client", client)],
+			[
+				"Example Zed",
+				{
+					error: "needs_disambiguation",
+					ref: "Example Zed",
+					candidates: [
+						{
+							name: "Example Zed",
+							ref: "L-9001",
+							kind: "lead",
+							city: "Exampleton",
+						},
+						{
+							name: "Example Zed Supply",
+							ref: "V-EX-001",
+							kind: "vendor",
+							city: null,
+						},
+					],
+					hint: pickOne,
+				},
+			],
+			[
+				"Example Bare",
+				{
+					error: "needs_disambiguation",
+					ref: "Example Bare",
+					candidates: [
+						{ name: "Example Bare", ref: "P-9001", kind: "party", city: null },
+						{
+							name: "Example Bare Annex",
+							ref: null,
+							kind: "party",
+							city: null,
+						},
+					],
+					hint: "more than one party carries this name — often duplicate org rows for one company; pass the exact P-ref",
+				},
+			],
+		];
+		for (const [ref, expected] of cases)
+			assert.deepEqual(
+				await readDealDetail(tx, ref, "detail-agent"),
+				expected,
+				ref,
+			);
+		const shared = await readDealDetail(tx, lead.id, "detail-agent");
+		assert.ok(!("error" in shared));
+		assert.equal(shared.name, "Example Shared Id Deal");
+		const byName = await readDealDetail(tx, "Example Detail", "detail-agent");
+		assert.ok(!("error" in byName));
+		assert.equal(byName.deal_id, deal);
 	});
 });
