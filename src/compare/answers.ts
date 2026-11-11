@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 type Rows = { id?: string; sortedBy: readonly string[] };
-type ReadShape = Record<string, Rows>;
+type ReadShape = { rows: Record<string, Rows>; opaque?: readonly string[] };
 type Kind =
 	| "value differs"
 	| "type differs"
@@ -11,10 +11,21 @@ type Kind =
 type Step = { id: string } | { index: number };
 type Place = { path: string; records: Step[] };
 type Difference = Place & { kind: Kind };
-type Row = { key: string; step: Step; value: unknown; ties: unknown[] };
+type Row = { key: string; step: Step; value: unknown; ties: unknown[] | null };
 
-const kindOf = (value: unknown) =>
-	value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FIELD = /^[a-z][a-z0-9_]*$/;
+
+function kindOf(value: unknown) {
+	if (value === null) return "null";
+	if (Array.isArray(value)) return "array";
+	if (typeof value === "object") {
+		const prototype = Object.getPrototypeOf(value);
+		if (prototype !== Object.prototype && prototype !== null)
+			throw new TypeError("Answers must be parsed JSON");
+	}
+	return typeof value;
+}
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	kindOf(value) === "object";
 const byKey = (a: Row, b: Row) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
@@ -34,11 +45,17 @@ function rowsOf(items: unknown[], rows: Rows): Row[] {
 		const base = named ? `id:${id}` : `row:${canonical(value)}`;
 		const count = seen.get(base) ?? 0;
 		seen.set(base, count + 1);
+		const printable =
+			(typeof id === "string" && UUID.test(id)) || Number.isSafeInteger(id);
+		const sortable =
+			rows.sortedBy.length > 0 &&
+			isRecord(value) &&
+			rows.sortedBy.every((key) => Object.hasOwn(value, key));
 		return {
 			key: `${base}#${count}`,
-			step: named ? { id: String(id) } : { index },
+			step: printable ? { id: String(id) } : { index },
 			value,
-			ties: rows.sortedBy.map((key) => (isRecord(value) ? value[key] : null)),
+			ties: sortable ? rows.sortedBy.map((key) => value[key]) : null,
 		};
 	});
 }
@@ -47,7 +64,9 @@ function untie(rows: Row[]): Row[] {
 	const sorted: Row[] = [];
 	let run: Row[] = [];
 	for (const row of rows) {
-		if (run[0] && !isDeepStrictEqual(run[0].ties, row.ties)) {
+		const tied =
+			run[0]?.ties && row.ties && isDeepStrictEqual(run[0].ties, row.ties);
+		if (run[0] && !tied) {
 			sorted.push(...run.sort(byKey));
 			run = [];
 		}
@@ -59,13 +78,18 @@ function untie(rows: Row[]): Row[] {
 export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	const differences: Difference[] = [];
 	const tiedRowsReordered: Place[] = [];
+	const opaque = new Set(shape.opaque);
 
 	function walk(a: unknown, b: unknown, path: string, records: Step[]): void {
 		if (kindOf(a) !== kindOf(b)) {
 			differences.push({ path, records, kind: "type differs" });
+		} else if (opaque.has(path)) {
+			if (canonical(a) !== canonical(b))
+				differences.push({ path, records, kind: "value differs" });
 		} else if (isRecord(a) && isRecord(b)) {
 			for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
-				const child = path ? `${path}.${key}` : key;
+				const field = FIELD.test(key) ? key : "*";
+				const child = path ? `${path}.${field}` : field;
 				if (!Object.hasOwn(b, key))
 					differences.push({ path: child, records, kind: "missing in new" });
 				else if (!Object.hasOwn(a, key))
@@ -73,7 +97,7 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 				else walk(a[key], b[key], child, records);
 			}
 		} else if (Array.isArray(a) && Array.isArray(b)) {
-			const rows = shape[`${path}[]`];
+			const rows = shape.rows[`${path}[]`];
 			if (rows) compareRows(a, b, `${path}[]`, records, rows);
 			else
 				for (let index = 0; index < Math.max(a.length, b.length); index++) {
