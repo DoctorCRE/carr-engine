@@ -4,7 +4,7 @@ import type { DB } from "../database.d.ts";
 
 type BoardInputs = {
 	actor: string;
-	workspace?: "team" | "national_account" | "all";
+	workspace?: "team" | "national_account" | "all" | "" | null;
 	account_client_id?: string | null;
 };
 
@@ -46,10 +46,11 @@ export function shortName(deal: {
 
 export async function readBoard(
 	db: Kysely<DB>,
-	{ actor, workspace = "all", account_client_id }: BoardInputs,
+	{ actor, workspace, account_client_id }: BoardInputs,
 ) {
+	const scope = workspace || "all";
 	const account = account_client_id || null;
-	const deals = await db
+	const openDeals = db
 		.selectFrom("v_open_deal_room_board as b")
 		.innerJoin("v_deal_reconciliation_read as r", "r.id", "b.id")
 		.innerJoin(
@@ -186,14 +187,112 @@ export async function readBoard(
 					.orderBy("e.id", "desc"),
 			).as("field_base"),
 		])
-		.$if(workspace !== "all", (q) =>
-			q.where("b.workspace_kind", "=", workspace),
-		)
+		.$if(scope !== "all", (q) => q.where("b.workspace_kind", "=", scope))
 		.$if(account !== null, (q) => q.where("b.account_client_id", "=", account))
 		.orderBy("b.attention", "desc")
 		.orderBy("b.next_date", (o) => o.asc().nullsLast())
 		.orderBy("b.name")
 		.execute();
+
+	const closedDeals = db
+		.selectFrom("v_deal_board as b")
+		.leftJoin("v_client_account as a", (join) =>
+			join
+				.onRef("a.client_id", "=", "b.client_id")
+				.on("a.is_sub_client", "=", true),
+		)
+		.select((q) => [
+			"b.id",
+			"b.name",
+			"b.client_ref",
+			"b.client_name",
+			"b.deal_type as type",
+			vendors(q.ref("b.id")).as("vendors"),
+			"b.phase",
+			"b.outcome",
+			"b.lead_owner as owner",
+			text(q.ref("b.closed_on")).as("closed_on"),
+			text(q.ref("b.invoiced_on")).as("invoiced_on"),
+			"a.account_client_id",
+			q
+				.case()
+				.when("a.account_client_id", "is", null)
+				.then("team")
+				.else("national_account")
+				.end()
+				.as("workspace_kind"),
+		])
+		.where((q) =>
+			q.or([
+				q("b.phase", "in", ["closed", "invoiced"]),
+				q("b.outcome", "is not", null),
+				q("b.closed_on", "is not", null),
+				q("b.invoiced_on", "is not", null),
+			]),
+		)
+		.$if(scope !== "all", (q) =>
+			q.where("a.account_client_id", scope === "team" ? "is" : "is not", null),
+		)
+		.$if(account !== null, (q) => q.where("a.account_client_id", "=", account))
+		.orderBy("b.closed_on", (o) => o.desc().nullsLast())
+		.orderBy("b.name")
+		.orderBy("b.id")
+		.execute();
+
+	const accounts = db
+		.selectFrom("v_deal_room_account as a")
+		.innerJoin(
+			"v_client_engagement_status as ce",
+			"ce.client_id",
+			"a.account_client_id",
+		)
+		.select((q) => [
+			"a.account_client_id",
+			"a.account_client_ref",
+			"a.account_name",
+			"a.account_owner",
+			"ce.client_version as base_version",
+			"a.open_deals",
+			"a.attention_deals",
+			"a.overdue_deals",
+			"a.stale_deals",
+			text(q.ref("a.last_review_at")).as("last_review_at"),
+			"a.parked_deals",
+			"ce.client_status",
+			"ce.client_version",
+			"ce.prospect_engagement_status",
+		])
+		.where((q) =>
+			q.or([
+				q("ce.client_status", "<>", "prospect"),
+				q("ce.prospect_engagement_status", "=", "active"),
+			]),
+		)
+		.orderBy("a.account_name")
+		.execute();
+
+	const session = db
+		.selectFrom("v_deal_room_session")
+		.select((q) => [
+			"session_id",
+			"workspace_kind",
+			"account_client_id",
+			text(q.ref("started_at")).as("started_at"),
+		])
+		.where("started_by", "=", actor)
+		.where("status", "=", "open")
+		.$if(scope !== "all", (q) => q.where("workspace_kind", "=", scope))
+		.$if(account !== null, (q) => q.where("account_client_id", "=", account))
+		.orderBy("started_at", "desc")
+		.limit(1)
+		.executeTakeFirst();
+
+	const [deals, closed, accountRows, openSession] = await Promise.all([
+		openDeals,
+		closedDeals,
+		accounts,
+		session,
+	]);
 	return {
 		schema_version: "local-deals-board.v2",
 		actor,
@@ -207,5 +306,9 @@ export async function readBoard(
 			),
 			short_name: shortName(deal),
 		})),
+		closed_deals: closed.filter((deal) => deal.outcome !== "lost"),
+		lost_deals: closed.filter((deal) => deal.outcome === "lost"),
+		accounts: accountRows,
+		open_session: openSession ?? null,
 	};
 }
