@@ -85,7 +85,7 @@ async function seed(tx: Transaction<DB>, deal: { invoiced_on?: string } = {}) {
 	return { actor: actor.id, audit, party, client: client.id, deal: row.id };
 }
 
-test("an open deal reads with text dates and capped history", async () => {
+test("an open deal reads with text dates, decimal strings and capped notes", async () => {
 	await rolledBack(async (tx) => {
 		const { actor, audit, party, deal } = await seed(tx);
 		await tx
@@ -99,6 +99,19 @@ test("an open deal reads with text dates and capped history", async () => {
 					created_at: new Date(Date.UTC(2030, 0, 1, 0, 0, i)).toISOString(),
 				})),
 			)
+			.execute();
+		await tx
+			.insertInto("negotiation_round")
+			.values({
+				deal_id: deal,
+				round_no: 1,
+				side: "landlord",
+				proposed_on: "2030-02-01",
+				rate_amount: "12.50",
+				rate_basis: "usd_sf_yr",
+				term_months: 60,
+				created_by: actor,
+			})
 			.execute();
 		await tx
 			.insertInto("next_action")
@@ -178,6 +191,10 @@ test("an open deal reads with text dates and capped history", async () => {
 		assert.equal(detail.thread[0]?.text, "Example note 500");
 		assert.equal(detail.thread[0]?.created_at, "2030-01-01T00:08:20+00:00");
 		assert.deepEqual(
+			detail.negotiation_rounds.map((r) => [r.rate_amount, r.term_months]),
+			[["12.50", 60]],
+		);
+		assert.deepEqual(
 			detail.next_actions.map((a) => a.status),
 			["open", "dropped", "open"],
 		);
@@ -200,6 +217,57 @@ test("an open deal reads with text dates and capped history", async () => {
 			],
 		);
 		assert.deepEqual(detail.phase_change, null);
+		assert.deepEqual(detail.lease, null);
+	});
+});
+
+test("email threads keep the newest message per conversation", async () => {
+	await rolledBack(async (tx) => {
+		const { actor, deal } = await seed(tx);
+		await tx
+			.insertInto("activity_kind")
+			.values(
+				["email_in", "email_out"].map((slug) => ({
+					slug,
+					label: slug,
+					is_contact: true,
+				})),
+			)
+			.onConflict((c) => c.doNothing())
+			.execute();
+		await tx
+			.insertInto("activity")
+			.values(
+				[
+					["email_in", "t-1", "Old", "2030-01-01T00:00:00Z"],
+					["email_out", "t-1", "New", "2030-01-03T00:00:00Z"],
+					["email_in", "", "Loose one", "2030-01-02T00:00:00Z"],
+					["email_in", null, "Loose two", "2030-01-02T12:00:00Z"],
+				].map(([kind, thread, subject, at]) => ({
+					kind: String(kind),
+					summary: "Example email",
+					occurred_at: String(at),
+					actor_id: actor,
+					deal_id: deal,
+					email_context: { conversation_id: thread, subject },
+				})),
+			)
+			.execute();
+		const detail = await readDealDetail(tx, deal, "detail-agent");
+		assert.ok(!("error" in detail));
+		assert.deepEqual(
+			detail.email_threads.map((t) => [t.conversation_id, t.subject]),
+			[
+				["t-1", "New"],
+				[null, "Loose two"],
+				[null, "Loose one"],
+			],
+		);
+		assert.equal(detail.activities.length, 4);
+		assert.equal(
+			detail.email_threads[0]?.latest_message_at,
+			"2030-01-03T00:00:00+00:00",
+		);
 	});
 });
 

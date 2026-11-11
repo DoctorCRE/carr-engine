@@ -90,7 +90,7 @@ export async function readDealDetail(
 				.orderBy("id")
 				.execute(),
 		]);
-	const [events, actions] = await Promise.all([
+	const [events, actions, activities, emails] = await Promise.all([
 		db
 			.selectFrom("v_deal_room_event")
 			.select((eb) => [
@@ -126,10 +126,122 @@ export async function readDealDetail(
 			.orderBy("created_order")
 			.orderBy("id")
 			.execute(),
+		db
+			.selectFrom("v_deal_room_activity")
+			.select((eb) => [
+				"id",
+				asText(eb.ref("occurred_at")).as("occurred_at"),
+				"actor",
+				"kind",
+				"summary",
+				"detail",
+				"source",
+				"email_context",
+			])
+			.where("deal_id", "=", id)
+			.orderBy("occurred_at", "desc")
+			.orderBy("id", "desc")
+			.limit(HISTORY_CAP + 1)
+			.execute(),
+		db
+			.selectFrom("v_deal_room_activity")
+			.select((eb) => [
+				"id",
+				sql<string | null>`email_context->>'conversation_id'`.as("thread"),
+				sql<string | null>`email_context->>'subject'`.as("subject"),
+				asText(eb.ref("occurred_at")).as("latest_message_at"),
+			])
+			.where("deal_id", "=", id)
+			.where("kind", "in", ["email_in", "email_out"])
+			.where("email_context", "is not", null)
+			.orderBy("occurred_at", "desc")
+			.orderBy("id", "desc")
+			.execute(),
+	]);
+	const [participants, premises, rounds, documents, lease] = await Promise.all([
+		db
+			.selectFrom("v_deal_room_participant")
+			.select(["role", "name", "actor", "party_id"])
+			.where("deal_id", "=", id)
+			.orderBy("role")
+			.orderBy("name")
+			.execute(),
+		db
+			.selectFrom("v_deal_room_premises")
+			.select([
+				"id",
+				"label",
+				"building_name",
+				"address",
+				"city",
+				"state",
+				"suite",
+				"area_amount",
+				"area_basis",
+			])
+			.where("deal_id", "=", id)
+			.orderBy("created_at")
+			.orderBy("suite")
+			.execute(),
+		db
+			.selectFrom("v_deal_room_negotiation")
+			.select((eb) => [
+				"round_no",
+				"side",
+				asText(eb.ref("proposed_on")).as("proposed_on"),
+				"rate_amount",
+				"rate_basis",
+				"rate_norm_sf_yr",
+				"ti_amount",
+				"ti_basis",
+				"free_rent_months",
+				"term_months",
+				"escalator",
+				"opex_note",
+				asText(eb.ref("expires_on")).as("expires_on"),
+				"note",
+				"source",
+			])
+			.where("deal_id", "=", id)
+			.orderBy("round_no", "desc")
+			.orderBy("proposed_on", "desc")
+			.limit(6)
+			.execute(),
+		db
+			.selectFrom("v_deal_room_document")
+			.select((eb) => [
+				"id",
+				"sent_status",
+				"lint_passed",
+				"leak_check_passed",
+				asText(eb.ref("prepared_at")).as("prepared_at"),
+				"note",
+			])
+			.where("deal_id", "=", id)
+			.orderBy("prepared_at", "desc")
+			.limit(20)
+			.execute(),
+		db
+			.selectFrom("v_deal_room_current_lease")
+			.select((eb) => [
+				"id",
+				"version",
+				"status",
+				asText(eb.ref("executed_on")).as("executed_on"),
+				asText(eb.ref("commencement_on")).as("commencement_on"),
+				asText(eb.ref("expiration_on")).as("expiration_on"),
+				"options_note",
+				"evidence_kind",
+				"evidence_ref",
+				"source",
+			])
+			.where("deal_id", "=", id)
+			.executeTakeFirst(),
 	]);
 
 	return stripPlaceholders({
 		schema_version: "deal-timeline.v1",
+		lease: lease ?? null,
 		deal_id: id,
 		...record,
 		vendors,
@@ -157,6 +269,13 @@ export async function readDealDetail(
 				bullets,
 				source_ref,
 			})),
+		activities: activities.slice(0, HISTORY_CAP),
+		activities_truncated: activities.length > HISTORY_CAP,
+		email_threads: latestPerThread(emails),
+		participants,
+		premises,
+		negotiation_rounds: rounds,
+		documents,
 		events: events.slice(0, HISTORY_CAP),
 		events_truncated: events.length > HISTORY_CAP,
 	});
@@ -267,6 +386,26 @@ function shortName(deal: {
 	const doctor = /^Dr\.?\s+([\p{L}]+(?:[ .'-][\p{L}]+)*)$/u.exec(contact)?.[1];
 	if (!doctor || !deal.city) return deal.name;
 	return `Dr. ${doctor.split(/\s+/u).at(-1)}'s ${deal.city} Deal`;
+}
+
+function latestPerThread(
+	emails: {
+		id: string | null;
+		thread: string | null;
+		subject: string | null;
+		latest_message_at: string | null;
+	}[],
+) {
+	const latest = new Map<string, (typeof emails)[number]>();
+	for (const email of emails) {
+		const key = email.thread ? `thread:${email.thread}` : `email:${email.id}`;
+		if (!latest.has(key)) latest.set(key, email);
+	}
+	return [...latest.values()].map((e) => ({
+		conversation_id: e.thread || null,
+		subject: e.subject,
+		latest_message_at: e.latest_message_at,
+	}));
 }
 
 function stripPlaceholders<T>(value: T): T {
