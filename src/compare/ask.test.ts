@@ -1,0 +1,158 @@
+import assert from "node:assert/strict";
+import { mock, test } from "node:test";
+import { askers, pause } from "./ask.ts";
+import { type Ask, StopRun } from "./run.ts";
+
+const app = new URL("https://app.example.test");
+const session = "made-up-session-value";
+const deal = "00000000-0000-4000-8000-000000000001";
+const board: Ask = { read: "board", workspace: "national_account" };
+const detail: Ask = { read: "deal", deal };
+
+type Sent = { url: URL; init: RequestInit };
+
+function fake(respond: (sent: Sent) => Response) {
+	const sent: Sent[] = [];
+	const ask = askers(app, session, async (url, init) => {
+		sent.push({ url, init });
+		return respond({ url, init });
+	});
+	return { ...ask, sent };
+}
+
+const json = (body: unknown, status = 200) => Response.json(body, { status });
+const rpc = (result: object) => json({ jsonrpc: "2.0", id: 1, result });
+const content = (body: unknown, isError?: true) =>
+	rpc({ content: [{ type: "text", text: JSON.stringify(body) }], isError });
+const header = (sent: Sent, name: string) =>
+	new Headers(sent.init.headers).get(name);
+
+test("asks the engine's board by workspace and a deal by its reference, on the app's host with the session", async () => {
+	const { askEngine, sent } = fake(() => json({ made_up: true }));
+	assert.deepEqual(await askEngine(board), { made_up: true });
+	await askEngine(detail);
+	assert.deepEqual(
+		sent.map((s) => s.url.href),
+		[
+			"https://app.example.test/api/engine/deals?workspace=national_account",
+			`https://app.example.test/api/engine/deals/${deal}`,
+		],
+	);
+	for (const s of sent) {
+		assert.equal(header(s, "cookie"), `__Host-dealroom_session=${session}`);
+		assert.equal(s.init.method ?? "GET", "GET");
+		assert.equal(s.init.redirect, "manual");
+	}
+});
+
+test("asks the old system through the same host with the session and the app's origin", async () => {
+	const { askOld, sent } = fake(() => content({ made_up: true }));
+	assert.deepEqual(await askOld(board), { made_up: true });
+	await askOld(detail);
+	assert.deepEqual(
+		sent.map((s) => [s.url.href, s.init.method]),
+		[
+			["https://app.example.test/mcp", "POST"],
+			["https://app.example.test/mcp", "POST"],
+		],
+	);
+	assert.deepEqual(
+		sent.map((s) => JSON.parse(String(s.init.body)).params),
+		[
+			{ name: "deal-room-board", arguments: { workspace: "national_account" } },
+			{ name: "get-deal-room", arguments: { deal } },
+		],
+	);
+	for (const s of sent) {
+		assert.equal(header(s, "cookie"), `__Host-dealroom_session=${session}`);
+		assert.equal(header(s, "origin"), "https://app.example.test");
+	}
+});
+
+test("reads the old answer from the last data line of an event stream", async () => {
+	const { askOld } = fake(
+		() =>
+			new Response(
+				`event: message\ndata: ${JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					result: { content: [{ type: "text", text: '{"deals":[]}' }] },
+				})}\n\n`,
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+	);
+	assert.deepEqual(await askOld(board), { deals: [] });
+});
+
+test("a refused deal is compared as its refusal without the correlation ID, on either side", async () => {
+	const refused = {
+		error: "not_found",
+		hint: "The requested record was not found.",
+		correlation_id: "00000000-0000-4000-8000-000000000900",
+	};
+	const expected = {
+		error: "not_found",
+		hint: "The requested record was not found.",
+	};
+	assert.deepEqual(
+		await fake(() => content(refused, true)).askOld(detail),
+		expected,
+	);
+	assert.deepEqual(
+		await fake(() => json(refused, 404)).askEngine(detail),
+		expected,
+	);
+});
+
+test("a refused board fails its read instead of comparing as an empty board", async () => {
+	const refused = { error: "unauthenticated", correlation_id: "made-up" };
+	for (const ask of [
+		fake(() => content(refused, true)).askOld,
+		fake(() => json(refused, 422)).askEngine,
+	])
+		await assert.rejects(
+			ask(board),
+			(error: Error) => !(error instanceof StopRun),
+		);
+});
+
+test("a network or sign-in failure stops the run, and no failure shows the session", async () => {
+	const failures: (() => Response)[] = [
+		() => {
+			throw new TypeError(`fetch failed ${session}`);
+		},
+		() => json({ error: "unauthorized" }, 401),
+		() => new Response(null, { status: 302, headers: { location: "/login" } }),
+	];
+	for (const respond of failures)
+		for (const ask of [fake(respond).askEngine, fake(respond).askOld])
+			await assert.rejects(
+				ask(detail),
+				(error: Error) =>
+					error instanceof StopRun && !error.message.includes(session),
+			);
+	for (const ask of [
+		fake(() => json({ error: "read_failed" }, 500)).askEngine,
+		fake(() => json({ error: "made-up" }, 500)).askOld,
+	])
+		await assert.rejects(
+			ask(detail),
+			(error: Error) =>
+				!(error instanceof StopRun) && !error.message.includes(session),
+		);
+});
+
+test("pauses one and a half seconds between asks", async (t) => {
+	mock.timers.enable({ apis: ["setTimeout"] });
+	t.after(() => mock.timers.reset());
+	let done = false;
+	const paused = pause().then(() => {
+		done = true;
+	});
+	mock.timers.tick(1499);
+	await Promise.resolve();
+	assert.equal(done, false);
+	mock.timers.tick(1);
+	await paused;
+	assert.equal(done, true);
+});

@@ -11,6 +11,7 @@
 		"check": "npm run lint && npm run dead && node scripts/database-check.ts && npm run build",
 		"fix": "biome check --write",
 		"schema:drift": "node scripts/schema-drift.ts",
+		"compare": "node scripts/compare-deals.ts",
 		"types:db": "kysely-codegen --dialect postgres --include-pattern \"public.*\" --date-parser string --type-mapping '{\"timestamp\":\"string\",\"timestamptz\":\"string\"}' --out-file src/database.d.ts"
 	},
 	"dependencies": {
