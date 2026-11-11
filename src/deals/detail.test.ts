@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sql, type Transaction } from "kysely";
 import type { DB } from "../database.d.ts";
-import { withRollback } from "../test-database.ts";
+import { withRollback } from "../test-rollback.ts";
 import { readDealDetail } from "./detail.ts";
 
 async function seed(tx: Transaction<DB>, deal: { invoiced_on?: string } = {}) {

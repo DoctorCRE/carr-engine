@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
-import { withRollback } from "./test-database.ts";
+import { withRollback } from "./test-rollback.ts";
 
 test("business rows use the copied constraints and touch triggers", () =>
 	withRollback(async (tx) => {

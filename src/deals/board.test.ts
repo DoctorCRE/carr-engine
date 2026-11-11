@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import type { Insertable, Kysely } from "kysely";
 import type { DB } from "../database.d.ts";
-import { withRollback } from "../test-database.ts";
+import { withRollback } from "../test-rollback.ts";
 import { readBoard, shortName } from "./board.ts";
 
 const withRows = (
