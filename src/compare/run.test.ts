@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { report } from "./report.ts";
-import { type Ask, compareDeals, exitCode } from "./run.ts";
+import { type Ask, compareDeals, exitCode, StopRun } from "./run.ts";
 
 const uuid = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -77,10 +77,28 @@ test("a request whose two engine answers differ is unsettled and not compared", 
 	);
 });
 
-test("a failed fetch stops the run", async () => {
+test("a failed request is counted and the run goes on", async () => {
+	const { run, calls } = await runWith(answer, (ask) => {
+		if (ask.read === "deal" && ask.deal === d2) throw new Error("made-up body");
+		return answer(ask);
+	});
+	assert.deepEqual(
+		run.outcomes.map((o) => o.result),
+		["matched", "matched", "matched", "matched", "failed", "matched"],
+	);
+	assert.equal(run.stopped, false);
+	assert.equal(calls.at(-1), `engine ${d3}`);
+	assert.equal(exitCode(run), 2);
+	assert.match(
+		report("production", run),
+		/not compared: result, read, deal ID\nfailed {2}deal detail {2}0{8}-0{4}-4000-8000-0{11}2\n$/,
+	);
+});
+
+test("a network or sign-in failure stops the run", async () => {
 	const { run, calls } = await runWith(answer, (ask) => {
 		if (ask.read === "board" && ask.workspace === "national_account")
-			throw new Error("made-up body");
+			throw new StopRun("made-up body");
 		return answer(ask);
 	});
 	assert.deepEqual(
@@ -90,7 +108,22 @@ test("a failed fetch stops the run", async () => {
 	assert.equal(run.stopped, true);
 	assert.equal(calls.at(-1), "old national_account");
 	assert.equal(exitCode(run), 2);
-	assert.match(report("production", run), /stopped at the first failed fetch/);
+	assert.match(
+		report("production", run),
+		/stopped at a network or sign-in failure/,
+	);
+});
+
+test("refusals match whatever correlation ID the engine gives each one", async () => {
+	const refusal = { error: "not_found", table: "deal", id: d2 };
+	const { run } = await runWith(
+		(ask, call) =>
+			ask.read === "deal" && ask.deal === d2
+				? { ...refusal, correlation_id: uuid(900 + call) }
+				: answer(ask),
+		(ask) => (ask.read === "deal" && ask.deal === d2 ? refusal : answer(ask)),
+	);
+	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 });
 
 test("the report counts each read and lists differing paths with record IDs and tie order apart", async () => {

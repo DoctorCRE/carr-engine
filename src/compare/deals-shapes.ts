@@ -1,4 +1,5 @@
 const strict = (id: string) => ({ id, sortedBy: [] });
+const ignore = ["correlation_id"];
 
 const vendors = strict("party_id");
 const items = strict("id");
@@ -16,6 +17,7 @@ export const boardShape = {
 		"accounts[]": { id: "account_client_id", sortedBy: ["account_name"] },
 	},
 	opaque: ["deals[].items[].bullets", "deals[].phase_started_on"],
+	ignore,
 };
 
 const checklistItems = strict("id");
@@ -50,4 +52,5 @@ export const detailShape = {
 		"events[].old_value",
 		"events[].new_value",
 	],
+	ignore,
 };

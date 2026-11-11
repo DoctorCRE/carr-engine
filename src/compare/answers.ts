@@ -1,7 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 
 type Rows = { id?: string; sortedBy: readonly string[] };
-type ReadShape = { rows: Record<string, Rows>; opaque?: readonly string[] };
+type ReadShape = {
+	rows: Record<string, Rows>;
+	opaque?: readonly string[];
+	ignore?: readonly string[];
+};
 type Kind =
 	| "value differs"
 	| "type differs"
@@ -13,7 +17,8 @@ type Place = { path: string; records: Step[] };
 type Difference = Place & { kind: Kind };
 type Row = { key: string; step: Step; value: unknown; ties: unknown[] | null };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FIELD = /^[a-z][a-z0-9_]*$/;
 
 function kindOf(value: unknown) {
@@ -79,6 +84,7 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	const differences: Difference[] = [];
 	const tiedRowsReordered: Place[] = [];
 	const opaque = new Set(shape.opaque);
+	const ignored = new Set(shape.ignore);
 
 	function walk(a: unknown, b: unknown, path: string, records: Step[]): void {
 		if (kindOf(a) !== kindOf(b)) {
@@ -90,6 +96,7 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 			for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
 				const field = FIELD.test(key) ? key : "*";
 				const child = path ? `${path}.${field}` : field;
+				if (ignored.has(child)) continue;
 				if (!Object.hasOwn(b, key))
 					differences.push({ path: child, records, kind: "missing in new" });
 				else if (!Object.hasOwn(a, key))

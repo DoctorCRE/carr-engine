@@ -1,8 +1,9 @@
-import { compareAnswers } from "./answers.ts";
+import { compareAnswers, UUID } from "./answers.ts";
 import { boardShape, detailShape } from "./deals-shapes.ts";
 
 const WORKSPACES = ["team", "national_account", "all"] as const;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export class StopRun extends Error {}
 
 export type Ask =
 	| { read: "board"; workspace: (typeof WORKSPACES)[number] }
@@ -61,8 +62,9 @@ export async function compareDeals(
 			const old = await askOld(ask);
 			run.engineReads++;
 			answers = [first, old, await askEngine(ask)];
-		} catch {
+		} catch (error) {
 			run.outcomes.push({ ask, result: "failed" });
+			if (!(error instanceof StopRun)) continue;
 			run.stopped = true;
 			return run;
 		}
