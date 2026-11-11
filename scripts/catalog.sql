@@ -2,7 +2,7 @@ WITH relations AS (
   SELECT c.oid, n.nspname || '.' || c.relname AS name, c.relkind,
     c.relrowsecurity, c.relforcerowsecurity
   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-  WHERE n.nspname IN ('public') AND c.relkind IN ('r','p','v','m','S')
+  WHERE n.nspname IN ('public','ops') AND c.relkind IN ('r','p','v','m','S')
     AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass
       AND d.objid=c.oid AND d.deptype='e')
 )

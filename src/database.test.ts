@@ -27,11 +27,11 @@ test("business rows use the copied constraints and touch triggers", async () => 
 			count(*) filter (where c.relkind='S')::int as sequences,
 			(select count(*)::int from pg_trigger where not tgisinternal) as triggers
 			from pg_class c join pg_namespace n on n.oid=c.relnamespace
-			where n.nspname in ('public') and not exists
+			where n.nspname in ('public', 'ops') and not exists
 			(select 1 from pg_depend d where d.classid='pg_class'::regclass and d.objid=c.oid and d.deptype='e')
 		`.execute(db);
 		assert.deepEqual(inventory.rows, [
-			{ tables: 102, views: 51, sequences: 6, triggers: 32 },
+			{ tables: 103, views: 52, sequences: 6, triggers: 32 },
 		]);
 		assert.equal(
 			(await db.selectFrom("party").selectAll().execute()).length,
@@ -115,6 +115,30 @@ test("business rows use the copied constraints and touch triggers", async () => 
 				dealVersion: 2,
 				partyVersion: 2,
 			});
+			const portal = (slug: string, disabled: boolean) =>
+				sql`insert into ops.client_portal (slug, client_id, deal_id, password_hash, disabled_at)
+				values (${slug}, ${client.id}, ${deal.id}, ${`$2b$12$${"a".repeat(53)}`},
+				${disabled ? sql`now()` : null})`.execute(tx);
+			await portal("example-closed", true);
+			await portal("example-open", false);
+			assert.deepEqual(
+				await tx
+					.selectFrom("v_deal_client_portal")
+					.selectAll()
+					.where("deal_id", "=", deal.id)
+					.execute(),
+				[
+					{
+						deal_id: deal.id,
+						client_portal_url: "https://share.example.com/example-open",
+					},
+				],
+			);
+			await sql`savepoint second_portal`.execute(tx);
+			await assert.rejects(portal("example-second", false), {
+				code: "23505",
+			});
+			await sql`rollback to savepoint second_portal`.execute(tx);
 			await sql`set constraints all immediate`.execute(tx);
 		});
 		await assert.rejects(
@@ -163,6 +187,7 @@ test("drift compares catalogs read-only and prints object names", async () => {
 			ALTER TABLE public.party ADD CONSTRAINT example_drift_check CHECK (example_drift <> 'example');
 			CREATE INDEX example_drift_index ON public.party(example_drift);
 			ALTER TABLE public.party DISABLE TRIGGER party_touch;
+			DROP INDEX ops.client_portal_one_active_per_deal;
 			CREATE OR REPLACE FUNCTION public.trg_touch_row() RETURNS trigger LANGUAGE plpgsql AS $$ begin return new; end $$;`,
 		);
 	} finally {
@@ -170,5 +195,8 @@ test("drift compares catalogs read-only and prints object names", async () => {
 	}
 	const drift = run();
 	assert.equal(drift.status, 1, drift.stderr);
-	assert.equal(drift.stdout, "public.party\npublic.trg_touch_row()\n");
+	assert.equal(
+		drift.stdout,
+		"ops.client_portal\npublic.party\npublic.trg_touch_row()\n",
+	);
 });
