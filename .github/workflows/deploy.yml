@@ -12,7 +12,7 @@ defaults:
 jobs:
   deploy:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment: production
     permissions:
       contents: read
@@ -27,51 +27,66 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Deploy to staging, then production
+        timeout-minutes: 20
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           log() { echo "$1" | tee -a "$RUNNER_TEMP/deploy.log"; }
           hide() { sed -E 's#[a-z0-9.-]+\.workers\.dev#<hidden>.workers.dev#g'; }
           live_version() {
-            npx wrangler deployments status "$@" --json | jq -er '.versions | max_by(.percentage) | .version_id'
+            npx wrangler deployments status "$@" --json > "$RUNNER_TEMP/status.out" 2> "$RUNNER_TEMP/status.err" &&
+              jq -er '.versions | max_by(.percentage) | .version_id' "$RUNNER_TEMP/status.out"
           }
           healthy() {
-            for _ in $(seq 12); do
+            for _ in $(seq "$3"); do
               [ "$(curl -sS --max-time 10 "$1/health" | jq -r 'select(.ok == true) | .version' 2>/dev/null)" = "$2" ] && return 0
               sleep 5
             done
             return 1
           }
+          roll_back() {
+            log "$name: $1; rolling back to $before"
+            if ! npx wrangler rollback "$before" "${cfg[@]}" --yes --message "$1 for $GITHUB_SHA"; then
+              log "ROLLBACK FAILED, $version is still live on $name"
+              return 1
+            fi
+            log "$name: rolled back to $before"
+            return 1
+          }
           ship() {
-            local name=$2 out="$RUNNER_TEMP/$2.jsonl" before version preview live host
+            local name=$2 out="$RUNNER_TEMP/$2.jsonl" before version="" preview live host tries=12
             local cfg=(--env "$1" --name "$2")
             if ! before=$(live_version "${cfg[@]}"); then
+              hide < "$RUNNER_TEMP/status.err"
+              if ! grep -Eqs '\[code: (10007|10090)\]|has no deployments' "$RUNNER_TEMP/status.out" "$RUNNER_TEMP/status.err"; then
+                log "$name: could not read the live version, so nothing was deployed"
+                return 1
+              fi
               log "$name: no live version yet, so a plain deploy creates the Worker first"
               npx wrangler deploy "${cfg[@]}" 2>&1 | hide
               before=$(live_version "${cfg[@]}")
+              tries=60
             fi
             log "$name: uploading $GITHUB_SHA"
             WRANGLER_OUTPUT_FILE_PATH=$out npx wrangler versions upload "${cfg[@]}" \
               --tag "${GITHUB_SHA::7}" --message "$GITHUB_SHA" 2>&1 | hide
             version=$(jq -er 'select(.type == "version-upload") | .version_id' "$out")
-            preview=$(jq -er 'select(.type == "version-upload") | .preview_url' "$out")
+            if ! preview=$(jq -er 'select(.type == "version-upload") | .preview_url' "$out"); then
+              log "$name: uploaded $version, but Wrangler returned no preview URL, so version previews are off; live traffic never moved"
+              return 1
+            fi
             live="https://${preview#"https://${version::8}-"}"
             host=${live#"https://$name."}
             echo "::add-mask::${host%.workers.dev}"
             log "$name: uploaded $version without traffic; live is $before"
-            if ! healthy "$preview" "$version"; then
+            if ! healthy "$preview" "$version" "$tries"; then
               log "$name: preview check failed; live traffic never moved"
               return 1
             fi
-            npx wrangler versions deploy "$version@100" "${cfg[@]}" --yes --message "$GITHUB_SHA"
+            npx wrangler versions deploy "$version@100" "${cfg[@]}" --yes --message "$GITHUB_SHA" || roll_back "promotion failed"
             log "$name: promoted $version"
-            if ! healthy "$live" "$version"; then
-              log "$name: live check failed; rolling back to $before"
-              npx wrangler rollback "$before" "${cfg[@]}" --yes --message "Live check failed for $GITHUB_SHA"
-              log "$name: rolled back to $before"
-              return 1
-            fi
+            healthy "$live" "$version" "$tries" || roll_back "live check failed"
             log "$name: live check passed"
           }
           ship staging doctorcre-engine-staging
@@ -81,7 +96,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          title="A deploy failed"
+          if grep -qs '^ROLLBACK FAILED' "$RUNNER_TEMP/deploy.log"; then
+            title="ROLLBACK FAILED: a bad deploy is still live"
+          fi
           {
+            grep -s '^ROLLBACK FAILED' "$RUNNER_TEMP/deploy.log" && echo
             echo "The deploy of $GITHUB_SHA failed."
             echo
             echo '```'
@@ -90,4 +110,4 @@ jobs:
             echo
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           } > "$RUNNER_TEMP/issue.md"
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "A deploy failed" --body-file "$RUNNER_TEMP/issue.md"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/issue.md"
