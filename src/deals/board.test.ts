@@ -364,8 +364,15 @@ test("a deal's vendors sort by role, then company, then contact", () =>
 				sort: 1,
 			})
 			.execute();
-		const assign = async (role: string, company: string, contact: string) => {
-			const vendor = await party(company);
+		const assign = async (
+			role: string,
+			company: string,
+			contact: string,
+			fixed?: string,
+		) => {
+			const vendor = await party(`Example vendor for ${contact}`, {
+				...(fixed ? { id: fixed } : {}),
+			});
 			await tx
 				.insertInto("vendor")
 				.values({
@@ -381,16 +388,22 @@ test("a deal's vendors sort by role, then company, then contact", () =>
 					deal_id: id,
 					party_id: vendor.id,
 					role,
-					company_party_id: vendor.id,
+					company_party_id: company,
 					contact_party_id: (await party(contact, { kind: "person" })).id,
 					updated_by: partner.id,
 				})
 				.execute();
 			return vendor.id;
 		};
-		const lenderB = await assign("lender", "Example Lender B", "Pat Example");
-		const lenderA = await assign("lender", "Example Lender A", "Sam Example");
-		const design = await assign("architect", "Example Design", "Lee Example");
+		const a = (await party("Example Lender A")).id;
+		const b = (await party("Example Lender B")).id;
+		const zeta = (await party("Example Zeta")).id;
+		const lenderB = await assign("lender", b, "Pat Example");
+		const sam = "00000000-0000-4000-8000-000000000001";
+		await assign("lender", a, "Sam Example", sam);
+		const design = await assign("architect", zeta, "Lee Example");
+		const kim = "00000000-0000-4000-8000-000000000002";
+		await assign("lender", a, "Kim Example", kim);
 		const board = await readBoard(tx, {
 			actor: partner.slug,
 			workspace: "team",
@@ -401,7 +414,8 @@ test("a deal's vendors sort by role, then company, then contact", () =>
 				?.vendors.map((v) => [v.role, v.party_id]),
 			[
 				["architect", design],
-				["lender", lenderA],
+				["lender", kim],
+				["lender", sam],
 				["lender", lenderB],
 			],
 		);

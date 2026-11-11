@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { test } from "node:test";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
@@ -74,11 +75,10 @@ async function withReaderLogin(
 }
 
 async function seedDeal(database: string) {
-	const db = new Kysely<DB>({
-		dialect: new PostgresDialect({
-			pool: new pg.Pool({ connectionString: database }),
-		}),
-	});
+	const pool = new pg.Pool({ connectionString: database });
+	const closed: Promise<unknown>[] = [];
+	pool.on("connect", (client) => closed.push(once(client, "end")));
+	const db = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
 	try {
 		return await db.transaction().execute(async (tx) => {
 			const actor = await tx
@@ -144,6 +144,7 @@ async function seedDeal(database: string) {
 		});
 	} finally {
 		await db.destroy();
+		await Promise.all(closed);
 	}
 }
 
