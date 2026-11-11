@@ -44,6 +44,16 @@ Build work starts in pstack's poteto-mode: `/pstack:poteto-mode` in Claude Code,
 
 This file wins over any skill or global rule. A skill's advice to add a lint, check, script or rule is advice about product code only; it never overrides "Do not build process machinery". The old system's Cards, Work Requests, standing orders and team memory do not apply here.
 
+## Who does what
+
+A Claude session coordinates: it slices issues, briefs workers, reviews and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
+
+Codex builds: `gpt-6.1-sol` for contracts, design and risky work, `gpt-6.1-terra` for routine work. Claude Opus 5.5 writes prose and rule text. Reasoning effort is high, never higher.
+
+A pull request is reviewed by the other model family from the one that built it. When Codex is out of usage, say so, let Claude Opus build, and have Grok review. If Grok is unavailable too, a fresh Claude session reviews and the pull request says so.
+
+Check which models are available each time you start a worker. Never write a provider's usage or balance into this repo.
+
 ## The old system
 
 Read `carr-system` to learn what a feature does. Never copy its code. Port the behavior the partners use, write it fresh and small, and prove it matches by comparing old and new answers on the same input.
