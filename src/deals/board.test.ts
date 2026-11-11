@@ -95,7 +95,7 @@ async function seed(tx: Kysely<DB>) {
 				.returning("id")
 				.executeTakeFirstOrThrow()
 		).id;
-	return { tx, tag, partner, audit, actor, party, client, deal, phase };
+	return { tx, tag, partner, audit, actor, party, client, deal, phase, type };
 }
 
 test("an open deal carries its cards, steps and field bases in wire formats", () =>
@@ -445,7 +445,7 @@ test("open deals leave out closed and lost ones, sort, and filter", () =>
 	}));
 
 test("closed and lost deals split, sort and filter by workspace", () =>
-	withRows(async ({ tx, partner, client, deal, phase }) => {
+	withRows(async ({ tx, partner, client, deal, phase, type }) => {
 		const team = await client("Example Team Client");
 		const early = await deal(team.id, "Example Early", {
 			outcome: "won",
@@ -477,7 +477,19 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 		const direct = await deal(account.id, "Example Direct Won", {
 			outcome: "won",
 		});
+		await tx
+			.insertInto("deal_phase")
+			.values({ slug: "closed", label: "Example" })
+			.onConflict((c) => c.doNothing())
+			.execute();
+		const phaseClosed = await deal(team.id, "Example Phase Closed", {
+			phase: "closed",
+		});
+		const invoiced = await deal(team.id, "Example Invoiced Only", {
+			invoiced_on: "2026-01-20",
+		});
 		const mine = [early, late, lost, open, national, direct];
+		mine.push(phaseClosed, invoiced);
 		const read = async (
 			workspace?: "team" | "national_account",
 			account_client_id?: string,
@@ -496,7 +508,14 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 			};
 		};
 		const all = await read();
-		assert.deepEqual(all.closed, [late, early, direct, national]);
+		assert.deepEqual(all.closed, [
+			late,
+			early,
+			direct,
+			invoiced,
+			national,
+			phaseClosed,
+		]);
 		assert.deepEqual(all.lost, [lost]);
 		assert.deepEqual(
 			all.board.closed_deals.find((d) => d.id === late),
@@ -505,7 +524,7 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 				name: "Example Late",
 				client_ref: null,
 				client_name: "Example Team Client",
-				type: all.board.closed_deals[0]?.type,
+				type,
 				vendors: [],
 				phase,
 				outcome: null,
@@ -522,7 +541,13 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 				.map((d) => [d.account_client_id, d.workspace_kind]),
 			[[account.id, "national_account"]],
 		);
-		assert.deepEqual((await read("team")).closed, [late, early, direct]);
+		assert.deepEqual((await read("team")).closed, [
+			late,
+			early,
+			direct,
+			invoiced,
+			phaseClosed,
+		]);
 		assert.deepEqual((await read("national_account")).closed, [national]);
 		assert.deepEqual((await read(undefined, account.id)).closed, [national]);
 		const empty = await readBoard(tx, { actor: partner.slug, workspace: "" });
@@ -545,6 +570,12 @@ test("accounts summarize national accounts and skip inactive prospects", () =>
 			client_type: "national_account",
 		});
 		const member = await client("Example Member", {}, account.party_id);
+		const second = await client("Example B Account", {
+			client_type: "national_account",
+		});
+		const first = await client("Example A Account", {
+			client_type: "national_account",
+		});
 		await deal(member.id, "Example Overdue", {
 			attention: true,
 			next_date: "2020-01-01",
@@ -577,7 +608,14 @@ test("accounts summarize national accounts and skip inactive prospects", () =>
 		const board = await readBoard(tx, {
 			actor: partner.slug,
 			workspace: "team",
+			account_client_id: first.id,
 		});
+		assert.deepEqual(
+			board.accounts
+				.map((a) => a.account_client_id)
+				.filter((id) => id && [account.id, first.id, second.id].includes(id)),
+			[first.id, second.id, account.id],
+		);
 		assert.deepEqual(
 			board.accounts.find((a) => a.account_client_id === account.id),
 			{
@@ -640,14 +678,24 @@ test("accounts summarize national accounts and skip inactive prospects", () =>
 		);
 	}));
 
-test("open_session is the signed-in actor's open review", () =>
-	withRows(async ({ tx, partner, actor }) => {
+test("open_session is the signed-in actor's newest open review", () =>
+	withRows(async ({ tx, partner, actor, client }) => {
 		const other = await actor("other");
-		const session = (started_by: string, started_at: string, status = "open") =>
+		const [one, two] = [
+			await client("Example Account One"),
+			await client("Example Account Two"),
+		];
+		const session = (
+			started_by: string,
+			started_at: string,
+			status = "open",
+			account_client_id: string | null = null,
+		) =>
 			tx
 				.insertInto("deal_review_session")
 				.values({
-					workspace_kind: "team",
+					workspace_kind: account_client_id ? "national_account" : "team",
+					account_client_id,
 					started_by,
 					started_at,
 					status,
@@ -658,32 +706,42 @@ test("open_session is the signed-in actor's open review", () =>
 		await session(partner.id, "2026-02-01T00:00:00Z", "completed");
 		const mine = await session(partner.id, "2026-02-03T00:00:00Z");
 		await session(partner.id, "2026-02-04T00:00:00Z", "completed");
-		await session(other.id, "2026-02-05T00:00:00Z");
-		assert.deepEqual(
-			(await readBoard(tx, { actor: partner.slug, workspace: "team" }))
-				.open_session,
-			{
-				session_id: mine.id,
-				workspace_kind: "team",
-				account_client_id: null,
-				started_at: "2026-02-03T00:00:00+00:00",
-			},
+		await session(other.id, "2026-02-07T00:00:00Z");
+		const newest = await session(
+			partner.id,
+			"2026-02-06T00:00:00Z",
+			"open",
+			one.id,
+		);
+		const older = await session(
+			partner.id,
+			"2026-02-05T00:00:00Z",
+			"open",
+			two.id,
+		);
+		const open = async (input: Partial<Parameters<typeof readBoard>[1]>) =>
+			(await readBoard(tx, { actor: partner.slug, ...input })).open_session;
+		assert.deepEqual(await open({ workspace: "team" }), {
+			session_id: mine.id,
+			workspace_kind: "team",
+			account_client_id: null,
+			started_at: "2026-02-03T00:00:00+00:00",
+		});
+		assert.equal((await open({}))?.session_id, newest.id);
+		assert.equal((await open({ workspace: null }))?.session_id, newest.id);
+		assert.equal(
+			(await open({ workspace: "national_account" }))?.session_id,
+			newest.id,
 		);
 		assert.equal(
-			(
-				await readBoard(tx, {
-					actor: partner.slug,
-					workspace: "national_account",
-				})
-			).open_session,
-			null,
+			(await open({ account_client_id: two.id }))?.session_id,
+			older.id,
+		);
+		assert.equal(
+			(await open({ account_client_id: one.id }))?.session_id,
+			newest.id,
 		);
 		assert.equal((await readBoard(tx, { actor: "nobody" })).open_session, null);
-		assert.equal(
-			(await readBoard(tx, { actor: partner.slug, workspace: null }))
-				.open_session?.session_id,
-			mine.id,
-		);
 	}));
 
 test("short_name uses the doctor's last name and market, else the deal name", () => {
