@@ -525,6 +525,13 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 		assert.deepEqual((await read("team")).closed, [late, early, direct]);
 		assert.deepEqual((await read("national_account")).closed, [national]);
 		assert.deepEqual((await read(undefined, account.id)).closed, [national]);
+		const empty = await readBoard(tx, { actor: partner.slug, workspace: "" });
+		assert.deepEqual(
+			empty.closed_deals
+				.map((d) => d.id)
+				.filter((id) => id && mine.includes(id)),
+			all.closed,
+		);
 	}));
 
 test("accounts summarize national accounts and skip inactive prospects", () =>
@@ -672,6 +679,11 @@ test("open_session is the signed-in actor's open review", () =>
 			null,
 		);
 		assert.equal((await readBoard(tx, { actor: "nobody" })).open_session, null);
+		assert.equal(
+			(await readBoard(tx, { actor: partner.slug, workspace: null }))
+				.open_session?.session_id,
+			mine.id,
+		);
 	}));
 
 test("short_name uses the doctor's last name and market, else the deal name", () => {

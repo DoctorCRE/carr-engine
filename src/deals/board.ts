@@ -230,12 +230,8 @@ export async function readBoard(
 				q("b.invoiced_on", "is not", null),
 			]),
 		)
-		.$if(workspace !== "all", (q) =>
-			q.where(
-				"a.account_client_id",
-				workspace === "team" ? "is" : "is not",
-				null,
-			),
+		.$if(scope !== "all", (q) =>
+			q.where("a.account_client_id", scope === "team" ? "is" : "is not", null),
 		)
 		.$if(account !== null, (q) => q.where("a.account_client_id", "=", account))
 		.orderBy("b.closed_on", (o) => o.desc().nullsLast())
@@ -285,7 +281,7 @@ export async function readBoard(
 		])
 		.where("started_by", "=", actor)
 		.where("status", "=", "open")
-		.$if(workspace !== "all", (q) => q.where("workspace_kind", "=", workspace))
+		.$if(scope !== "all", (q) => q.where("workspace_kind", "=", scope))
 		.$if(account !== null, (q) => q.where("account_client_id", "=", account))
 		.orderBy("started_at", "desc")
 		.limit(1)
