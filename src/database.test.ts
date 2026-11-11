@@ -31,7 +31,7 @@ test("business rows use the copied constraints and touch triggers", async () => 
 			(select 1 from pg_depend d where d.classid='pg_class'::regclass and d.objid=c.oid and d.deptype='e')
 		`.execute(db);
 		assert.deepEqual(inventory.rows, [
-			{ tables: 103, views: 52, sequences: 6, triggers: 32 },
+			{ tables: 106, views: 53, sequences: 6, triggers: 32 },
 		]);
 		assert.equal(
 			(await db.selectFrom("party").selectAll().execute()).length,

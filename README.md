@@ -16,7 +16,7 @@ with `kysely-codegen`, and runs TypeScript and tests against that database.
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops.client_portal`, which the generated types leave out.
-The snapshot contains 103 empty tables, 52 views, 6 sequences and 32 triggers.
+The snapshot contains 106 empty tables, 53 views, 6 sequences and 32 triggers.
 Its reviewed literals use fictional partners, tenants and domains. SQL comments
 and psql transport directives are removed. Of the old process schema it keeps
 only `ops.client_portal`, which `v_deal_client_portal` reads, without that

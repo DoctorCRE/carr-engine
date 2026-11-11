@@ -338,6 +338,62 @@ CREATE TABLE ops.client_portal (
     CONSTRAINT client_portal_slug_check CHECK ((slug ~ '^[a-z0-9][a-z0-9-]{0,62}$'::text))
 );
 
+CREATE TABLE ops.requirement_request (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_tenant_id text NOT NULL,
+    deal_id uuid NOT NULL,
+    row_key text NOT NULL,
+    owner text NOT NULL,
+    due_on date NOT NULL,
+    document_type text NOT NULL,
+    source jsonb NOT NULL,
+    created_by uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    recipient_email text,
+    thread_activity_id uuid,
+    fulfilled_at timestamp with time zone,
+    fulfilled_by uuid,
+    evidence_attachment_id uuid,
+    CONSTRAINT requirement_fulfillment_complete CHECK ((((fulfilled_at IS NULL) AND (fulfilled_by IS NULL) AND (evidence_attachment_id IS NULL)) OR ((fulfilled_at IS NOT NULL) AND (fulfilled_by IS NOT NULL) AND (evidence_attachment_id IS NOT NULL)))),
+    CONSTRAINT requirement_request_organization_tenant_id_check CHECK ((organization_tenant_id = 'example-tenant'::text)),
+    CONSTRAINT requirement_request_owner_check CHECK (((length(btrim(owner)) >= 1) AND (length(btrim(owner)) <= 100))),
+    CONSTRAINT requirement_request_row_key_check CHECK ((row_key ~ '^[a-z][a-z0-9_]{0,79}$'::text)),
+    CONSTRAINT requirement_request_source_check CHECK ((jsonb_typeof(source) = 'object'::text))
+);
+
+CREATE TABLE ops.requirement_upload_grant (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    request_id uuid NOT NULL,
+    organization_tenant_id text NOT NULL,
+    deal_id uuid NOT NULL,
+    row_key text NOT NULL,
+    action text DEFAULT 'upload'::text NOT NULL,
+    token_sha256 text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    consumed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT requirement_upload_grant_action_check CHECK ((action = 'upload'::text)),
+    CONSTRAINT requirement_upload_grant_check CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '1 day'::interval)))),
+    CONSTRAINT requirement_upload_grant_token_sha256_check CHECK ((token_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+CREATE TABLE ops.requirement_upload_receipt (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    grant_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    r2_key text NOT NULL,
+    sha256 text NOT NULL,
+    bytes integer NOT NULL,
+    mime text NOT NULL,
+    state text DEFAULT 'quarantined'::text NOT NULL,
+    received_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT requirement_upload_receipt_bytes_check CHECK (((bytes >= 1) AND (bytes <= 1048576))),
+    CONSTRAINT requirement_upload_receipt_mime_check CHECK ((mime = 'application/pdf'::text)),
+    CONSTRAINT requirement_upload_receipt_sha256_check CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT requirement_upload_receipt_state_check CHECK ((state = 'quarantined'::text))
+);
+
 CREATE TABLE public.rule (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     statement text NOT NULL,
@@ -3219,6 +3275,33 @@ CREATE VIEW public.v_lead_workspace_stage_history AS
    FROM (public.v_lead_stage_transition e
      JOIN public.v_lead_workspace b ON ((b.id = e.lead_id)));
 
+CREATE VIEW public.v_requirement_request AS
+ SELECT id,
+    organization_tenant_id,
+    deal_id,
+    row_key,
+    owner,
+    due_on,
+    document_type,
+    source,
+    false AS satisfied,
+    COALESCE(( SELECT jsonb_agg(jsonb_build_object('id', u.id, 'state', u.state, 'received_at', u.received_at, 'sha256', u.sha256, 'bytes', u.bytes, 'mime', u.mime) ORDER BY u.received_at, u.id) AS jsonb_agg
+           FROM ops.requirement_upload_receipt u
+          WHERE (u.request_id = r.id)), '[]'::jsonb) AS receipts,
+        CASE
+            WHEN (fulfilled_at IS NULL) THEN 'open'::text
+            ELSE 'fulfilled'::text
+        END AS status,
+    recipient_email,
+    thread_activity_id,
+    fulfilled_at,
+    fulfilled_by,
+    evidence_attachment_id,
+    ( SELECT f.filename
+           FROM public.attachment f
+          WHERE ((f.id = r.evidence_attachment_id) AND (f.subject_type = 'deal'::text) AND (f.subject_id = r.deal_id) AND (f.deleted_at IS NULL))) AS evidence_filename
+   FROM ops.requirement_request r;
+
 CREATE VIEW public.v_subject_timeline AS
  SELECT 'activity'::text AS entry_kind,
     a.id,
@@ -3416,6 +3499,27 @@ ALTER TABLE ONLY public.room_dispatch_link ALTER COLUMN id SET DEFAULT nextval('
 
 ALTER TABLE ONLY ops.client_portal
     ADD CONSTRAINT client_portal_pkey PRIMARY KEY (slug);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_id_organization_tenant_id_deal_id_row_k_key UNIQUE (id, organization_tenant_id, deal_id, row_key);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_organization_tenant_id_deal_id_row_key_key UNIQUE (organization_tenant_id, deal_id, row_key);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY ops.requirement_upload_grant
+    ADD CONSTRAINT requirement_upload_grant_id_request_id_key UNIQUE (id, request_id);
+
+ALTER TABLE ONLY ops.requirement_upload_receipt
+    ADD CONSTRAINT requirement_upload_receipt_grant_id_key UNIQUE (grant_id);
+
+ALTER TABLE ONLY ops.requirement_upload_receipt
+    ADD CONSTRAINT requirement_upload_receipt_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY ops.requirement_upload_receipt
+    ADD CONSTRAINT requirement_upload_receipt_r2_key_key UNIQUE (r2_key);
 
 ALTER TABLE ONLY public.activity_kind
     ADD CONSTRAINT activity_kind_pkey PRIMARY KEY (slug);
@@ -3860,6 +3964,8 @@ ALTER TABLE ONLY public.vendor
 
 CREATE UNIQUE INDEX client_portal_one_active_per_deal ON ops.client_portal USING btree (deal_id) WHERE (disabled_at IS NULL);
 
+CREATE INDEX requirement_upload_receipt_request ON ops.requirement_upload_receipt USING btree (request_id);
+
 CREATE UNIQUE INDEX activity_calendar_event_deal_uidx ON public.activity USING btree (calendar_event_key, deal_id) WHERE (calendar_event_key IS NOT NULL);
 
 CREATE INDEX activity_deal_idx ON public.activity USING btree (deal_id, occurred_at DESC);
@@ -4153,6 +4259,27 @@ ALTER TABLE ONLY ops.client_portal
 
 ALTER TABLE ONLY ops.client_portal
     ADD CONSTRAINT client_portal_deal_id_fkey FOREIGN KEY (deal_id) REFERENCES public.deal(id);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_deal_id_fkey FOREIGN KEY (deal_id) REFERENCES public.deal(id);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_evidence_attachment_id_fkey FOREIGN KEY (evidence_attachment_id) REFERENCES public.attachment(id);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_fulfilled_by_fkey FOREIGN KEY (fulfilled_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY ops.requirement_request
+    ADD CONSTRAINT requirement_request_thread_activity_id_fkey FOREIGN KEY (thread_activity_id) REFERENCES public.activity(id);
+
+ALTER TABLE ONLY ops.requirement_upload_receipt
+    ADD CONSTRAINT requirement_upload_receipt_grant_id_request_id_fkey FOREIGN KEY (grant_id, request_id) REFERENCES ops.requirement_upload_grant(id, request_id);
+
+ALTER TABLE ONLY ops.requirement_upload_receipt
+    ADD CONSTRAINT requirement_upload_receipt_request_id_fkey FOREIGN KEY (request_id) REFERENCES ops.requirement_request(id);
 
 ALTER TABLE ONLY public.activity
     ADD CONSTRAINT activity_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);
