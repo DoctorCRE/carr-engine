@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { beforeEach, mock, test } from "node:test";
 import { Hono } from "hono";
 import { requireSession, type SessionEnv } from "./session.ts";
 import worker from "./worker.ts";
@@ -12,9 +12,12 @@ const path = `${origin}/api/engine/whoami`;
 const writes = new Hono<SessionEnv>();
 writes.use("*", requireSession);
 writes.all("*", (c) => c.json(c.get("partner")));
+const warnings = mock.method(console, "warn", () => {});
+beforeEach(() => warnings.mock.resetCalls());
 
 function binding(
-	reply: () => Response | Promise<Response> = () => Response.json(session),
+	reply: (request: Request) => Response | Promise<Response> = () =>
+		Response.json(session),
 ) {
 	const requests: Request[] = [];
 	return {
@@ -23,7 +26,7 @@ function binding(
 			CARR: {
 				fetch: async (request: Request) => {
 					requests.push(request);
-					return reply();
+					return reply(request);
 				},
 			},
 		},
@@ -64,6 +67,7 @@ for (const value of [
 		const response = await worker.request(path, { headers }, fake.env);
 		assert.equal(response.status, 401);
 		assert.deepEqual(await response.json(), { error: "unauthorized" });
+		assert.equal(response.headers.get("Cache-Control"), "no-store");
 		assert.equal(fake.requests.length, 0);
 	});
 }
@@ -80,6 +84,7 @@ for (const status of [401, 302, 500]) {
 		assert.deepEqual(await response.json(), {
 			error: status === 401 ? "unauthorized" : "sign_in_unavailable",
 		});
+		assert.equal(response.headers.get("Cache-Control"), "no-store");
 	});
 }
 
@@ -119,6 +124,57 @@ for (const body of [
 		);
 		assert.equal(response.status, 503);
 		assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
+	});
+}
+
+test("CARR that never answers is sign-in unavailable within the time limit", {
+	timeout: 1000,
+}, async (t) => {
+	const limits: number[] = [];
+	t.mock.method(AbortSignal, "timeout", (ms: number) => {
+		limits.push(ms);
+		return AbortSignal.abort(new DOMException("timed out", "TimeoutError"));
+	});
+	const fake = binding(({ signal }) => {
+		return new Promise((_, reject) => {
+			if (signal.aborted) reject(signal.reason);
+			signal.addEventListener("abort", () => reject(signal.reason));
+		});
+	});
+	const response = await worker.request(
+		path,
+		{ headers: { Cookie: cookie } },
+		fake.env,
+	);
+	assert.equal(response.status, 503);
+	assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
+	assert.equal(limits.length, 1);
+	assert.ok((limits[0] ?? Infinity) <= 5000);
+});
+
+for (const [kind, reply] of [
+	["status 500", () => new Response(cookie, { status: 500 })],
+	[
+		"Error",
+		() => {
+			throw new Error(cookie);
+		},
+	],
+	["malformed", () => Response.json({ ...session, csrf_token: "" })],
+	["malformed", () => new Response(cookie)],
+] satisfies [string, () => Response][]) {
+	test(`CARR failure logs only its kind (${kind})`, async () => {
+		const response = await worker.request(
+			path,
+			{ headers: { Cookie: cookie } },
+			binding(reply).env,
+		);
+		assert.equal(response.status, 503);
+		assert.equal(warnings.mock.callCount(), 1);
+		const logged = JSON.stringify(warnings.mock.calls[0]?.arguments);
+		assert.ok(logged.includes(kind));
+		for (const secret of ["made-up-session", "made-up-csrf", actor.slug])
+			assert.ok(!logged.includes(secret), `${secret} was logged`);
 	});
 }
 
@@ -201,6 +257,7 @@ for (const [name, header, value] of [
 		);
 		assert.equal(response.status, 403);
 		assert.deepEqual(await response.json(), { error: "forbidden" });
+		assert.equal(response.headers.get("Cache-Control"), "no-store");
 	});
 }
 
@@ -257,3 +314,39 @@ for (const status of [403, 503]) {
 		assert.deepEqual(response.headers.getSetCookie(), [refreshed]);
 	});
 }
+
+test("a plain Response from a protected handler keeps no-store and the renewed cookie", async () => {
+	const refreshed = "__Host-dealroom_session=renewed; Path=/; Secure; HttpOnly";
+	const app = new Hono<SessionEnv>();
+	app.use("*", requireSession);
+	app.get("*", () => new Response("plain", { headers: { "x-own": "kept" } }));
+	const response = await app.request(
+		path,
+		{ headers: { Cookie: cookie } },
+		binding(() =>
+			Response.json(session, { headers: { "Set-Cookie": refreshed } }),
+		).env,
+	);
+	assert.equal(response.status, 200);
+	assert.equal(await response.text(), "plain");
+	assert.equal(response.headers.get("x-own"), "kept");
+	assert.equal(response.headers.get("Cache-Control"), "no-store");
+	assert.deepEqual(response.headers.getSetCookie(), [refreshed]);
+});
+
+test("a protected handler that throws stays a server error", async (t) => {
+	t.mock.method(console, "error", () => {});
+	const app = new Hono<SessionEnv>();
+	app.use("*", requireSession);
+	app.get("*", () => {
+		throw new Error("handler failed");
+	});
+	const response = await app.request(
+		path,
+		{ headers: { Cookie: cookie } },
+		binding().env,
+	);
+	assert.equal(response.status, 500);
+	assert.equal(response.headers.get("Cache-Control"), "no-store");
+	assert.equal(warnings.mock.callCount(), 0);
+});
