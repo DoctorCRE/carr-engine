@@ -8,10 +8,7 @@ import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
-
-const url = process.env.TEST_DATABASE_URL;
-if (!url)
-	throw new Error("Run npm run check to restore the test database first");
+import { url } from "./test-rollback.ts";
 
 // The engine login's whole read grant: every relation the board and deal
 // reads name. The views read their tables with their owner's rights.
@@ -205,44 +202,43 @@ test("the reader login reads the board and a deal and changes nothing", () =>
 		});
 	}));
 
-test("an answer reads one read-only snapshot", async () => {
-	const slug = `example-${randomUUID()}`;
-	const count = (db: Reader) =>
-		db
-			.selectFrom("deal_phase")
-			.select((eb) => eb.fn.countAll<string>().as("n"))
-			.where("slug", "=", slug)
-			.executeTakeFirstOrThrow();
-	try {
-		const seen = await readSnapshot(url, async (db) => {
+test("an answer reads one read-only snapshot", () =>
+	withSnapshot(async (database) => {
+		const slug = "example-snapshot";
+		const count = (db: Reader) =>
+			db
+				.selectFrom("deal_phase")
+				.select((eb) => eb.fn.countAll<string>().as("n"))
+				.where("slug", "=", slug)
+				.executeTakeFirstOrThrow();
+		const seen = await readSnapshot(database, async (db) => {
 			const before = await count(db);
-			await withAdmin((admin) =>
-				admin.query(
-					"INSERT INTO public.deal_phase (slug, label) VALUES ($1, 'Example')",
-					[slug],
-				),
+			await withAdmin(
+				(admin) =>
+					admin.query(
+						"INSERT INTO public.deal_phase (slug, label) VALUES ($1, 'Example')",
+						[slug],
+					),
+				database,
 			);
 			return [before, await count(db)];
 		});
 		assert.deepEqual(seen, [{ n: "0" }, { n: "0" }]);
-		assert.deepEqual(await readSnapshot(url, count), { n: "1" });
+		assert.deepEqual(await readSnapshot(database, count), { n: "1" });
 		await assert.rejects(
-			readSnapshot(url, (db) =>
+			readSnapshot(database, (db) =>
 				db.deleteFrom("deal_phase").where("slug", "=", slug).execute(),
 			),
 			{ code: "25006" },
 		);
 		await assert.rejects(
-			readSnapshot(url, (db) => sql`set transaction read write`.execute(db)),
+			readSnapshot(database, (db) =>
+				sql`set transaction read write`.execute(db),
+			),
 			{ code: "25001" },
 		);
-		assert.deepEqual(await readSnapshot(url, count), { n: "1" });
-	} finally {
-		await withAdmin((admin) =>
-			admin.query("DELETE FROM public.deal_phase WHERE slug = $1", [slug]),
-		);
-	}
-});
+		assert.deepEqual(await readSnapshot(database, count), { n: "1" });
+	}));
 
 test("an answer closes its connection, even one the server drops", async () => {
 	const key = Math.floor(Math.random() * 2 ** 31);
@@ -266,13 +262,14 @@ test("an answer closes its connection, even one the server drops", async () => {
 	);
 });
 
-test("values come back in the old system's text forms", async () => {
-	await withReaderLogin(url, async (login) => {
-		const row = await readSnapshot(
-			login,
-			async (db) =>
-				(
-					await sql<Record<string, unknown>>`select
+test("values come back in the old system's text forms", () =>
+	withSnapshot((database) =>
+		withReaderLogin(database, async (login) => {
+			const row = await readSnapshot(
+				login,
+				async (db) =>
+					(
+						await sql<Record<string, unknown>>`select
 				1.50::numeric as amount,
 				'{1.50,NULL,9007199254740993.25}'::numeric[] as amounts,
 				9007199254740993::bigint as big,
@@ -287,23 +284,23 @@ test("values come back in the old system's text forms", async () => {
 				to_jsonb('2026-03-08 07:30:00.123456+00'::timestamptz) as stamp_json,
 				jsonb_build_object('amount', 1.50::numeric, 'count', 3::bigint) as built,
 				current_setting('TimeZone') as zone`.execute(db)
-				).rows[0],
-		);
-		assert.deepEqual(row, {
-			amount: "1.50",
-			amounts: ["1.50", null, "9007199254740993.25"],
-			big: "9007199254740993",
-			due_on: "2026-03-08",
-			due_dates: ["2026-03-08", null, "2026-03-09"],
-			stamp: "2026-03-08 07:30:00.123456+00",
-			forever: "infinity",
-			stamps: ["2026-03-08 07:30:00.123456+00"],
-			local_stamp: "2026-03-08 07:30:00.123456",
-			local_stamps: ["2026-03-08 07:30:00.123456"],
-			stamp_text: "2026-03-08 07:30:00.123456+00",
-			stamp_json: "2026-03-08T07:30:00.123456+00:00",
-			built: { amount: 1.5, count: 3 },
-			zone: "UTC",
-		});
-	});
-});
+					).rows[0],
+			);
+			assert.deepEqual(row, {
+				amount: "1.50",
+				amounts: ["1.50", null, "9007199254740993.25"],
+				big: "9007199254740993",
+				due_on: "2026-03-08",
+				due_dates: ["2026-03-08", null, "2026-03-09"],
+				stamp: "2026-03-08 07:30:00.123456+00",
+				forever: "infinity",
+				stamps: ["2026-03-08 07:30:00.123456+00"],
+				local_stamp: "2026-03-08 07:30:00.123456",
+				local_stamps: ["2026-03-08 07:30:00.123456"],
+				stamp_text: "2026-03-08 07:30:00.123456+00",
+				stamp_json: "2026-03-08T07:30:00.123456+00:00",
+				built: { amount: 1.5, count: 3 },
+				zone: "UTC",
+			});
+		}),
+	));

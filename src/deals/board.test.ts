@@ -346,6 +346,67 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 		},
 	));
 
+test("a deal's vendors sort by role, then company, then contact", () =>
+	withRows(async ({ tx, tag, partner, audit, party, client, deal }) => {
+		const id = await deal((await client("Example Owner")).id, "Example Deal", {
+			owner: partner.slug,
+		});
+		await tx
+			.insertInto("vendor_category")
+			.values({ slug: `bank-${tag}`, label: "Example", sort: 1 })
+			.execute();
+		await tx
+			.insertInto("vendor_disposition")
+			.values({
+				slug: `ready-${tag}`,
+				label: "Example",
+				workable: true,
+				sort: 1,
+			})
+			.execute();
+		const assign = async (role: string, company: string, contact: string) => {
+			const vendor = await party(company);
+			await tx
+				.insertInto("vendor")
+				.values({
+					party_id: vendor.id,
+					category: `bank-${tag}`,
+					disposition: `ready-${tag}`,
+					...audit,
+				})
+				.execute();
+			await tx
+				.insertInto("deal_vendor_assignment")
+				.values({
+					deal_id: id,
+					party_id: vendor.id,
+					role,
+					company_party_id: vendor.id,
+					contact_party_id: (await party(contact, { kind: "person" })).id,
+					updated_by: partner.id,
+				})
+				.execute();
+			return vendor.id;
+		};
+		const lenderB = await assign("lender", "Example Lender B", "Pat Example");
+		const lenderA = await assign("lender", "Example Lender A", "Sam Example");
+		const design = await assign("architect", "Example Design", "Lee Example");
+		const board = await readBoard(tx, {
+			actor: partner.slug,
+			workspace: "team",
+		});
+		assert.deepEqual(
+			board.deals
+				.find((d) => d.id === id)
+				?.vendors.map((v) => [v.role, v.party_id]),
+			[
+				["architect", design],
+				["lender", lenderA],
+				["lender", lenderB],
+			],
+		);
+	}));
+
 test("open deals leave out closed and lost ones, sort, and filter", () =>
 	withRows(async ({ tx, partner, client, deal }) => {
 		const team = await client("Example Team Client");
