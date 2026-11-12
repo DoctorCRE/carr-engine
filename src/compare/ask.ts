@@ -111,7 +111,9 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" }>): Request {
 function olderHistory(page: unknown, kind: "correspondence" | "stage_history") {
 	const detail = isRecord(page) ? page.detail : undefined;
 	const info = isRecord(detail) ? detail[`${kind}_page`] : undefined;
-	return isRecord(info) && info.has_more === true ? info.next_cursor : null;
+	return isRecord(info) && info.has_more === true
+		? info.next_cursor
+		: undefined;
 }
 
 const olderMail = (page: unknown) => {

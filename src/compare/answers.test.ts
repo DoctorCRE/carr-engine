@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { compareAnswers } from "./answers.ts";
 import { clientFitShape } from "./deals-shapes.ts";
+import { leadBoardShape, leadShape, reasonsShape } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
 
 const shape = {
@@ -590,6 +591,95 @@ test("twenty lead links are a full answer, so a different twenty is a difference
 		[
 			["lead_client_links[]", "missing in new", [{ id: "L-1" }]],
 			["lead_client_links[]", "missing in old", [{ id: "L-21" }]],
+		],
+	);
+});
+
+const l1 = uuid(31);
+const lead = (evaluated_at?: unknown) => ({
+	id: l1,
+	reachability: evaluated_at === undefined ? {} : { evaluated_at },
+});
+const leadBoard = (generated_at: unknown, evaluated_at: unknown) => ({
+	...(generated_at === undefined ? {} : { generated_at }),
+	leads: [lead(evaluated_at)],
+});
+const zulu = "2030-01-01T00:00:00.000Z";
+
+test("clock values may differ while their keys, types and formats match", () => {
+	const at = "2031-12-31T23:59:59.999Z";
+	assert.deepEqual(
+		compareAnswers(leadBoard(zulu, zulu), leadBoard(at, at), leadBoardShape),
+		none,
+	);
+	assert.deepEqual(
+		compareAnswers(
+			leadBoard(null, null),
+			leadBoard(null, null),
+			leadBoardShape,
+		),
+		none,
+	);
+});
+
+test("a missing, null or differently formatted clock is a difference at its path", () => {
+	const lost = (generated_at: unknown, evaluated_at: unknown) =>
+		compareAnswers(
+			leadBoard(zulu, zulu),
+			leadBoard(generated_at, evaluated_at),
+			leadBoardShape,
+		).differences;
+	const at = [{ id: l1 }];
+	const evaluated = "leads[].reachability.evaluated_at";
+	assert.deepEqual(lost(zulu, undefined), [
+		{ path: evaluated, records: at, kind: "missing in new" },
+	]);
+	assert.deepEqual(lost(zulu, null), [
+		{ path: evaluated, records: at, kind: "type differs" },
+	]);
+	assert.deepEqual(lost(undefined, zulu), [
+		{ path: "generated_at", records: [], kind: "missing in new" },
+	]);
+	for (const other of [
+		"2030-01-01T00:00:00+00:00",
+		"2030-01-01T00:00:00.000000Z",
+		"2030-01-01T00:00:00Z",
+	])
+		assert.deepEqual(lost(zulu, other), [
+			{ path: evaluated, records: at, kind: "value differs" },
+		]);
+});
+
+test("an opened lead without its clock is a difference", () => {
+	const opened = (detail: object) => ({
+		opened: { ...leadBoard(zulu, zulu), detail },
+		older_correspondence: [],
+		older_stage_history: [],
+	});
+	assert.deepEqual(
+		compareAnswers(opened(lead(zulu)), opened(lead()), leadShape).differences,
+		[
+			{
+				path: "opened.detail.reachability.evaluated_at",
+				records: [],
+				kind: "missing in new",
+			},
+		],
+	);
+});
+
+test("a reason card prints its bigint ID", () => {
+	const cards = (...ids: string[]) => ({
+		pages: [{ cards: ids.map((id) => ({ id, facts: {} })) }],
+	});
+	assert.deepEqual(
+		compareAnswers(cards("77", "78"), cards("77"), reasonsShape).differences,
+		[
+			{
+				path: "pages[].cards[]",
+				records: [{ index: 0 }, { id: "78" }],
+				kind: "missing in new",
+			},
 		],
 	);
 });

@@ -1,10 +1,13 @@
-const strict = (id: string) => ({ id, sortedBy: [] });
+import { type ReadShape, strict } from "./answers.ts";
 
 // `pages` are the paths of whole lead-board answers inside one compared answer.
 // Their `generated_at` and each lead's `evaluated_at` are the time the answer
 // was made, the only clock values the contract on #52 names.
 function workspaceShape(...pages: string[]) {
-	const leads = pages.flatMap((page) => [`${page}leads[]`, `${page}detail`]);
+	const leadObjects = pages.flatMap((page) => [
+		`${page}leads[]`,
+		`${page}detail`,
+	]);
 	return {
 		rows: Object.fromEntries([
 			...pages.flatMap((page) => [
@@ -13,22 +16,22 @@ function workspaceShape(...pages: string[]) {
 				[`${page}detail.stage_history[]`, strict("event_id")],
 				[`${page}detail.research.evidence[]`, strict("flag_id")],
 			]),
-			...leads.flatMap((lead) => [
+			...leadObjects.flatMap((lead) => [
 				[`${lead}.possible_clients[]`, strict("client_id")],
 				[`${lead}.reachability.evidence[]`, strict("flag_id")],
 				[`${lead}.reachability.source_inputs.activities[]`, strict("id")],
 			]),
 		]),
 		opaque: [
-			...leads.map((lead) => `${lead}.reachability.evidence[].value`),
+			...leadObjects.map((lead) => `${lead}.reachability.evidence[].value`),
 			...pages.flatMap((page) => [
 				`${page}detail.research.evidence[].value`,
 				`${page}detail.stage_history[].stage_review`,
 			]),
 		],
-		ignore: [
+		clocks: [
 			...pages.map((page) => `${page}generated_at`),
-			...leads.map((lead) => `${lead}.reachability.evaluated_at`),
+			...leadObjects.map((lead) => `${lead}.reachability.evaluated_at`),
 		],
 	};
 }
@@ -50,7 +53,7 @@ export const territoryShape = {
 	},
 };
 
-export const reasonsShape = {
-	rows: { "pages[].cards[]": strict("id") },
+export const reasonsShape: ReadShape = {
+	rows: { "pages[].cards[]": { ...strict("id"), serial: true } },
 	opaque: ["pages[].cards[].facts"],
 };

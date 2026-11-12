@@ -263,16 +263,23 @@ test("a network or sign-in failure stops the run", async () => {
 	);
 });
 
-test("refusals match whatever correlation ID the engine gives each one", async () => {
+// Each side's refusal arrives without its correlation ID (ask.test.ts).
+test("a deal both sides refuse alike matches, and a differing refusal is a difference", async () => {
 	const refusal = { error: "not_found", table: "deal", id: d2 };
-	const { run } = await runWith(
-		(ask, call) =>
-			ask.read === "deal" && ask.deal === d2
-				? { ...refusal, correlation_id: uuid(900 + call) }
-				: answer(ask),
-		(ask) => (ask.read === "deal" && ask.deal === d2 ? refusal : answer(ask)),
-	);
+	const refused = (body: object) => (ask: Ask) =>
+		ask.read === "deal" && ask.deal === d2 ? body : answer(ask);
+	const { run } = await runWith(refused(refusal), refused(refusal));
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
+	const differing = await runWith(
+		refused({ ...refusal, error: "conflict" }),
+		refused(refusal),
+	);
+	assert.deepEqual(
+		differing.run.outcomes.flatMap((o) =>
+			o.result === "different" ? [label(o.ask)] : [],
+		),
+		[d2],
+	);
 });
 
 test("the report counts each read and lists differing paths with record IDs and tie order apart", async () => {
