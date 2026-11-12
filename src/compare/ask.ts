@@ -32,6 +32,8 @@ function enginePath(ask: Ask) {
 			return `/api/engine/deals/${encodeURIComponent(ask.deal)}`;
 		case "client fit":
 			return "/api/engine/client-fit";
+		case "capture queue":
+			return "/api/engine/capture-queue";
 	}
 }
 
@@ -47,6 +49,8 @@ function oldCall(ask: Ask) {
 		// The app's first ask, with no filters.
 		case "client fit":
 			return { name: "ideal-client-profile", arguments: {} };
+		case "capture queue":
+			return { name: "capture-queue", arguments: {} };
 	}
 }
 

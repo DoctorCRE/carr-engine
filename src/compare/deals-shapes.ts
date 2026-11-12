@@ -60,3 +60,9 @@ export const clientFitShape = {
 	rows: { "profiles[].evidence[]": strict("deal_id") },
 	ignore,
 };
+
+export const captureQueueShape = {
+	rows: { "candidates[]": strict("id") },
+	opaque: ["candidates[].payload"],
+	ignore,
+};

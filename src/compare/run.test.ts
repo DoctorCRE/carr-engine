@@ -17,9 +17,16 @@ const detail = (deal: string, fields: object = {}) => ({
 	name: "Made-up",
 	...fields,
 });
-const fit = { schema_version: "ideal-client-profile.v1", profiles: [] };
+const fixed = {
+	"client fit": { schema_version: "ideal-client-profile.v1", profiles: [] },
+	"capture queue": { candidates: [] },
+};
 const answer = (ask: Ask) =>
-	ask.read === "board" ? board() : ask.read === "deal" ? detail(ask.deal) : fit;
+	ask.read === "board"
+		? board()
+		: ask.read === "deal"
+			? detail(ask.deal)
+			: fixed[ask.read];
 const label = (ask: Ask) =>
 	ask.read === "board"
 		? ask.workspace
@@ -51,7 +58,7 @@ async function runWith(
 	return { run, calls, pauses };
 }
 
-test("asks the engine, the old system and the engine again for every board, the client fit and every deal, pausing between requests", async () => {
+test("asks the engine, the old system and the engine again for every board, the client fit, the capture queue and every deal, pausing between requests", async () => {
 	const { run, calls, pauses } = await runWith(answer);
 	const asks = run.outcomes.map((o) => label(o.ask));
 	assert.deepEqual(asks, [
@@ -59,6 +66,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"national_account",
 		"all",
 		"client fit",
+		"capture queue",
 		d1,
 		d2,
 		d3,
@@ -70,8 +78,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 6);
-	assert.deepEqual([run.oldReads, run.engineReads], [7, 14]);
+	assert.equal(pauses, 7);
+	assert.deepEqual([run.oldReads, run.engineReads], [8, 16]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -83,6 +91,7 @@ test("a request whose two engine answers differ is unsettled and not compared", 
 	assert.deepEqual(
 		run.outcomes.map((o) => o.result),
 		[
+			"matched",
 			"matched",
 			"matched",
 			"matched",
@@ -107,6 +116,7 @@ test("a failed request is counted and the run goes on", async () => {
 	assert.deepEqual(
 		run.outcomes.map((o) => o.result),
 		[
+			"matched",
 			"matched",
 			"matched",
 			"matched",
@@ -167,25 +177,26 @@ test("the report counts each read and lists differing paths with record IDs and 
 				? board(ask.workspace === "all" ? tied.toReversed() : tied)
 				: ask.read === "deal"
 					? detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "New" }] })
-					: fit,
+					: fixed[ask.read],
 		(ask) =>
 			ask.read === "board"
 				? board(tied)
 				: ask.read === "deal"
 					? detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "Old" }] })
-					: fit,
+					: fixed[ask.read],
 	);
 	assert.equal(exitCode(run), 1);
 	assert.equal(
 		report("production", run),
 		`Old and new Deals answers compared on production
-old reads made: 7, engine reads made: 14
+old reads made: 8, engine reads made: 16
 
 read                                         asked   matched tie order different unsettled    failed
 board team                                       1         1         0         0         0         0
 board national_account                           1         1         0         0         0         0
 board all                                        1         0         1         0         0         0
 client fit                                       1         1         0         0         0         0
+capture queue                                    1         1         0         0         0         0
 deal detail                                      3         0         0         3         0         0
 
 differences: field path, kind, records, first record IDs
@@ -241,21 +252,35 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 				participants: [{ role: m(s), name: m(s), party_id: null }],
 				email_threads: [{ conversation_id: m(s), subject: m(s) }],
 			}),
-		fit: {
-			profiles: [
-				{ vertical: m(s), evidence: [{ deal_id: uuid(4), deal_name: m(s) }] },
-			],
+		fixed: {
+			"client fit": {
+				profiles: [
+					{ vertical: m(s), evidence: [{ deal_id: uuid(4), deal_name: m(s) }] },
+				],
+			},
+			"capture queue": {
+				candidates: [
+					{
+						id: uuid(10),
+						kind: m(s),
+						payload: { [m(s)]: m(s) },
+						evidence_quote: m(s),
+						deal_name: m(s),
+						created_at: m(s),
+					},
+				],
+			},
 		},
 	});
 	const answers = (s: string) => {
-		const { board, detail, fit } = side(s);
+		const { board, detail, fixed } = side(s);
 		const details = new Map([d1, d2, d3].map((deal) => [deal, detail(deal)]));
 		return (ask: Ask) =>
 			ask.read === "board"
 				? board
 				: ask.read === "deal"
 					? details.get(ask.deal)
-					: fit;
+					: fixed[ask.read];
 	};
 	const { run } = await runWith(answers("new"), answers("old"));
 	assert.ok(run.outcomes.every((o) => o.result === "different"));

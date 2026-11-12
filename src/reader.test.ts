@@ -7,6 +7,7 @@ import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
+import { readCaptureQueue } from "./deals/capture-queue.ts";
 import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
@@ -22,6 +23,7 @@ const readable = [
 	"deal",
 	"doctrine_section",
 	"party",
+	"v_capture_candidate_queue",
 	"v_capture_session_status",
 	"v_client_account",
 	"v_client_engagement_status",
@@ -151,6 +153,16 @@ async function seedDeal(database: string) {
 					actor_id: actor.id,
 				})
 				.execute();
+			await sql`with s as (insert into capture_session (nonce, device_id, actor_id,
+				mode, started_at, consent_announced_at, session_token_hash, expires_at, state_at)
+				values ('example-nonce', 'example-device', ${actor.id}, 'meeting', now(), now(),
+				'example-hash', now() + interval '1 hour', now()) returning id)
+				insert into capture_candidate (session_id, idempotency_key, batch_hash,
+				item_index, kind, payload, evidence_quote, confidence)
+				select id, 'example-key', 'example-batch', 0, 'next_step',
+				${JSON.stringify({ deal: deal.id })}, 'Example quote', 1 from s`.execute(
+				tx,
+			);
 			return { actor: actor.slug, deal: deal.id };
 		});
 	} finally {
@@ -159,7 +171,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit and the change feed and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed and the capture queue and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -187,9 +199,25 @@ test("the reader login reads the board, a deal, the client fit and the change fe
 				coverage: "recorded_closed_won_only",
 				profiles: [],
 			});
+			const queue = await readSnapshot(login, readCaptureQueue);
 			assert.deepEqual(
-				await readSnapshot(login, (db) => readChanges(db, null, "")),
-				{ events: [], presence: [], capture_sessions: [], cursor: "" },
+				queue.candidates.map((c) => [c.deal_name, c.confidence]),
+				[["Example Reader Deal", 1]],
+			);
+			const changes = await readSnapshot(login, (db) =>
+				readChanges(db, null, ""),
+			);
+			assert.deepEqual(
+				{
+					...changes,
+					capture_sessions: changes.capture_sessions.map((s) => s.device_id),
+				},
+				{
+					events: [],
+					presence: [],
+					capture_sessions: ["example-device"],
+					cursor: "",
+				},
 			);
 			const visible = await withAdmin(
 				(admin) =>
@@ -205,7 +233,11 @@ test("the reader login reads the board, a deal, the client fit and the change fe
 				visible.rows.map((r) => r.relname),
 				readable,
 			);
-			for (const outside of ["deal_note", "schema_migrations"] as const) {
+			for (const outside of [
+				"capture_candidate",
+				"deal_note",
+				"schema_migrations",
+			] as const) {
 				await assert.rejects(
 					readSnapshot(login, (db) =>
 						db.selectFrom(outside).selectAll().execute(),

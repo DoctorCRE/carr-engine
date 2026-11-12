@@ -1,13 +1,19 @@
 import { WORKSPACES, type Workspace } from "../deals/board.ts";
 import { compareAnswers, UUID } from "./answers.ts";
-import { boardShape, clientFitShape, detailShape } from "./deals-shapes.ts";
+import {
+	boardShape,
+	captureQueueShape,
+	clientFitShape,
+	detailShape,
+} from "./deals-shapes.ts";
 
 export class StopRun extends Error {}
 
 export type Ask =
 	| { read: "board"; workspace: Workspace }
 	| { read: "deal"; deal: string }
-	| { read: "client fit" };
+	| { read: "client fit" }
+	| { read: "capture queue" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -39,6 +45,7 @@ const SHAPES = {
 	board: boardShape,
 	deal: detailShape,
 	"client fit": clientFitShape,
+	"capture queue": captureQueueShape,
 };
 
 export async function compareDeals(
@@ -55,6 +62,7 @@ export async function compareDeals(
 	const queue: Ask[] = [
 		...WORKSPACES.map((workspace) => ({ read: "board", workspace }) as const),
 		{ read: "client fit" },
+		{ read: "capture queue" },
 	];
 	const queued = new Set<string>();
 	for (const [index, ask] of queue.entries()) {
