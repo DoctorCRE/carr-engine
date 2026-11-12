@@ -1,5 +1,6 @@
 import { WORKSPACES, type Workspace } from "../deals/board.ts";
-import { compareAnswers, isRecord, UUID } from "./answers.ts";
+import { UUID } from "../uuid.ts";
+import { compareAnswers, isRecord } from "./answers.ts";
 import {
 	boardShape,
 	captureQueueShape,

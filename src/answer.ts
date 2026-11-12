@@ -77,11 +77,21 @@ const isKnownPartner = async (db: Reader, slug: string) =>
 		.where("slug", "=", slug)
 		.executeTakeFirst()) !== undefined;
 
-// `verb` is the old tool that answered the same read: its body for a failed
-// read named it.
+// The old tools whose reads the engine serves. A failed read's body names one.
+type Verb =
+	| "capture-queue"
+	| "deal-room-board"
+	| "find"
+	| "get-deal-room"
+	| "ideal-client-profile"
+	| "lead-board"
+	| "list-practice-origination"
+	| "quiet-follow-ups"
+	| "territory-state-board";
+
 export async function answer(
 	c: Context<DatabaseEnv>,
-	verb: string,
+	verb: Verb,
 	read: (db: Reader) => Promise<unknown>,
 ) {
 	const failed = (status: 500 | 503) =>

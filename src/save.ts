@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { type InsertObject, sql, type Transaction } from "kysely";
 import type { DB, JsonObject } from "./database.d.ts";
 import { connect } from "./reader.ts";
+import { UUID } from "./uuid.ts";
 
 export type Save = {
 	partner: string;
@@ -128,10 +129,7 @@ function idempotencyKey(args: JsonObject): string {
 			error: "missing_idempotency_key",
 			hint: "generate a UUID per intended action; retries reuse the SAME key",
 		});
-	if (
-		typeof key !== "string" ||
-		!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(key)
-	)
+	if (typeof key !== "string" || !UUID.test(key))
 		throw new SaveRefusal({
 			error: "invalid_idempotency_key",
 			field: "idempotency_key",

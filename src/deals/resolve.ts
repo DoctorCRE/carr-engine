@@ -1,5 +1,6 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
+import { UUID } from "../uuid.ts";
 
 type Resolution =
 	| { type: string; id: string }
@@ -9,7 +10,6 @@ type Resolution =
 			candidates: Record<string, string | null>[];
 	  };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRINTED_REFS = [
 	[/^L-\d+/i, "lead"],
 	[/^C-\d+/i, "client"],
