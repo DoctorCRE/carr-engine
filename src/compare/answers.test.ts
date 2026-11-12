@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { compareAnswers } from "./answers.ts";
 import { clientFitShape } from "./deals-shapes.ts";
+import { activityShape, clientListShape } from "./directory-shapes.ts";
 import { leadBoardShape, leadShape, reasonsShape } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
 
@@ -681,5 +682,55 @@ test("a reason card prints its bigint ID", () => {
 				kind: "missing in new",
 			},
 		],
+	);
+});
+
+test("a correlation id may differ in value, but not in format", () => {
+	const listed = (correlation_id: string) => ({
+		rows: [],
+		source: { correlation_id },
+	});
+	const random = "a9f3c2d1-77be-4c0e-9d1a-2b3c4d5e6f70";
+	assert.deepEqual(
+		compareAnswers(listed(d1), listed(random), clientListShape),
+		none,
+	);
+	assert.deepEqual(
+		compareAnswers(listed(d1), listed("made-up"), clientListShape).differences,
+		[{ path: "source.correlation_id", records: [], kind: "value differs" }],
+	);
+});
+
+test("recent activity rows at one moment may swap, and a page cut inside that moment is cap ambiguity (decision 17)", () => {
+	const row = (n: number, occurred_at = `2030-01-${10 + n}T00:00:00.000Z`) => ({
+		entry_kind: `kind${n}`,
+		occurred_at,
+	});
+	const page = (...rows: object[]) => ({ catch_up: { timeline: rows } });
+	const first = Array.from({ length: 7 }, (_, n) => row(9 - n));
+	const [tiedA, tiedB, oldOnly, newOnly] = [
+		row(20, zulu),
+		row(21, zulu),
+		row(22, zulu),
+		row(23, zulu),
+	];
+	const result = compareAnswers(
+		page(...first, tiedA, tiedB, oldOnly),
+		page(...first, tiedB, tiedA, newOnly),
+		activityShape,
+	);
+	assert.deepEqual(result.differences, []);
+	assert.equal(result.tiedRowsReordered.length, 1);
+	assert.deepEqual(
+		result.capAmbiguous.map((d) => d.kind),
+		["missing in new", "missing in old"],
+	);
+	assert.deepEqual(
+		compareAnswers(
+			page(...first, oldOnly),
+			page(...first, newOnly),
+			activityShape,
+		).differences.length,
+		2,
 	);
 });
