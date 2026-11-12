@@ -54,7 +54,7 @@ A Claude session coordinates: it slices issues, briefs workers, reviews and deci
 
 Claude Opus 5.5 builds. Reasoning effort is high, never higher.
 
-Before a pull request merges, a separate Claude session that did not write the change reviews it. The builder fixes what the review finds, then turns on auto-merge. The owner does not review code.
+Before a pull request merges, a separate Claude session that did not write the change reviews it for correctness and for code quality. The builder fixes what the review finds, then turns on auto-merge. The owner does not review code.
 
 Check which models are available each time you start a worker. Never write a provider's usage or balance into this repo.
 
@@ -65,6 +65,8 @@ Read `carr-system` to learn what a feature does. Never copy its code. Port the b
 ## Code
 
 - TypeScript, strict. One Cloudflare Worker in `src/`.
+- Write code a senior developer would be glad to inherit: lean, small functions, precise types, names from `docs/glossary.md`. Delete before adding.
+- Comment only what the code cannot say: a non-obvious reason, a rule kept from the old system, or a trap. One short line; never restate the code.
 - Every behavior change comes with a test that fails without it.
 - Tests are hermetic: no network, no production data, no sleeps, no order dependence. A test that fails and then passes on a rerun is a bug to fix that day, not to retry.
 - The check must stay under 3 minutes. CI stops it at 5.
