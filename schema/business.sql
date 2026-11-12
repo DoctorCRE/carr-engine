@@ -181,7 +181,8 @@ CREATE FUNCTION public.enforce_allocation_tree() RETURNS trigger
     SET search_path TO 'pg_catalog', 'public', 'pg_temp'
     AS $$
 begin
-
+  -- The ancestor census must see commits made by the prior lock holder.
+  -- Fixed snapshots do not refresh after an advisory-lock wait.
   if current_setting('transaction_isolation') not in ('read committed','read uncommitted') then
     raise exception using errcode='25001',
       message='commission allocation tree writes require READ COMMITTED isolation';
@@ -276,7 +277,7 @@ begin
   if new.rate_amount is not null
      and new.rate_basis in ('usd_mo_gross','usd_yr_gross')
      and new.rate_norm_gross_sf_yr is null then
-    new.norm_owed := true;                       
+    new.norm_owed := true;                       -- [A5] normalized-or-owed, enforced
   end if;
   return new;
 end $$;
@@ -3799,6 +3800,12 @@ ALTER TABLE ONLY ops.requirement_request
 ALTER TABLE ONLY ops.requirement_upload_grant
     ADD CONSTRAINT requirement_upload_grant_id_request_id_key UNIQUE (id, request_id);
 
+ALTER TABLE ONLY ops.requirement_upload_grant
+    ADD CONSTRAINT requirement_upload_grant_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY ops.requirement_upload_grant
+    ADD CONSTRAINT requirement_upload_grant_token_sha256_key UNIQUE (token_sha256);
+
 ALTER TABLE ONLY ops.requirement_upload_receipt
     ADD CONSTRAINT requirement_upload_receipt_grant_id_key UNIQUE (grant_id);
 
@@ -4594,6 +4601,9 @@ ALTER TABLE ONLY ops.requirement_request
 
 ALTER TABLE ONLY ops.requirement_request
     ADD CONSTRAINT requirement_request_thread_activity_id_fkey FOREIGN KEY (thread_activity_id) REFERENCES public.activity(id);
+
+ALTER TABLE ONLY ops.requirement_upload_grant
+    ADD CONSTRAINT requirement_upload_grant_request_id_organization_tenant_id_fkey FOREIGN KEY (request_id, organization_tenant_id, deal_id, row_key) REFERENCES ops.requirement_request(id, organization_tenant_id, deal_id, row_key);
 
 ALTER TABLE ONLY ops.requirement_upload_receipt
     ADD CONSTRAINT requirement_upload_receipt_grant_id_request_id_fkey FOREIGN KEY (grant_id, request_id) REFERENCES ops.requirement_upload_grant(id, request_id);

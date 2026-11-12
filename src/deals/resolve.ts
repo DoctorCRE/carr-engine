@@ -1,14 +1,18 @@
 import { type Kysely, sql } from "kysely";
+import { Refusal } from "../answer.ts";
 import type { DB } from "../database.d.ts";
 import { UUID } from "../uuid.ts";
 
-type Resolution =
-	| { type: string; id: string }
+type Unresolved =
 	| { error: "subject_not_found" }
 	| {
 			error: "needs_disambiguation";
 			candidates: Record<string, string | null>[];
 	  };
+
+type Resolution = { type: string; id: string } | Unresolved;
+
+type DealLookup = { id: string } | Unresolved | { error: "not_a_deal" };
 
 const PRINTED_REFS = [
 	[/^L-\d+/i, "lead"],
@@ -81,6 +85,29 @@ export async function resolveSubject(
 		if (rows[0]) return found(rows[0]);
 	}
 	return { error: "subject_not_found" };
+}
+
+export async function resolveDeal(
+	db: Kysely<DB>,
+	ref: string,
+): Promise<DealLookup> {
+	const subject = await resolveSubject(db, ref);
+	if ("error" in subject) return subject;
+	return subject.type === "deal" ? { id: subject.id } : { error: "not_a_deal" };
+}
+
+export function lookupRefusal(failure: Exclude<DealLookup, { id: string }>) {
+	switch (failure.error) {
+		// Not one of the old system's public errors, so it answered generically.
+		case "subject_not_found":
+			return new Refusal(404, "unhandled_verb_failure");
+		case "needs_disambiguation":
+			return new Refusal(409, "needs_disambiguation", {
+				candidates: failure.candidates,
+			});
+		case "not_a_deal":
+			return new Refusal(422, "not_a_deal");
+	}
 }
 
 function found(row: { type: string | null; id: string | null }) {
