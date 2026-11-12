@@ -48,6 +48,8 @@ function enginePath(ask: ToolAsk) {
 			return "/api/engine/client-fit";
 		case "capture queue":
 			return "/api/engine/capture-queue";
+		case "find":
+			return `/api/engine/find?${new URLSearchParams({ query: ask.query })}`;
 	}
 }
 
@@ -65,6 +67,8 @@ function oldCall(ask: ToolAsk) {
 			return { name: "ideal-client-profile", arguments: {} };
 		case "capture queue":
 			return { name: "capture-queue", arguments: {} };
+		case "find":
+			return { name: "find", arguments: { query: ask.query } };
 	}
 }
 

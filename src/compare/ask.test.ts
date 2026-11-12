@@ -10,6 +10,7 @@ const board: Ask = { read: "board", workspace: "national_account" };
 const detail: Ask = { read: "deal", deal };
 const fit: Ask = { read: "client fit" };
 const queue: Ask = { read: "capture queue" };
+const find: Ask = { read: "find", query: "Made-up & 50%" };
 
 type Sent = { url: URL; init: RequestInit };
 
@@ -29,12 +30,13 @@ const content = (body: unknown, isError?: true) =>
 const header = (sent: Sent, name: string) =>
 	new Headers(sent.init.headers).get(name);
 
-test("asks the engine's board by workspace, a deal by its reference, the client fit and the capture queue, on the app's host with the session", async () => {
+test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue and a find, on the app's host with the session", async () => {
 	const { askEngine, sent } = fake(() => json({ made_up: true }));
 	assert.deepEqual(await askEngine(board), { made_up: true });
 	await askEngine(detail);
 	await askEngine(fit);
 	await askEngine(queue);
+	await askEngine(find);
 	assert.deepEqual(
 		sent.map((s) => s.url.href),
 		[
@@ -42,6 +44,7 @@ test("asks the engine's board by workspace, a deal by its reference, the client 
 			`https://app.example.test/api/engine/deals/${deal}`,
 			"https://app.example.test/api/engine/client-fit",
 			"https://app.example.test/api/engine/capture-queue",
+			"https://app.example.test/api/engine/find?query=Made-up+%26+50%25",
 		],
 	);
 	for (const s of sent) {
@@ -57,14 +60,10 @@ test("asks the old system through the same host with the session and the app's o
 	await askOld(detail);
 	await askOld(fit);
 	await askOld(queue);
+	await askOld(find);
 	assert.deepEqual(
 		sent.map((s) => [s.url.href, s.init.method]),
-		[
-			["https://app.example.test/mcp", "POST"],
-			["https://app.example.test/mcp", "POST"],
-			["https://app.example.test/mcp", "POST"],
-			["https://app.example.test/mcp", "POST"],
-		],
+		Array(5).fill(["https://app.example.test/mcp", "POST"]),
 	);
 	assert.deepEqual(
 		sent.map((s) => JSON.parse(String(s.init.body)).params),
@@ -73,6 +72,7 @@ test("asks the old system through the same host with the session and the app's o
 			{ name: "get-deal-room", arguments: { deal } },
 			{ name: "ideal-client-profile", arguments: {} },
 			{ name: "capture-queue", arguments: {} },
+			{ name: "find", arguments: { query: "Made-up & 50%" } },
 		],
 	);
 	for (const s of sent) {
@@ -126,6 +126,13 @@ test("a refused board fails its read instead of comparing as an empty board", as
 			ask(board),
 			(error: Error) => !(error instanceof StopRun),
 		);
+});
+
+test("an engine find that fails with a server error fails that read without stopping the run", async () => {
+	await assert.rejects(
+		fake(() => json({ error: "read_failed" }, 500)).askEngine(find),
+		(error: Error) => !(error instanceof StopRun),
+	);
 });
 
 test("a network or sign-in failure stops the run, and no failure shows the session", async () => {
