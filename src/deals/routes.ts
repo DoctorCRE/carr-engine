@@ -7,6 +7,7 @@ import { readCaptureQueue } from "./capture-queue.ts";
 import { decodeCursor, readChanges } from "./changes.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
+import { lookupRefusal } from "./resolve.ts";
 
 export const deals = new Hono<DatabaseEnv>();
 
@@ -50,19 +51,9 @@ deals.get("/deals/:deal{.+}", async (c) => {
 	return answer(c, "get-deal-room", async (db) => {
 		const detail = await readDealDetail(db, c.req.param("deal"));
 		if (!("error" in detail)) return detail;
-		switch (detail.error) {
-			// Not one of the old system's public errors, so it answered generically.
-			case "subject_not_found":
-				return new Refusal(404, "unhandled_verb_failure");
-			case "needs_disambiguation":
-				return new Refusal(409, "needs_disambiguation", {
-					candidates: detail.candidates,
-				});
-			case "not_a_deal":
-				return new Refusal(422, "not_a_deal");
-			case "not_found":
-				return new Refusal(404, "not_found");
-		}
+		return detail.error === "not_found"
+			? new Refusal(404, "not_found")
+			: lookupRefusal(detail);
 	});
 });
 

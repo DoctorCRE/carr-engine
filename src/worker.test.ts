@@ -12,9 +12,12 @@ test("GET /health reports the deployed version", async () => {
 	});
 });
 
-test("an unknown path returns 404", async () => {
+test("an unknown path answers the old not-found body", async () => {
 	const res = await app.request("/nope");
-	assert.equal(res.status, 404);
+	assert.deepEqual(
+		[res.status, await res.text()],
+		[404, '{"error":"not_found"}'],
+	);
 });
 
 const ORIGIN = "https://app.example.test";
