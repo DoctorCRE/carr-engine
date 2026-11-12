@@ -56,7 +56,7 @@ test("a percent-encoded address answers the old not-found body", async () => {
 		["GET", "pipeline/%63hanges"],
 		["GET", "%66ind?query=Example"],
 		["POST", "pre%73ence"],
-	]) {
+	] as const) {
 		const response = await ask(path, method);
 		assert.deepEqual(
 			[response.status, await response.text()],
