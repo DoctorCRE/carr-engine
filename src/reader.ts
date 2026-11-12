@@ -48,16 +48,20 @@ const types = {
 export const asText = (value: Expression<unknown>) =>
 	sql<string | null>`to_jsonb(${value})#>>'{}'`;
 
+export function connect(connectionString: string): Kysely<DB> {
+	const pool = new pg.Pool({ connectionString, max: 1, types });
+	// A dropped pooled connection must not crash the Worker; the caller's own
+	// promise reports the failure.
+	pool.on("error", () => {});
+	pool.on("connect", (client) => client.on("error", () => {}));
+	return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+}
+
 export async function readSnapshot<T>(
 	connectionString: string,
 	read: (db: Reader) => Promise<T>,
 ): Promise<T> {
-	const pool = new pg.Pool({ connectionString, max: 1, types });
-	// A dropped pooled connection must not crash the Worker; the read's own
-	// promise reports the failure.
-	pool.on("error", () => {});
-	pool.on("connect", (client) => client.on("error", () => {}));
-	const db = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+	const db = connect(connectionString);
 	try {
 		return await db
 			.transaction()
