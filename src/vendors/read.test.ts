@@ -89,7 +89,7 @@ insert into vendor (id, vendor_ref, party_id, category, category_slug, territory
 		'warm', 1, '2024-01-01', '${id(901)}', '${id(901)}', '2026-01-02 03:04:05.123456+00'),
 	('${id(2)}', null, '${id(102)}', 'legacy-x', null, null, null, null,
 		null, null, null, '${id(901)}', '${id(901)}', '2026-01-01 00:00:00+00'),
-	('${id(3)}', null, '${id(103)}', 'Lender', 'architect', 'austin', '${id(902)}', '{}',
+	('${id(3)}', null, '${id(103)}', 'Lender', 'architect', 'Boston', '${id(902)}', '{}',
 		null, null, null, '${id(901)}', '${id(901)}', '2026-01-01 00:00:00+00'),
 	('${id(4)}', null, '${id(104)}', 'lender', null, 'Zed', null, null,
 		null, null, null, '${id(901)}', '${id(901)}', '2026-01-01 00:00:00+00');
@@ -219,7 +219,7 @@ test("the vendor list answers the old JSON for its rows, facets, filters and leg
 						recorded_category: "architect",
 						recorded_category_label: "Example architect",
 						deal_type: "Example architect",
-						territory: "austin",
+						territory: "Boston",
 					}),
 				],
 				facets: {
@@ -233,7 +233,7 @@ test("the vendor list answers the old JSON for its rows, facets, filters and leg
 					],
 					territories: [
 						{ slug: "Austin", label: "Austin" },
-						{ slug: "austin", label: "austin" },
+						{ slug: "Boston", label: "Boston" },
 					],
 				},
 				partial: {
@@ -271,6 +271,7 @@ test("the vendor list answers the old JSON for its rows, facets, filters and leg
 
 		assert.deepEqual(await ids("sort=territory"), [id(1), id(3), id(2)]);
 		assert.deepEqual(await ids("territory=Austin"), [id(1)]);
+		assert.deepEqual(await ids("territory=austin"), []);
 		assert.deepEqual(await ids("category=architect"), [id(3)]);
 		assert.deepEqual(await ids("q=ALPHA"), [id(2)]);
 		assert.deepEqual(await ids("q=p-1&scope=mine"), [id(1)]);
