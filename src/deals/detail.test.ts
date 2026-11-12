@@ -202,7 +202,7 @@ test("an open deal reads with text dates, decimal strings and capped history", a
 			})
 			.execute();
 
-		const detail = await readDealDetail(tx, deal, "detail-agent");
+		const detail = await readDealDetail(tx, deal);
 		assert.ok("operating_state" in detail);
 		assert.equal(detail.schema_version, "deal-timeline.v1");
 		assert.equal(detail.deal_id, deal);
@@ -313,7 +313,7 @@ test("email threads keep the newest message per conversation", async () => {
 				})),
 			)
 			.execute();
-		const detail = await readDealDetail(tx, deal, "detail-agent");
+		const detail = await readDealDetail(tx, deal);
 		assert.ok(!("error" in detail));
 		assert.deepEqual(
 			detail.email_threads.map((t) => [t.conversation_id, t.subject]),
@@ -487,7 +487,7 @@ test("people, premises, rounds, documents, lease and activity read like the old 
 			)
 			.execute();
 
-		const detail = await readDealDetail(tx, deal, "detail-agent");
+		const detail = await readDealDetail(tx, deal);
 		assert.ok(!("error" in detail));
 		assert.deepEqual(detail.participants, [
 			{
@@ -620,7 +620,7 @@ test("activities and documents sort by time across a clock change", async () => 
 				})),
 			)
 			.execute();
-		const detail = await readDealDetail(tx, deal, "detail-agent");
+		const detail = await readDealDetail(tx, deal);
 		assert.ok(!("error" in detail));
 		const newestFirst = [
 			"2030-11-03T01:10:00-06:00",
@@ -643,7 +643,7 @@ test("an invoiced deal reads through the archived shape", async () => {
 			invoiced_on: "2030-04-30",
 		});
 		await portal("example-disabled", "2030-05-01T00:00:00Z");
-		const detail = await readDealDetail(tx, deal, "detail-agent");
+		const detail = await readDealDetail(tx, deal);
 		assert.ok(!("error" in detail));
 		assert.equal(detail.invoiced_on, "2030-04-30");
 		assert.equal(detail.client_id, client);
@@ -707,7 +707,7 @@ test("the checklist reads its sources, commissions and requests", async () => {
 				'2030-04-01', 'representation', '{}', ${actor},
 				'2030-04-02T03:04:05.678901Z', ${actor}, ${attachment.id})`.execute(tx);
 
-		const detail = await readDealDetail(tx, deal, "detail-agent");
+		const detail = await readDealDetail(tx, deal);
 		assert.ok(!("error" in detail));
 		const { checklist } = detail;
 		const today = await sql<{
@@ -755,19 +755,15 @@ test("the checklist reads its sources, commissions and requests", async () => {
 test("refusals name what went wrong", async () => {
 	await withRollback(async (tx) => {
 		const { deal, client, audit, party } = await seed(tx);
-		assert.deepEqual(await readDealDetail(tx, deal, "nobody"), {
-			error: "unauthenticated",
-		});
-		assert.deepEqual(await readDealDetail(tx, "C-9001", "detail-agent"), {
+		assert.deepEqual(await readDealDetail(tx, "C-9001"), {
 			error: "not_a_deal",
 		});
-		const byName = await readDealDetail(tx, "Example Detail", "detail-agent");
+		const byName = await readDealDetail(tx, "Example Detail");
 		assert.ok(!("error" in byName));
 		assert.equal(byName.deal_id, deal);
-		assert.deepEqual(
-			await readDealDetail(tx, "No Such Example", "detail-agent"),
-			{ error: "subject_not_found" },
-		);
+		assert.deepEqual(await readDealDetail(tx, "No Such Example"), {
+			error: "subject_not_found",
+		});
 		await tx
 			.insertInto("deal")
 			.values({
@@ -778,7 +774,7 @@ test("refusals name what went wrong", async () => {
 				...audit,
 			})
 			.execute();
-		const twice = await readDealDetail(tx, "Example Detail", "detail-agent");
+		const twice = await readDealDetail(tx, "Example Detail");
 		assert.ok("candidates" in twice);
 		assert.deepEqual(
 			{ ...twice, candidates: twice.candidates.map((c) => c.name).sort() },
@@ -805,7 +801,7 @@ test("refusals name what went wrong", async () => {
 			.set({ merged_into: survivor.id })
 			.where("id", "=", client)
 			.execute();
-		assert.deepEqual(await readDealDetail(tx, deal, "detail-agent"), {
+		assert.deepEqual(await readDealDetail(tx, deal), {
 			error: "not_found",
 		});
 	});
@@ -923,15 +919,11 @@ test("each lookup step resolves or refuses like the old resolver", async () => {
 			],
 		];
 		for (const [ref, expected] of cases)
-			assert.deepEqual(
-				await readDealDetail(tx, ref, "detail-agent"),
-				expected,
-				ref,
-			);
-		const shared = await readDealDetail(tx, lead.id, "detail-agent");
+			assert.deepEqual(await readDealDetail(tx, ref), expected, ref);
+		const shared = await readDealDetail(tx, lead.id);
 		assert.ok(!("error" in shared));
 		assert.equal(shared.name, "Example Shared Id Deal");
-		const byName = await readDealDetail(tx, "Example Detail", "detail-agent");
+		const byName = await readDealDetail(tx, "Example Detail");
 		assert.ok(!("error" in byName));
 		assert.equal(byName.deal_id, deal);
 	});

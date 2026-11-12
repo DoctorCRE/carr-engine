@@ -10,7 +10,7 @@ Each entry gives the meaning, the words to avoid, the database names, and the en
 One of the two partners, signed in to the app.
 _Avoid_: actor, user
 _Database_: `actor` (rows with `kind = 'human'`; the table also holds automations). Columns that name a partner hold the actor's `slug`: `deal.owner`, `v_deal_room_board.parked_by`, `account_owner`.
-_Engine_: `partner` in `src/session.ts`; `actor` in `readBoard` and `readDealDetail`.
+_Engine_: `partner` in `src/session.ts` and `src/deals/routes.ts`; `actor` in `readBoard`.
 
 **Client**:
 Any person or company we represent on a transaction.

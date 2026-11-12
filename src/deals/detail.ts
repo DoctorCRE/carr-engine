@@ -8,6 +8,7 @@ import {
 	phaseChangeOf,
 	phaseStartedOn,
 	phaseStartsOf,
+	RETIRED_ITEM_STATUSES,
 	shortName,
 	vendorsOf,
 } from "./shared.ts";
@@ -23,202 +24,37 @@ const PLACEHOLDERS = new Set([
 	"sf_close_date_placeholder",
 ]);
 
-export async function readDealDetail(
-	db: Kysely<DB>,
-	deal: string,
-	actor: string,
-) {
-	const signedIn = await db
-		.selectFrom("actor")
-		.select("id")
-		.where("slug", "=", actor)
-		.executeTakeFirst();
-	if (!signedIn) return { error: "unauthenticated" as const };
+export async function readDealDetail(db: Kysely<DB>, deal: string) {
 	const subject = await resolveSubject(db, deal);
 	if ("error" in subject) return subject;
 	if (subject.type !== "deal") return { error: "not_a_deal" as const };
 	const id = subject.id;
-	const record = (await liveDeal(db, id)) ?? (await archivedDeal(db, id));
+	const live = await liveDeal(db, id).executeTakeFirst();
+	const record = live ?? (await archivedDeal(db, id).executeTakeFirst());
 	if (!record) return { error: "not_found" as const };
 
 	const vendors = await vendorsOf(db, id).execute();
 	const phaseChange = await phaseChangeOf(db, id).executeTakeFirst();
 	const phaseStarts = await phaseStartsOf(db, id).execute();
-	const thread = await db
-		.selectFrom("v_deal_room_note")
-		.select((eb) => [
-			"id",
-			"kind",
-			"text",
-			"actor",
-			asText(eb.ref("created_at")).as("created_at"),
-		])
-		.where("deal_id", "=", id)
-		.orderBy("created_at", "desc")
-		.orderBy("id", "desc")
-		.limit(HISTORY_CAP + 1)
-		.execute();
-	const criticalDates = await db
-		.selectFrom("v_deal_room_critical_date")
-		.select((eb) => [
-			"id",
-			"kind",
-			asText(eb.ref("due_on")).as("due_on"),
-			"note",
-			"source",
-			"status",
-		])
-		.where("deal_id", "=", id)
-		.orderBy("due_on")
-		.orderBy("id")
-		.execute();
-	const events = await db
-		.selectFrom("v_deal_room_event")
-		.select((eb) => [
-			"id",
-			asText(eb.ref("recorded_at")).as("recorded_at"),
-			"actor",
-			"verb",
-			"field",
-			"old_value",
-			"new_value",
-		])
-		.where("subject_id", "=", id)
-		.orderBy("recorded_at", "desc")
-		.orderBy("id", "desc")
-		.limit(HISTORY_CAP + 1)
-		.execute();
-	const actions = await db
-		.selectFrom("v_deal_room_action")
-		.select((eb) => [
-			"id",
-			"owner",
-			"description",
-			"item_title as title",
-			"item_bullets as bullets",
-			"source_ref",
-			asText(eb.ref("due_on")).as("due_on"),
-			"status",
-			"version",
-			asText(eb.ref("hold_until")).as("hold_until"),
-			asText(eb.ref("updated_at")).as("updated_at"),
-		])
-		.where("deal_id", "=", id)
-		.orderBy("created_order")
-		.orderBy("id")
-		.execute();
-	const activities = await db
-		.selectFrom("v_deal_room_activity as a")
-		.select((eb) => [
-			"a.id",
-			asText(eb.ref("a.occurred_at")).as("occurred_at"),
-			"a.actor",
-			"a.kind",
-			"a.summary",
-			"a.detail",
-			"a.source",
-			"a.email_context",
-		])
-		.where("a.deal_id", "=", id)
-		.orderBy("a.occurred_at", "desc")
-		.orderBy("a.id", "desc")
-		.limit(HISTORY_CAP + 1)
-		.execute();
-	const emails = await db
-		.selectFrom("v_deal_room_activity")
-		.select((eb) => [
-			"id",
-			sql<string | null>`email_context->>'conversation_id'`.as("thread"),
-			sql<string | null>`email_context->>'subject'`.as("subject"),
-			asText(eb.ref("occurred_at")).as("latest_message_at"),
-		])
-		.where("deal_id", "=", id)
-		.where("kind", "in", ["email_in", "email_out"])
-		.where("email_context", "is not", null)
-		.orderBy("occurred_at", "desc")
-		.orderBy("id", "desc")
-		.execute();
-	const participants = await db
-		.selectFrom("v_deal_room_participant")
-		.select(["role", "name", "actor", "party_id"])
-		.where("deal_id", "=", id)
-		.orderBy("role")
-		.orderBy("name")
-		.execute();
-	const premises = await db
-		.selectFrom("v_deal_room_premises")
-		.select([
-			"id",
-			"label",
-			"building_name",
-			"address",
-			"city",
-			"state",
-			"suite",
-			"area_amount",
-			"area_basis",
-		])
-		.where("deal_id", "=", id)
-		.orderBy("created_at")
-		.orderBy("suite")
-		.execute();
-	const rounds = await db
-		.selectFrom("v_deal_room_negotiation")
-		.select((eb) => [
-			"round_no",
-			"side",
-			asText(eb.ref("proposed_on")).as("proposed_on"),
-			"rate_amount",
-			"rate_basis",
-			"rate_norm_sf_yr",
-			"ti_amount",
-			"ti_basis",
-			"free_rent_months",
-			"term_months",
-			"escalator",
-			"opex_note",
-			asText(eb.ref("expires_on")).as("expires_on"),
-			"note",
-			"source",
-		])
-		.where("deal_id", "=", id)
-		.orderBy("round_no", "desc")
-		.orderBy("proposed_on", "desc")
-		.limit(ROUNDS_CAP)
-		.execute();
-	const documents = await db
-		.selectFrom("v_deal_room_document as d")
-		.select((eb) => [
-			"d.id",
-			"d.sent_status",
-			"d.lint_passed",
-			"d.leak_check_passed",
-			asText(eb.ref("d.prepared_at")).as("prepared_at"),
-			"d.note",
-		])
-		.where("d.deal_id", "=", id)
-		.orderBy("d.prepared_at", "desc")
-		.limit(DOCUMENTS_CAP)
-		.execute();
-	const lease = await db
-		.selectFrom("v_deal_room_current_lease")
-		.select((eb) => [
-			"id",
-			"version",
-			"status",
-			asText(eb.ref("executed_on")).as("executed_on"),
-			asText(eb.ref("commencement_on")).as("commencement_on"),
-			asText(eb.ref("expiration_on")).as("expiration_on"),
-			"options_note",
-			"evidence_kind",
-			"evidence_ref",
-			"source",
-		])
-		.where("deal_id", "=", id)
-		.executeTakeFirst();
+	const thread = await notesOf(db, id).execute();
+	const criticalDates = await criticalDatesOf(db, id).execute();
+	const events = await eventsOf(db, id).execute();
+	const actions = await actionsOf(db, id).execute();
+	const activities = await activitiesOf(db, id).execute();
+	const emails = await emailsOf(db, id).execute();
+	const participants = await participantsOf(db, id).execute();
+	const premises = await premisesOf(db, id).execute();
+	const rounds = await negotiationRoundsOf(db, id).execute();
+	const documents = await documentsOf(db, id).execute();
+	const lease = await currentLeaseOf(db, id).executeTakeFirst();
 	const checklist = await readChecklist(
 		db,
-		{ ...record, id },
+		{
+			id,
+			owner: record.owner,
+			type: record.type,
+			invoiced_on: record.invoiced_on,
+		},
 		lease ?? null,
 		criticalDates,
 	);
@@ -230,14 +66,9 @@ export async function readDealDetail(
 		deal_id: id,
 		...record,
 		vendors,
-		...("operating_state" in record
-			? { phase_change: phaseChange ?? null }
-			: {}),
+		...(live ? { phase_change: phaseChange ?? null } : {}),
 		phase_started_on: phaseStartedOn(phaseStarts),
-		short_name: shortName({
-			...record,
-			market: "city" in record ? record.city : null,
-		}),
+		short_name: shortName({ ...record, market: live?.city ?? null }),
 		thread: thread.slice(0, HISTORY_CAP),
 		thread_truncated: thread.length > HISTORY_CAP,
 		critical_dates: criticalDates,
@@ -245,7 +76,9 @@ export async function readDealDetail(
 		item_schema_version: "deal-items.v1",
 		items: actions
 			.filter(
-				(a) => a.title && !["dropped", "expired"].includes(String(a.status)),
+				(a) =>
+					a.title &&
+					!RETIRED_ITEM_STATUSES.some((status) => status === a.status),
 			)
 			.map(({ id, title, due_on, status, bullets, source_ref }) => ({
 				id,
@@ -267,8 +100,191 @@ export async function readDealDetail(
 	});
 }
 
-function liveDeal(db: Kysely<DB>, id: string) {
-	return db
+const notesOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_note")
+		.select((eb) => [
+			"id",
+			"kind",
+			"text",
+			"actor",
+			asText(eb.ref("created_at")).as("created_at"),
+		])
+		.where("deal_id", "=", deal)
+		.orderBy("created_at", "desc")
+		.orderBy("id", "desc")
+		.limit(HISTORY_CAP + 1);
+
+const criticalDatesOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_critical_date")
+		.select((eb) => [
+			"id",
+			"kind",
+			asText(eb.ref("due_on")).as("due_on"),
+			"note",
+			"source",
+			"status",
+		])
+		.where("deal_id", "=", deal)
+		.orderBy("due_on")
+		.orderBy("id");
+
+const eventsOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_event")
+		.select((eb) => [
+			"id",
+			asText(eb.ref("recorded_at")).as("recorded_at"),
+			"actor",
+			"verb",
+			"field",
+			"old_value",
+			"new_value",
+		])
+		.where("subject_id", "=", deal)
+		.orderBy("recorded_at", "desc")
+		.orderBy("id", "desc")
+		.limit(HISTORY_CAP + 1);
+
+const actionsOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_action")
+		.select((eb) => [
+			"id",
+			"owner",
+			"description",
+			"item_title as title",
+			"item_bullets as bullets",
+			"source_ref",
+			asText(eb.ref("due_on")).as("due_on"),
+			"status",
+			"version",
+			asText(eb.ref("hold_until")).as("hold_until"),
+			asText(eb.ref("updated_at")).as("updated_at"),
+		])
+		.where("deal_id", "=", deal)
+		.orderBy("created_order")
+		.orderBy("id");
+
+const activitiesOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_activity as a")
+		.select((eb) => [
+			"a.id",
+			asText(eb.ref("a.occurred_at")).as("occurred_at"),
+			"a.actor",
+			"a.kind",
+			"a.summary",
+			"a.detail",
+			"a.source",
+			"a.email_context",
+		])
+		.where("a.deal_id", "=", deal)
+		.orderBy("a.occurred_at", "desc")
+		.orderBy("a.id", "desc")
+		.limit(HISTORY_CAP + 1);
+
+const emailsOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_activity")
+		.select((eb) => [
+			"id",
+			sql<string | null>`email_context->>'conversation_id'`.as("thread"),
+			sql<string | null>`email_context->>'subject'`.as("subject"),
+			asText(eb.ref("occurred_at")).as("latest_message_at"),
+		])
+		.where("deal_id", "=", deal)
+		.where("kind", "in", ["email_in", "email_out"])
+		.where("email_context", "is not", null)
+		.orderBy("occurred_at", "desc")
+		.orderBy("id", "desc");
+
+const participantsOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_participant")
+		.select(["role", "name", "actor", "party_id"])
+		.where("deal_id", "=", deal)
+		.orderBy("role")
+		.orderBy("name");
+
+const premisesOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_premises")
+		.select([
+			"id",
+			"label",
+			"building_name",
+			"address",
+			"city",
+			"state",
+			"suite",
+			"area_amount",
+			"area_basis",
+		])
+		.where("deal_id", "=", deal)
+		.orderBy("created_at")
+		.orderBy("suite");
+
+const negotiationRoundsOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_negotiation")
+		.select((eb) => [
+			"round_no",
+			"side",
+			asText(eb.ref("proposed_on")).as("proposed_on"),
+			"rate_amount",
+			"rate_basis",
+			"rate_norm_sf_yr",
+			"ti_amount",
+			"ti_basis",
+			"free_rent_months",
+			"term_months",
+			"escalator",
+			"opex_note",
+			asText(eb.ref("expires_on")).as("expires_on"),
+			"note",
+			"source",
+		])
+		.where("deal_id", "=", deal)
+		.orderBy("round_no", "desc")
+		.orderBy("proposed_on", "desc")
+		.limit(ROUNDS_CAP);
+
+const documentsOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_document as d")
+		.select((eb) => [
+			"d.id",
+			"d.sent_status",
+			"d.lint_passed",
+			"d.leak_check_passed",
+			asText(eb.ref("d.prepared_at")).as("prepared_at"),
+			"d.note",
+		])
+		.where("d.deal_id", "=", deal)
+		.orderBy("d.prepared_at", "desc")
+		.limit(DOCUMENTS_CAP);
+
+const currentLeaseOf = (db: Kysely<DB>, deal: string) =>
+	db
+		.selectFrom("v_deal_room_current_lease")
+		.select((eb) => [
+			"id",
+			"version",
+			"status",
+			asText(eb.ref("executed_on")).as("executed_on"),
+			asText(eb.ref("commencement_on")).as("commencement_on"),
+			asText(eb.ref("expiration_on")).as("expiration_on"),
+			"options_note",
+			"evidence_kind",
+			"evidence_ref",
+			"source",
+		])
+		.where("deal_id", "=", deal);
+
+const liveDeal = (db: Kysely<DB>, id: string) =>
+	db
 		.selectFrom("v_deal_room_board as b")
 		.innerJoin("v_deal_reconciliation_read as r", "r.id", "b.id")
 		.innerJoin(
@@ -317,12 +333,10 @@ function liveDeal(db: Kysely<DB>, id: string) {
 			"ce.client_version",
 			"ce.prospect_engagement_status",
 		])
-		.where("b.id", "=", id)
-		.executeTakeFirst();
-}
+		.where("b.id", "=", id);
 
-function archivedDeal(db: Kysely<DB>, id: string) {
-	return db
+const archivedDeal = (db: Kysely<DB>, id: string) =>
+	db
 		.selectFrom("v_deal_board as b")
 		.innerJoin("v_deal_reconciliation_read as r", "r.id", "b.id")
 		.innerJoin(
@@ -330,6 +344,8 @@ function archivedDeal(db: Kysely<DB>, id: string) {
 			"ce.client_id",
 			"b.client_id",
 		)
+		// Unlike the board's closed list, the old system's archived read joins
+		// every client account row, sub-client or not.
 		.leftJoin("v_client_account as a", "a.client_id", "b.client_id")
 		.select((eb) => [
 			"b.id",
@@ -359,9 +375,7 @@ function archivedDeal(db: Kysely<DB>, id: string) {
 			"ce.client_version",
 			"ce.prospect_engagement_status",
 		])
-		.where("b.id", "=", id)
-		.executeTakeFirst();
-}
+		.where("b.id", "=", id);
 
 function latestPerThread(
 	emails: {

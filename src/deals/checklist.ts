@@ -27,11 +27,16 @@ const ANY = null;
 const LEASED: DealType[] = ["lease", "renewal"];
 const OWNED: DealType[] = ["purchase", "land"];
 type Source = (typeof SOURCES)[number];
+type RecordSource = { request?: string; record_verb: string };
+const recordedBy = (record_verb: string): RecordSource => ({
+	request: "per-deal standard checklist",
+	record_verb,
+});
 type Row = [
 	id: string,
 	label: string,
 	types: DealType[] | null,
-	source: Source | "record-deal-invoice" | "record-commission-receipt",
+	source: Source | RecordSource,
 ];
 // biome-ignore format: one row per item reads as a table.
 const PHASES: { id: string; label: string; rows: Row[] }[] = [
@@ -104,8 +109,8 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 		id: "invoice",
 		label: "Invoice",
 		rows: [
-			["invoice_recorded", "Invoice recorded", ANY, "record-deal-invoice"],
-			["commission_received", "Commission receipt recorded", ANY, "record-commission-receipt"],
+			["invoice_recorded", "Invoice recorded", ANY, recordedBy("record-deal-invoice")],
+			["commission_received", "Commission receipt recorded", ANY, recordedBy("record-commission-receipt")],
 		],
 	},
 ];
@@ -128,7 +133,7 @@ type Item = {
 	evidence_ref: string | null;
 	owner: string | null;
 	document_type: string | null;
-	source: Source | { request?: string; record_verb: string };
+	source: Source | RecordSource;
 	request?: Request;
 };
 type Deal = {
@@ -272,12 +277,9 @@ export function checklistOf(facts: Facts) {
 		sources: SOURCES,
 		observed_on: facts.today,
 	};
-	if (!cited)
-		return { ...head, phases: [], due_items: [], requests_state: "current" };
-
 	const evidence = evidenceOf(facts);
 	const requests = new Map(facts.requests.map((r) => [r.row_key, r]));
-	const phases = PHASES.map(({ id, label, rows }) => ({
+	const phases = (cited ? PHASES : []).map(({ id, label, rows }) => ({
 		id,
 		label,
 		items: [
@@ -293,13 +295,7 @@ export function checklistOf(facts: Facts) {
 							evidence_ref: null,
 							owner: facts.deal.owner || null,
 							document_type: NOT_DOCUMENTS.has(itemId) ? null : itemId,
-							source:
-								typeof source === "string"
-									? {
-											request: "per-deal standard checklist",
-											record_verb: source,
-										}
-									: source,
+							source,
 						},
 						evidence.get(itemId),
 						requests.get(itemId),

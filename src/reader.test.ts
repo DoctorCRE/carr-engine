@@ -164,7 +164,7 @@ test("the reader login reads the board and a deal and changes nothing", () =>
 				[[seeded.deal, "Example Reader Deal", "2030-01-15"]],
 			);
 			const detail = await readSnapshot(login, (db) =>
-				readDealDetail(db, seeded.deal, seeded.actor),
+				readDealDetail(db, seeded.deal),
 			);
 			assert.ok("deal_id" in detail, JSON.stringify(detail));
 			assert.equal(detail.deal_id, seeded.deal);
