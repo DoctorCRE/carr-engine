@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
+import { readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
 import { readCaptureQueue } from "./deals/capture-queue.ts";
@@ -26,6 +27,8 @@ import { url } from "./test-rollback.ts";
 const readable = [
 	"actor",
 	"client",
+	"client_status",
+	"client_type",
 	"commission",
 	"deal",
 	"doctrine_section",
@@ -206,7 +209,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory and reasons to reach out and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out and the client list and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -280,6 +283,30 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				coverage: "recorded_geographies_only",
 				submarkets: [],
 			});
+			const clients = await readSnapshot(login, (db) =>
+				readClientList(
+					db,
+					seeded.actor,
+					{
+						dataset: "clients",
+						scope: "team",
+						q: "Example",
+						owner: "all",
+						territory: null,
+						sort: "name",
+						page: 1,
+						page_size: 25,
+						status: null,
+						type: null,
+						pipeline: "any",
+					},
+					{ observedAt: new Date(), correlationId: "example" },
+				),
+			);
+			assert.deepEqual(
+				clients.rows.map((r) => [r.name, r.owned_by_viewer]),
+				[["Example Clinic", false]],
+			);
 			await withAdmin(
 				(admin) =>
 					admin.query(`insert into practice_origination_feed (source) values ('nppes');
