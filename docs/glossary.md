@@ -35,11 +35,6 @@ _Accept_: location
 _Avoid_: sub-client, child client, line item
 _Database_: a `client` whose party's `org_id` points at the national account's organization; `v_client_account.is_sub_client`.
 
-**Contact**:
-A person we deal with at a client or a vendor.
-_Avoid_: party, person record
-_Database_: `party` with `kind = 'person'`; `deal_participant` with role `client_contact`; the `contact` object in `v_deal_room_vendor`.
-
 **Vendor**:
 An individual or company who plays a role in the transaction or provides services to our clients: lender, contractor, architect, consultant, attorney, title, inspector, and so on. The deal shows each vendor's company and contact under its role.
 _Avoid_: service provider, party, partner
@@ -105,35 +100,17 @@ _Avoid_: territory, submarket
 _Database_: `deal.city`, shown as `market` in `v_deal_room_board`.
 _Engine_: `market` on the board; the deal page renames it back to `city`.
 
-**Next step**:
-The one thing that has to happen next on a deal, with its date. A deal without both is missing its next step.
-_Avoid_: next action, task, to-do
-_Database_: `next_step` and `next_date` in `v_deal_room_board`, built from `next_action` and `deal_note` (kind `next_step`); `deal.next_date`.
-_Engine_: `next_step`, `next_date`, `next_step_required`; open actions also appear as `open_actions` and `next_actions`.
-
 **Critical date**:
 A date in the deal or its lease that must not be missed, such as a due-diligence deadline or a lease expiration.
 _Avoid_: deadline, milestone, key date
 _Database_: `critical_date`; `v_deal_room_critical_date`.
 _Engine_: `critical_dates`.
 
-**Flagged for attention**:
-A deal a partner has marked as needing a look now.
-_Avoid_: blocker, urgent, hot
-_Database_: `deal.attention`.
-_Engine_: `attention`.
-
 **Parked**:
 A deal that is not active work for now, with a reason. Parking keeps the deal; reviving it makes it active again. A paused deal is parked.
 _Avoid_: on hold, inactive, archived, paused
 _Database_: `deal.operating_state` (`active` or `parked`), `parking_reason` (`prospect_never_active`, `client_paused`, `other`), `parking_note`, `parked_at`, `parked_by`.
 _Engine_: `operating_state`.
-
-**Outcome**:
-How a finished deal ended: won or lost. Paused is not a finished outcome; a paused deal is parked. A closed deal also carries its closing date, and its invoice date once it is billed.
-_Avoid_: result, status, disposition
-_Database_: `deal.outcome`, whose check allows `won`, `lost` and `paused`; `deal.closed_on`, `deal.invoiced_on`, `deal.won_value`.
-_Engine_: `closed_deals` and `lost_deals` on the board.
 
 **Pipeline call**:
 A sitting where a partner goes through the open deals and marks each reviewed or skipped.
