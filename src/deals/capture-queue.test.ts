@@ -60,7 +60,7 @@ async function seed(tx: Kysely<DB>) {
 // Sibling inserts' foreign keys are checked at the end of the statement.
 const seedDeals = (tx: Kysely<DB>, a: string) =>
 	sql`with cs as (insert into contact_state (slug, label, contactable, sort)
-		values ('active', 'Example', true, 1) on conflict do nothing),
+		values ('active', 'Example', true, 1)),
 	t as (insert into deal_type_ref (slug, label, sort) values ('capture-lease', 'Example', 1)),
 	ph as (insert into deal_phase (slug, label) values ('capture-open', 'Example')),
 	p as (insert into party (kind, name, created_by, updated_by)
@@ -76,32 +76,31 @@ test("pending candidates answer in the old keys, by confidence, then time, then 
 	withRollback(async (tx) => {
 		const { actor, candidate, live } = await seed(tx);
 		await seedDeals(tx, actor);
-		const payload = (value: object) => JSON.stringify(value);
 		await candidate(live, {
 			id: id(11),
 			confidence: "0.9",
 			created_at: "2026-03-08 07:31:00+00",
-			payload: payload({ value: "Example step", deal: id(90) }),
+			payload: JSON.stringify({ value: "Example step", deal: id(90) }),
 		});
 		await candidate(live, {
 			id: id(13),
 			confidence: "0.90",
 			created_at: "2026-03-08 07:30:00.123456+00",
-			payload: payload({ ref: id(91) }),
+			payload: JSON.stringify({ ref: id(91) }),
 		});
 		await candidate(live, {
 			id: id(12),
 			confidence: "0.9",
 			created_at: "2026-03-08 07:30:00.123456+00",
 			kind: "phase_move",
-			payload: payload({ deal: "example capture deal%" }),
+			payload: JSON.stringify({ deal: "example capture deal%" }),
 		});
 		await candidate(live, {
 			id: id(14),
 			confidence: "0.5",
 			created_at: "2026-03-08 07:00:00+00",
 			kind: "activity",
-			payload: payload({ text: "Example call" }),
+			payload: JSON.stringify({ text: "Example call" }),
 			evidence_quote: "",
 		});
 		const row = (n: number, kind: string, rest: string) =>
