@@ -39,5 +39,4 @@ export const findShape = {
 			sortedBy: ["client_ref", "name"],
 		},
 	},
-	ignore: ["correlation_id"],
 } as const;

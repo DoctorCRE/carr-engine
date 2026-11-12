@@ -8,6 +8,13 @@ import {
 	detailShape,
 	feedShape,
 } from "./deals-shapes.ts";
+import {
+	leadBoardShape,
+	leadShape,
+	quietShape,
+	reasonsShape,
+	territoryShape,
+} from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
 
 export class StopRun extends Error {}
@@ -18,7 +25,12 @@ export type Ask =
 	| { read: "client fit" }
 	| { read: "capture queue" }
 	| { read: "feed"; start: string }
-	| { read: "find"; query: string };
+	| { read: "find"; query: string }
+	| { read: "lead board" }
+	| { read: "lead"; lead: string }
+	| { read: "quiet follow-ups" }
+	| { read: "territory" }
+	| { read: "reasons to reach out" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -50,7 +62,28 @@ const SHAPES = {
 	"capture queue": captureQueueShape,
 	feed: feedShape,
 	find: findShape,
+	"lead board": leadBoardShape,
+	lead: leadShape,
+	"quiet follow-ups": quietShape,
+	territory: territoryShape,
+	"reasons to reach out": reasonsShape,
 };
+
+// Each opened lead re-sends the whole board, so a fixed number spread over the
+// board's order is opened.
+const LEADS_OPENED = 25;
+
+function leadsOn(board: unknown) {
+	const leads =
+		isRecord(board) && Array.isArray(board.leads) ? board.leads : [];
+	const ids = leads.flatMap((lead) =>
+		isRecord(lead) && typeof lead.id === "string" && UUID.test(lead.id)
+			? [lead.id]
+			: [],
+	);
+	// Picks exactly LEADS_OPENED evenly spaced IDs, or all when fewer.
+	return ids.filter((_, n) => (n * LEADS_OPENED) % ids.length < LEADS_OPENED);
+}
 
 // Each find costs one old read, so the names asked stay few. The probes are
 // the wildcards the old query passed through unescaped, and a blank.
@@ -88,6 +121,11 @@ export async function compareDeals(
 		// Every read of the feed starts here. A write between the reads shows as an unsettled feed.
 		{ read: "feed", start: feedStart(Date.now()) },
 		...PROBES.map((query) => ({ read: "find", query }) as const),
+		{ read: "lead board" },
+		// The app's inputs: no filters, and the first page of reasons.
+		{ read: "quiet follow-ups" },
+		{ read: "territory" },
+		{ read: "reasons to reach out" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
@@ -127,6 +165,8 @@ export async function compareDeals(
 				)
 					names++;
 			}
+		if (ask.read === "lead board")
+			for (const lead of leadsOn(old)) enqueue({ read: "lead", lead });
 		const settled = compareAnswers(first, second, shape);
 		if (settled.differences.length + settled.capAmbiguous.length > 0) {
 			run.outcomes.push({ ask, result: "unsettled" });
