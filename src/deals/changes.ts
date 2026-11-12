@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import { asText, type Reader } from "../reader.ts";
+import { UUID } from "../uuid.ts";
 
 type Cursor = { recorded_at: string; id: string };
 
@@ -8,10 +9,9 @@ const PLACEHOLDERS = new Set([
 	"sf_commission_placeholder",
 	"sf_close_date_placeholder",
 ]);
-// The old system's patterns. PostgreSQL checks the time itself when it casts.
+// The old system's pattern. PostgreSQL checks the time itself when it casts.
 const TIME =
 	/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}(:?\d{2})?|Z)?$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Both values are ASCII, so btoa needs no UTF-8 step.
 const encodeCursor = ({ recorded_at, id }: Cursor) =>
