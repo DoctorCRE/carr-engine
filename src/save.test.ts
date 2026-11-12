@@ -216,7 +216,8 @@ test("saves", (t) =>
 					gone: null,
 					deal_id: "y".repeat(200),
 					summary: "y".repeat(201),
-					expires_at: "2030-01-15T18:00:00.000Z",
+					expires_at: new Date("2030-01-15T18:00:00.000Z"),
+					noted_at: "2030-01-15T18:00:00.000Z",
 					nested: {},
 					note: "x".repeat(16_400),
 				};
@@ -229,6 +230,7 @@ test("saves", (t) =>
 							count: 2,
 							gone: null,
 							deal_id: long.deal_id,
+							noted_at: long.noted_at,
 							response_omitted: {
 								chars: JSON.stringify(long).length,
 								reread:
@@ -304,9 +306,17 @@ test("saves", (t) =>
 
 const DOOR = {
 	verb: "example-save",
-	fields: ["idempotency_key", "slug", "note"],
+	fields: {
+		idempotency_key: {},
+		slug: { nullable: true },
+		level: { allowed: ["first", "second"] },
+		urgent: { type: "boolean" },
+		count: { type: "number" },
+		note: {},
+		detail: { type: "object", fields: { label: {}, size: { type: "number" } } },
+	},
 	required: ["idempotency_key", "slug"],
-};
+} as const;
 
 test("a save checks its door and keeps one correlation id", (t) =>
 	withSnapshot(async (database) => {
@@ -352,10 +362,32 @@ test("a save checks its door and keeps one correlation id", (t) =>
 				values (${slug}, ${kind}, 'Example')`);
 
 		await t.test("in the old door's order", async () => {
+			const vocabulary = "value_not_in_declared_vocabulary";
 			for (const [body, error, fields] of [
+				[
+					{ level: "third", actor: "x" },
+					"caller_authority_field_forbidden",
+					["actor"],
+				],
+				[{ level: "third", other: 1 }, vocabulary, ["level"]],
+				[{ level: 1 }, vocabulary, ["level"]],
 				[{ slug: "x", other: 1 }, "unregistered_operation_fields", ["other"]],
-				[{ note: "</note>" }, "tool_call_markup_in_value", ["note"]],
+				[{ urgent: "yes", count: "</count>" }, "invalid_boolean", ["urgent"]],
+				[{ count: "</count>" }, "tool_call_markup_in_value", ["count"]],
+				[{ count: " " }, "invalid_number", ["count"]],
+				[{ detail: { label: "</label>" } }, "tool_call_markup_in_value", []],
+				[{ detail: { size: "x" } }, "invalid_number", []],
 				[{ note: "x" }, "missing_required", ["idempotency_key", "slug"]],
+				[
+					{ idempotency_key: null, slug: "x" },
+					"missing_required",
+					["idempotency_key"],
+				],
+				[
+					{ idempotency_key: randomUUID(), slug: "" },
+					"missing_required",
+					["slug"],
+				],
 				[
 					{ idempotency_key: "example", slug: "x" },
 					"invalid_idempotency_key",
@@ -364,7 +396,15 @@ test("a save checks its door and keeps one correlation id", (t) =>
 			] as const) {
 				const answer = await answered(post(body, saved));
 				const { correlation_id, hint, ...rest } = answer.body;
-				assert.deepEqual([answer.status, rest], [400, { error, fields }]);
+				assert.deepEqual(
+					[answer.status, rest],
+					error === vocabulary
+						? [400, { error, allowed_values: ["first", "second"], fields }]
+						: [
+								error === "caller_authority_field_forbidden" ? 403 : 400,
+								{ error, fields },
+							],
+				);
 				assert.equal(correlation_id, answer.id);
 			}
 			const empty = await answered(post([], saved));
@@ -373,6 +413,53 @@ test("a save checks its door and keeps one correlation id", (t) =>
 				[400, { error: "invalid_json" }],
 			);
 		});
+
+		await t.test(
+			"values reach the change and the request hash as their declared types",
+			async () => {
+				const seen: JsonObject[] = [];
+				const echo: Change = async (_, args) => {
+					seen.push(args);
+					return { ok: true };
+				};
+				const key = randomUUID();
+				const sent = { idempotency_key: key, slug: null, level: null };
+				const first = await answered(
+					post(
+						{
+							...sent,
+							urgent: " TRUE ",
+							count: " 5 ",
+							detail: { size: "7", label: "x" },
+						},
+						echo,
+					),
+				);
+				const retry = await answered(
+					post(
+						{
+							...sent,
+							urgent: true,
+							count: 5,
+							detail: { label: "x", size: 7 },
+						},
+						echo,
+					),
+				);
+				assert.deepEqual(
+					[first.body, retry.body],
+					[{ ok: true }, { replayed: true, ok: true }],
+				);
+				assert.deepEqual(seen, [
+					{
+						...sent,
+						urgent: true,
+						count: 5,
+						detail: { size: 7, label: "x" },
+					},
+				]);
+			},
+		);
 
 		await t.test(
 			"a statement the database refuses gets the old named refusal",
@@ -387,6 +474,13 @@ test("a save checks its door and keeps one correlation id", (t) =>
 					[actor("partner_one", "human"), 400, refusedStatement],
 					[actor("partner_two", "robot"), 400, refusedStatement],
 					[statement(sql`select 'example'::uuid`), 400, refusedStatement],
+					[
+						statement(
+							sql`do $$ begin raise exception using errcode = '23514', column = 'label'; end $$`,
+						),
+						400,
+						{ error: "invalid_field_value", fields: ["label"] },
+					],
 					[
 						statement(sql`select 1 / 0`),
 						500,
