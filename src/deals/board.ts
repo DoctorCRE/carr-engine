@@ -32,7 +32,7 @@ export async function readBoard(
 ) {
 	const scope = workspace || "all";
 	const account = account_client_id || null;
-	const openDeals = db
+	const deals = await db
 		.selectFrom("v_open_deal_room_board as b")
 		.innerJoin("v_deal_reconciliation_read as r", "r.id", "b.id")
 		.innerJoin(
@@ -166,7 +166,7 @@ export async function readBoard(
 		.orderBy("b.name")
 		.execute();
 
-	const closedDeals = db
+	const closed = await db
 		.selectFrom("v_deal_board as b")
 		.leftJoin("v_client_account as a", (join) =>
 			join
@@ -211,7 +211,7 @@ export async function readBoard(
 		.orderBy("b.id")
 		.execute();
 
-	const accounts = db
+	const accountRows = await db
 		.selectFrom("v_deal_room_account as a")
 		.innerJoin(
 			"v_client_engagement_status as ce",
@@ -243,7 +243,7 @@ export async function readBoard(
 		.orderBy("a.account_name")
 		.execute();
 
-	const session = db
+	const openSession = await db
 		.selectFrom("v_deal_room_session")
 		.select((q) => [
 			"session_id",
@@ -259,12 +259,6 @@ export async function readBoard(
 		.limit(1)
 		.executeTakeFirst();
 
-	const [deals, closed, accountRows, openSession] = await Promise.all([
-		openDeals,
-		closedDeals,
-		accounts,
-		session,
-	]);
 	return {
 		schema_version: "local-deals-board.v2",
 		actor,
