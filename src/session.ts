@@ -10,6 +10,14 @@ export type SessionEnv = {
 	Variables: { partner: Partner };
 };
 
+// The old system's bodies: its browser sign-in refusal, and its Worker's
+// answer when its session store threw.
+const REFUSALS = {
+	401: () => ({ error: "unauthorized", state: "sign_in_required" }),
+	403: () => ({ error: "forbidden" }),
+	503: () => ({ error: "internal_error", correlation_id: crypto.randomUUID() }),
+};
+
 const nonBlank = (value: unknown): value is string =>
 	typeof value === "string" && value.trim() !== "";
 
@@ -55,21 +63,20 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 		for (const value of renewed)
 			c.header("Set-Cookie", value, { append: true });
 	};
-	const refuse = (error: string, status: 401 | 403 | 503) => {
+	const refuse = (status: keyof typeof REFUSALS) => {
 		protect();
-		return c.json({ error }, status);
+		return c.json(REFUSALS[status](), status);
 	};
 	const unavailable = (kind: string) => {
 		console.warn("sign-in check unavailable:", kind);
-		return refuse("sign_in_unavailable", 503);
+		return refuse(503);
 	};
 	const cookie = c.req
 		.header("Cookie")
 		?.split(";")
 		.map((part) => part.trim())
 		.find((part) => part.startsWith(`${SESSION_COOKIE}=`));
-	if (!cookie || cookie === `${SESSION_COOKIE}=`)
-		return refuse("unauthorized", 401);
+	if (!cookie || cookie === `${SESSION_COOKIE}=`) return refuse(401);
 
 	const url = new URL(c.req.url);
 	const browserOrigin = url.origin;
@@ -92,7 +99,7 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 	} catch (error) {
 		return unavailable(failureKind(error));
 	}
-	if (response.status === 401) return refuse("unauthorized", 401);
+	if (response.status === 401) return refuse(401);
 	if (response.status !== 200) return unavailable(`status ${response.status}`);
 	let session: Session;
 	try {
@@ -113,7 +120,7 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 			!token ||
 			!(await equalTokens(session.csrf_token, token))
 		)
-			return refuse("forbidden", 403);
+			return refuse(403);
 	}
 	c.set("partner", session.actor);
 	await next();

@@ -41,5 +41,7 @@ export async function readInvoiceTracker(db: Reader, partner: string) {
 export const invoices = new Hono<DatabaseEnv>();
 
 invoices.get("/invoices", (c) =>
-	answer(c, (db) => readInvoiceTracker(db, c.get("partner").slug)),
+	answer(c, "read-invoice-tracker", (db) =>
+		readInvoiceTracker(db, c.get("partner").slug),
+	),
 );

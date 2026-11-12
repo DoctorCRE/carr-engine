@@ -1,5 +1,4 @@
-const strict = (id: string) => ({ id, sortedBy: [] });
-const ignore = ["correlation_id"];
+import { strict } from "./answers.ts";
 
 const vendors = strict("party_id");
 const items = strict("id");
@@ -17,7 +16,6 @@ export const boardShape = {
 		"accounts[]": { id: "account_client_id", sortedBy: ["account_name"] },
 	},
 	opaque: ["deals[].items[].bullets", "deals[].phase_started_on"],
-	ignore,
 };
 
 const checklistItems = strict("id");
@@ -52,23 +50,19 @@ export const detailShape = {
 		"events[].old_value",
 		"events[].new_value",
 	],
-	ignore,
 };
 
 // Profiles have no ID but a total order, so they compare by position.
 export const clientFitShape = {
 	rows: { "profiles[].evidence[]": strict("deal_id") },
-	ignore,
 };
 
-// Entries have no single ID: a deal with several commissions repeats its
-// deal_id, matched in order.
-export const invoicesShape = {
-	rows: {
-		"entries[]": {
-			id: "deal_id",
-			sortedBy: ["name", "commission_invoiced_on", "commission_id"],
-		},
-	},
-	ignore: ["observed_at"],
+export const captureQueueShape = {
+	rows: { "candidates[]": strict("id") },
+	opaque: ["candidates[].payload"],
+};
+
+export const feedShape = {
+	rows: { "events[]": strict("id") },
+	opaque: ["events[].old_value", "events[].new_value"],
 };

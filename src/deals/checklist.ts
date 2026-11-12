@@ -1,4 +1,5 @@
 import { type Kysely, sql } from "kysely";
+import { isoMillis } from "../answer.ts";
 import type { DB } from "../database.d.ts";
 import { asText } from "../reader.ts";
 
@@ -328,12 +329,9 @@ const requestsOf = (db: Kysely<DB>, deal: string) =>
 			"satisfied",
 			"receipts",
 			"status",
-			// The old answer sent this as a JavaScript Date.
-			sql<
-				string | null
-			>`to_char(fulfilled_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`.as(
-				"fulfilled_at",
-			),
+			isoMillis(sql.ref("fulfilled_at"))
+				.$castTo<string | null>()
+				.as("fulfilled_at"),
 			"fulfilled_by",
 			"evidence_attachment_id",
 			"evidence_filename",

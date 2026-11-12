@@ -1,6 +1,6 @@
 import { askers, pause } from "../src/compare/ask.ts";
 import { report } from "../src/compare/report.ts";
-import { compareReads, exitCode } from "../src/compare/run.ts";
+import { compareDeals, exitCode } from "../src/compare/run.ts";
 import { readSettings, SettingsError } from "../src/compare/settings.ts";
 
 let settings: ReturnType<typeof readSettings>;
@@ -17,7 +17,7 @@ try {
 const { askEngine, askOld } = askers(settings.app, settings.session, fetch);
 
 try {
-	const run = await compareReads(askEngine, askOld, pause);
+	const run = await compareDeals(askEngine, askOld, pause);
 	process.stdout.write(report(settings.target, run));
 	process.exitCode = exitCode(run);
 } catch {

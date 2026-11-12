@@ -237,6 +237,21 @@ CREATE FUNCTION public.org_identity_key(p_name text) RETURNS text
   end
 $$;
 
+CREATE FUNCTION public.practice_address_key(address text) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$
+  select string_agg(case token
+    when 'street' then 'st' when 'avenue' then 'ave' when 'road' then 'rd'
+    when 'boulevard' then 'blvd' when 'drive' then 'dr' when 'lane' then 'ln'
+    when 'court' then 'ct' when 'place' then 'pl' when 'parkway' then 'pkwy'
+    when 'highway' then 'hwy' when 'suite' then 'ste'
+    when 'apartment' then 'apt' when 'floor' then 'fl' else token end, ' ' order by ord)
+  from regexp_split_to_table(
+    regexp_replace(regexp_replace(lower(address), '\m([0-9]{5})-[0-9]{4}\M', '\1', 'g'),
+      '[^a-z0-9]+', ' ', 'g'), ' +') with ordinality as parts(token,ord)
+  where token <> '';
+$$;
+
 CREATE FUNCTION public.revise_deal_client_need() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -792,6 +807,36 @@ CREATE TABLE public.campaign (
     CONSTRAINT campaign_window_check CHECK (((ends_on IS NULL) OR (ends_on >= starts_on)))
 );
 
+CREATE TABLE public.capture_candidate (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    session_id uuid NOT NULL,
+    idempotency_key text NOT NULL,
+    batch_hash text NOT NULL,
+    item_index integer NOT NULL,
+    kind text NOT NULL,
+    payload jsonb NOT NULL,
+    evidence_quote text NOT NULL,
+    confidence numeric NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    resolved_by uuid,
+    resolution_note text,
+    resulting_ref text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    resolved_at timestamp with time zone,
+    applied_automatically boolean DEFAULT false NOT NULL,
+    undone_at timestamp with time zone,
+    undone_by uuid,
+    CONSTRAINT capture_candidate_automatic_check CHECK (((NOT applied_automatically) OR (status = 'confirmed'::text))),
+    CONSTRAINT capture_candidate_check CHECK ((((status = 'pending'::text) AND (resolved_by IS NULL) AND (resolved_at IS NULL) AND (resulting_ref IS NULL)) OR ((status = 'skipped'::text) AND (resolved_by IS NOT NULL) AND (resolved_at IS NOT NULL) AND (resulting_ref IS NULL)) OR ((status = 'confirmed'::text) AND (resolved_by IS NOT NULL) AND (resolved_at IS NOT NULL) AND (resulting_ref IS NOT NULL)))),
+    CONSTRAINT capture_candidate_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
+    CONSTRAINT capture_candidate_evidence_quote_check CHECK ((array_length(regexp_split_to_array(btrim(evidence_quote), '\s+'::text), 1) <= 15)),
+    CONSTRAINT capture_candidate_item_index_check CHECK ((item_index >= 0)),
+    CONSTRAINT capture_candidate_kind_check CHECK ((kind = ANY (ARRAY['phase_move'::text, 'next_step'::text, 'new_deal'::text, 'activity'::text, 'meeting_record'::text]))),
+    CONSTRAINT capture_candidate_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
+    CONSTRAINT capture_candidate_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'skipped'::text]))),
+    CONSTRAINT capture_candidate_undo_check CHECK ((((undone_at IS NULL) = (undone_by IS NULL)) AND ((undone_at IS NULL) OR applied_automatically)))
+);
+
 CREATE TABLE public.capture_post_call_action (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     candidate_id uuid NOT NULL,
@@ -911,6 +956,18 @@ CREATE TABLE public.client_status (
 CREATE TABLE public.client_type (
     slug text NOT NULL,
     label text NOT NULL
+);
+
+CREATE TABLE public.code_subject (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    repo text NOT NULL,
+    commit_sha text,
+    label text,
+    note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid,
+    CONSTRAINT code_subject_repo_shape CHECK (((repo = lower(btrim(repo))) AND (repo ~ '^[a-z0-9._-]+/[a-z0-9._-]+$'::text))),
+    CONSTRAINT code_subject_sha_shape CHECK (((commit_sha IS NULL) OR (commit_sha ~ '^[0-9a-f]{7,40}$'::text)))
 );
 
 CREATE TABLE public.commission (
@@ -1799,6 +1856,53 @@ CREATE TABLE public.party_link_kind (
     sort integer NOT NULL
 );
 
+CREATE TABLE public.practice_origination_event (
+    id bigint NOT NULL,
+    source text NOT NULL,
+    record_key text NOT NULL,
+    fingerprint text NOT NULL,
+    npi text,
+    name text NOT NULL,
+    city text NOT NULL,
+    state text NOT NULL,
+    kind text NOT NULL,
+    evidence_date date NOT NULL,
+    date_basis text NOT NULL,
+    source_url text NOT NULL,
+    facts jsonb NOT NULL,
+    published_on date NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    recorded_by uuid NOT NULL,
+    document_number text,
+    filing_on date,
+    CONSTRAINT practice_origination_event_date_basis_check CHECK ((date_basis = ANY (ARRAY['enumeration'::text, 'registry_update'::text, 'publication'::text, 'filing'::text]))),
+    CONSTRAINT practice_origination_event_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT practice_origination_event_identity_check CHECK ((((source = ANY (ARRAY['nppes'::text, 'pecos'::text])) AND (npi IS NOT NULL) AND (document_number IS NULL) AND (filing_on IS NULL) AND (date_basis <> 'filing'::text) AND (kind <> 'formation_candidate'::text)) OR ((source = 'formation-fl'::text) AND (npi IS NULL) AND (document_number IS NOT NULL) AND (document_number ~ '^[A-Z0-9]{6}([A-Z0-9]{6})?$'::text) AND (record_key = document_number) AND (state = 'FL'::text) AND (filing_on IS NOT NULL) AND (evidence_date = filing_on) AND (filing_on <= published_on) AND (date_basis = 'filing'::text) AND (kind = 'formation_candidate'::text)))),
+    CONSTRAINT practice_origination_event_kind_check CHECK ((kind = ANY (ARRAY['enumeration'::text, 'registry_update'::text, 'pecos_observation'::text, 'pecos_correction'::text, 'formation_candidate'::text]))),
+    CONSTRAINT practice_origination_event_npi_check CHECK ((npi ~ '^[0-9]{10}$'::text)),
+    CONSTRAINT practice_origination_event_state_check CHECK ((state = ANY (ARRAY['AL'::text, 'FL'::text])))
+);
+
+ALTER TABLE public.practice_origination_event ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.practice_origination_event_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+CREATE TABLE public.practice_origination_feed (
+    source text NOT NULL,
+    checkpoint text,
+    published_on date,
+    status text DEFAULT 'unavailable'::text NOT NULL,
+    detail text DEFAULT 'No successful import'::text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT practice_origination_feed_source_check CHECK ((source = ANY (ARRAY['nppes'::text, 'pecos'::text, 'formation-fl'::text]))),
+    CONSTRAINT practice_origination_feed_status_check CHECK ((status = ANY (ARRAY['available'::text, 'blocked'::text, 'unavailable'::text])))
+);
+
 CREATE TABLE public.premises (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     deal_id uuid,
@@ -2159,6 +2263,89 @@ UNION ALL
           WHERE (c.party_id = p.id)))) AND (NOT (EXISTS ( SELECT 1
            FROM public.vendor v
           WHERE (v.party_id = p.id)))));
+
+CREATE VIEW public.v_record_flag_subject AS
+ SELECT f.id AS flag_id,
+    f.subject_type,
+    f.subject_id,
+        CASE f.subject_type
+            WHEN 'campaign'::text THEN ( SELECT c.name
+               FROM public.campaign c
+              WHERE (c.id = f.subject_id))
+            WHEN 'platform'::text THEN ( SELECT m.label
+               FROM public.marketing_subject m
+              WHERE (m.id = f.subject_id))
+            WHEN 'pillar'::text THEN ( SELECT m.label
+               FROM public.marketing_subject m
+              WHERE (m.id = f.subject_id))
+            WHEN 'format'::text THEN ( SELECT m.label
+               FROM public.marketing_subject m
+              WHERE (m.id = f.subject_id))
+            WHEN 'repo'::text THEN ( SELECT COALESCE(k.label, k.repo) AS "coalesce"
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            WHEN 'commit'::text THEN ( SELECT COALESCE(k.label, ((k.repo || '@'::text) || "left"(k.commit_sha, 7))) AS "coalesce"
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            ELSE ( SELECT r.display_name
+               FROM public.v_ref_index r
+              WHERE ((r.subject_type = f.subject_type) AND (r.subject_id = f.subject_id))
+             LIMIT 1)
+        END AS subject_label,
+        CASE
+            WHEN (f.subject_type = ANY (ARRAY['campaign'::text, 'platform'::text, 'pillar'::text, 'format'::text])) THEN NULL::text
+            WHEN (f.subject_type = 'repo'::text) THEN ( SELECT k.repo
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            WHEN (f.subject_type = 'commit'::text) THEN ( SELECT ((k.repo || '@'::text) || k.commit_sha)
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            ELSE ( SELECT r.ref
+               FROM public.v_ref_index r
+              WHERE ((r.subject_type = f.subject_type) AND (r.subject_id = f.subject_id))
+             LIMIT 1)
+        END AS subject_ref,
+    f.kind,
+    COALESCE(((f.value ->> 'found'::text))::boolean, true) AS found,
+    (f.value ? 'proposes_correction'::text) AS proposes_correction,
+    f.value,
+    f.source,
+    f.observed_at,
+    f.expires_on,
+    ((f.expires_on IS NOT NULL) AND (f.expires_on < CURRENT_DATE)) AS expired,
+    a.slug AS recorded_by
+   FROM (public.record_flag f
+     LEFT JOIN public.actor a ON ((a.id = f.created_by)));
+
+CREATE VIEW public.v_calendar_capture_receipt AS SELECT actor_id, idempotency_key, response->>'activity_id' AS activity_id FROM public.tool_call WHERE verb = 'log-activity' AND idempotency_key LIKE 'calcap-%';
+
+CREATE VIEW public.v_capture_candidate_queue AS
+ SELECT c.id,
+    c.session_id,
+    c.kind,
+    c.payload,
+    c.evidence_quote,
+    c.confidence,
+    c.created_at,
+    COALESCE(direct_deal.name, named_deal.name) AS deal_name
+   FROM (((public.capture_candidate c
+     JOIN public.capture_session s ON ((s.id = c.session_id)))
+     LEFT JOIN public.deal direct_deal ON (((direct_deal.id)::text = COALESCE((c.payload ->> 'deal'::text), (c.payload ->> 'ref'::text)))))
+     LEFT JOIN LATERAL ( SELECT d.name
+           FROM public.deal d
+          WHERE (d.name ~~* COALESCE((c.payload ->> 'deal'::text), (c.payload ->> 'ref'::text)))
+          ORDER BY d.name
+         LIMIT 1) named_deal ON ((direct_deal.id IS NULL)))
+  WHERE ((c.status = 'pending'::text) AND (s.expires_at > now()));
+
+CREATE VIEW public.v_capture_session_status AS
+ SELECT id AS session_id,
+    device_id,
+    state,
+    started_at,
+    state_at
+   FROM public.capture_session s
+  WHERE (expires_at > now());
 
 CREATE VIEW public.v_client_account AS
  SELECT c.id AS client_id,
@@ -3335,6 +3522,46 @@ CREATE VIEW public.v_lead_workspace_stage_history AS
    FROM (public.v_lead_stage_transition e
      JOIN public.v_lead_workspace b ON ((b.id = e.lead_id)));
 
+CREATE VIEW public.v_party_graph AS
+ WITH party_ref AS (
+         SELECT DISTINCT ON (r.party_id) r.party_id,
+            r.ref
+           FROM ( SELECT c.party_id,
+                    c.roster_ref AS ref,
+                    1 AS pref
+                   FROM public.client c
+                UNION ALL
+                 SELECT v.party_id,
+                    v.vendor_ref,
+                    2
+                   FROM public.vendor v
+                UNION ALL
+                 SELECT l.party_id,
+                    l.registry_ref,
+                    3
+                   FROM public.lead l) r
+          ORDER BY r.party_id, (r.ref IS NULL), r.pref
+        )
+ SELECT fr.ref AS from_ref,
+    fp.name AS from_name,
+    tr.ref AS to_ref,
+    tp.name AS to_name,
+    pl.kind,
+    pl.note,
+    pl.created_at AS linked_at
+   FROM ((((public.party_link pl
+     JOIN public.party fp ON ((fp.id = pl.from_party)))
+     JOIN public.party tp ON ((tp.id = pl.to_party)))
+     LEFT JOIN party_ref fr ON ((fr.party_id = pl.from_party)))
+     LEFT JOIN party_ref tr ON ((tr.party_id = pl.to_party)));
+
+CREATE VIEW public.v_practice_origination_party_address AS
+ SELECT DISTINCT ON (subject_id) subject_id AS party_id,
+    (value ->> 'street_address'::text) AS street_address
+   FROM public.record_flag
+  WHERE ((subject_type = 'party'::text) AND (kind = 'address'::text) AND ((value ->> 'found'::text) = 'true'::text) AND ((value ->> 'epistemic_status'::text) = 'source_backed'::text) AND ((expires_on IS NULL) OR (expires_on >= CURRENT_DATE)))
+  ORDER BY subject_id, observed_at DESC, id DESC;
+
 CREATE VIEW public.v_requirement_request AS
  SELECT id,
     organization_tenant_id,
@@ -3629,6 +3856,12 @@ ALTER TABLE ONLY public.cadence_rule
 ALTER TABLE ONLY public.campaign
     ADD CONSTRAINT campaign_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.capture_candidate
+    ADD CONSTRAINT capture_candidate_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.capture_candidate
+    ADD CONSTRAINT capture_candidate_session_id_idempotency_key_item_index_key UNIQUE (session_id, idempotency_key, item_index);
+
 ALTER TABLE ONLY public.capture_post_call_action
     ADD CONSTRAINT capture_post_call_action_candidate_id_key UNIQUE (candidate_id);
 
@@ -3664,6 +3897,9 @@ ALTER TABLE ONLY public.client_type
 
 ALTER TABLE ONLY public.commission_allocation
     ADD CONSTRAINT commission_allocation_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.code_subject
+    ADD CONSTRAINT code_subject_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.commission
     ADD CONSTRAINT commission_pkey PRIMARY KEY (id);
@@ -3923,6 +4159,15 @@ ALTER TABLE ONLY public.party_link
 ALTER TABLE ONLY public.party
     ADD CONSTRAINT party_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_source_record_key_published_on_f_key UNIQUE (source, record_key, published_on, fingerprint);
+
+ALTER TABLE ONLY public.practice_origination_feed
+    ADD CONSTRAINT practice_origination_feed_pkey PRIMARY KEY (source);
+
 ALTER TABLE ONLY public.premises
     ADD CONSTRAINT premises_pkey PRIMARY KEY (id);
 
@@ -4056,6 +4301,8 @@ CREATE INDEX building_ownership_bldg_idx ON public.building_ownership USING btre
 CREATE UNIQUE INDEX campaign_name_uniq ON public.campaign USING btree (lower(btrim(name)));
 
 CREATE INDEX candidate_pool_declined_idx ON public.candidate_pool USING btree (declined_at) WHERE (status = 'declined'::text);
+
+CREATE INDEX capture_candidate_queue_idx ON public.capture_candidate USING btree (session_id, status, confidence DESC, created_at, id);
 
 CREATE INDEX capture_post_call_action_deal_history_idx ON public.capture_post_call_action USING btree (deal_id, accepted_at, id);
 
@@ -4200,6 +4447,8 @@ CREATE INDEX party_name_trgm ON public.party USING gin (name public.gin_trgm_ops
 CREATE UNIQUE INDEX party_org_identity_uniq ON public.party USING btree (public.org_identity_key(name)) WHERE ((kind = 'org'::text) AND (merged_into IS NULL) AND (deleted_at IS NULL) AND (public.org_identity_key(name) IS NOT NULL));
 
 CREATE UNIQUE INDEX party_ref_uniq ON public.party USING btree (ref);
+
+CREATE INDEX practice_origination_record ON public.practice_origination_event USING btree (source, record_key, id DESC);
 
 CREATE INDEX prospect_pool_county_idx ON public.candidate_pool USING btree (county);
 
@@ -4430,6 +4679,15 @@ ALTER TABLE ONLY public.candidate_pool
 
 ALTER TABLE ONLY public.candidate_pool
     ADD CONSTRAINT candidate_pool_declined_by_fkey FOREIGN KEY (declined_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.capture_candidate
+    ADD CONSTRAINT capture_candidate_resolved_by_fkey FOREIGN KEY (resolved_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.capture_candidate
+    ADD CONSTRAINT capture_candidate_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.capture_session(id);
+
+ALTER TABLE ONLY public.capture_candidate
+    ADD CONSTRAINT capture_candidate_undone_by_fkey FOREIGN KEY (undone_by) REFERENCES public.actor(id);
 
 ALTER TABLE ONLY public.capture_post_call_action
     ADD CONSTRAINT capture_post_call_action_accepted_by_fkey FOREIGN KEY (accepted_by) REFERENCES public.actor(id);
@@ -4982,6 +5240,12 @@ ALTER TABLE ONLY public.party
 
 ALTER TABLE ONLY public.party
     ADD CONSTRAINT party_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_recorded_by_fkey FOREIGN KEY (recorded_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_source_fkey FOREIGN KEY (source) REFERENCES public.practice_origination_feed(source);
 
 ALTER TABLE ONLY public.premises
     ADD CONSTRAINT premises_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);

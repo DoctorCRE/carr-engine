@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { compareAnswers } from "./answers.ts";
-import { clientFitShape } from "./shapes.ts";
+import { clientFitShape } from "./deals-shapes.ts";
+import { leadBoardShape, leadShape, reasonsShape } from "./leads-shapes.ts";
+import { findShape } from "./search-shape.ts";
 
 const shape = {
 	rows: {
@@ -35,7 +37,7 @@ const board = (deals: object[], extra: object = {}) => ({
 });
 const compare = (old: unknown, next: unknown) =>
 	compareAnswers(old, next, shape);
-const none = { differences: [], tiedRowsReordered: [] };
+const none = { differences: [], tiedRowsReordered: [], capAmbiguous: [] };
 
 test("identical answers match whatever their key order", () => {
 	const old = board([deal(d1), deal(d2, { attention: true })]);
@@ -97,6 +99,7 @@ test("rows tied on every sort key may swap, and the swap is counted", () => {
 	assert.deepEqual(result, {
 		differences: [],
 		tiedRowsReordered: [{ path: "deals[]", records: [] }],
+		capAmbiguous: [],
 	});
 });
 
@@ -110,6 +113,7 @@ test("a tie group of three may shuffle between rows that are not tied", () => {
 	assert.deepEqual(result, {
 		differences: [],
 		tiedRowsReordered: [{ path: "deals[]", records: [] }],
+		capAmbiguous: [],
 	});
 });
 
@@ -122,6 +126,7 @@ test("a tie swap inside a record names the record", () => {
 	assert.deepEqual(result, {
 		differences: [],
 		tiedRowsReordered: [{ path: "deals[].vendors[]", records: [{ id: d1 }] }],
+		capAmbiguous: [],
 	});
 });
 
@@ -135,6 +140,7 @@ test("rows that differ on a sort key must keep their order", () => {
 			{ path: "deals[]", records: [{ id: d1 }], kind: "order differs" },
 		],
 		tiedRowsReordered: [],
+		capAmbiguous: [],
 	});
 });
 
@@ -208,6 +214,7 @@ test("rows without an ID pair by content and may swap when tied", () => {
 	assert.deepEqual(tied, {
 		differences: [],
 		tiedRowsReordered: [{ path: "participants[]", records: [] }],
+		capAmbiguous: [],
 	});
 	const changed = compare(
 		{ participants: [person("A")] },
@@ -315,6 +322,363 @@ test("a client fit profile compares by position, so a changed field names its ev
 				path: "profiles[].evidence[].deal_name",
 				records: [{ index: 0 }, { id: d1 }],
 				kind: "value differs",
+			},
+		],
+	);
+});
+
+const party = (ref: string, fields: object = {}) => ({
+	name: "Made-up Name",
+	city: "Springfield",
+	ref,
+	kind: "client",
+	merged: false,
+	...fields,
+});
+const named = (n: number) => ({
+	name: `Made-up Deal ${n}`,
+	phase: "research",
+	client_ref: `C-${n}`,
+});
+const organization = (n: number) => ({ name: `Made-up Org ${n}`, refs: [] });
+const found = (fields: object = {}) => ({
+	parties: [party("C-1"), party("L-2"), party("V-CPA-3", { merged: true })],
+	deals: [named(1), named(2)],
+	connections: [
+		{ from_ref: "C-1", to_ref: "L-2", kind: "referral" },
+		{ from_ref: "L-2", to_ref: "C-1", kind: "referral" },
+	],
+	organizations: [organization(1), organization(2)],
+	lead_client_links: [],
+	deals_via_link: [],
+	note: "Made-up note.",
+	...fields,
+});
+const find = (old: unknown, next: unknown) =>
+	compareAnswers(old, next, findShape);
+
+test("find lists ranked on values the answer leaves out may come back in any order", () => {
+	const old = found();
+	assert.deepEqual(find(old, found()), none);
+	const reversed = find(
+		old,
+		found({
+			parties: [party("L-2"), party("C-1"), party("V-CPA-3", { merged: true })],
+			deals: [named(2), named(1)],
+			connections: old.connections.toReversed(),
+			organizations: [organization(2), organization(1)],
+		}),
+	);
+	assert.deepEqual(reversed.differences, []);
+	assert.deepEqual(
+		reversed.tiedRowsReordered.map((place) => place.path),
+		["parties[]", "deals[]", "connections[]", "organizations[]"],
+	);
+});
+
+test("a find difference names its path and ref, and never a name", () => {
+	const result = find(
+		found(),
+		found({
+			parties: [
+				party("C-1", { city: "Shelbyville" }),
+				party("L-2"),
+				party("V-CPA-3", { merged: true }),
+			],
+			deals: [named(1)],
+			organizations: [organization(1), { ...organization(2), refs: ["P-9"] }],
+		}),
+	);
+	assert.deepEqual(result.differences, [
+		{ path: "parties[].city", records: [{ id: "C-1" }], kind: "value differs" },
+		{ path: "deals[]", records: [{ id: "C-2" }], kind: "missing in new" },
+		{
+			path: "organizations[].refs[]",
+			records: [{ index: 1 }, { index: 0 }],
+			kind: "missing in old",
+		},
+	]);
+	assert.ok(!JSON.stringify(result).includes("Made-up"));
+});
+
+test("a full old list leaves which rows made it, and what they decide, as cap ambiguity", () => {
+	const five = [1, 2, 3, 4, 5].map(named);
+	const changed = {
+		deals: [...five.slice(0, 4), named(6)],
+		deals_via_link: [named(7)],
+		note: "Another made-up note.",
+	};
+	const full = find(found({ deals: five }), found(changed));
+	assert.deepEqual(full.differences, []);
+	assert.deepEqual(
+		full.capAmbiguous.map((d) => [d.path, d.kind, d.records]),
+		[
+			["deals[]", "missing in new", [{ id: "C-5" }]],
+			["deals[]", "missing in old", [{ id: "C-6" }]],
+			["deals_via_link[]", "missing in old", [{ id: "C-7" }]],
+			["note", "value differs", []],
+		],
+	);
+});
+
+test("a field that differs on a deal in both answers is a difference even when the list is full", () => {
+	const five = [1, 2, 3, 4, 5].map(named);
+	const result = find(
+		found({ deals: five }),
+		found({ deals: five.with(0, { ...named(1), phase: "legal" }) }),
+	);
+	assert.deepEqual(result.differences, [
+		{ path: "deals[].phase", records: [{ id: "C-1" }], kind: "value differs" },
+	]);
+	assert.deepEqual(result.capAmbiguous, []);
+});
+
+test("a full old list hides nothing when the engine returns a different number of rows", () => {
+	const ten = Array.from({ length: 10 }, (_, i) => party(`C-${i + 1}`));
+	for (const parties of [ten.slice(0, 3), [...ten, party("C-11")]]) {
+		const result = find(found({ parties: ten }), found({ parties }));
+		assert.ok(result.differences.length > 0, `${parties.length} rows differ`);
+		assert.deepEqual(result.capAmbiguous, []);
+	}
+});
+
+test("a full old list hides nothing when a row crosses the merged groups", () => {
+	const live = Array.from({ length: 10 }, (_, i) => party(`C-${i + 1}`));
+	const swapped = [...live.slice(0, 9), party("C-11", { merged: true })];
+	for (const [old, next] of [
+		[live, swapped],
+		[swapped, live],
+	]) {
+		const result = find(found({ parties: old }), found({ parties: next }));
+		assert.deepEqual(
+			result.differences.map((d) => [d.path, d.kind]),
+			[
+				["parties[]", "missing in new"],
+				["parties[]", "missing in old"],
+			],
+		);
+		assert.deepEqual(result.capAmbiguous, []);
+	}
+});
+
+test("a full upstream list leaves only which linked rows appear ambiguous", () => {
+	const ten = Array.from({ length: 10 }, (_, i) => party(`C-${i + 1}`));
+	const link = (lead_ref: string, link_basis: string) => ({
+		lead_ref,
+		client_ref: "C-1",
+		link_basis,
+	});
+	const result = find(
+		found({
+			parties: ten,
+			lead_client_links: [link("L-5", "conversion"), link("L-6", "same_org")],
+			deals_via_link: [named(7)],
+		}),
+		found({
+			parties: ten,
+			lead_client_links: [link("L-5", "same_party")],
+			deals_via_link: [{ ...named(7), phase: "legal" }],
+			note: "Another made-up note.",
+		}),
+	);
+	assert.deepEqual(result.differences, [
+		{
+			path: "lead_client_links[].link_basis",
+			records: [{ id: "L-5" }],
+			kind: "value differs",
+		},
+		{
+			path: "deals_via_link[].phase",
+			records: [{ id: "C-7" }],
+			kind: "value differs",
+		},
+	]);
+	assert.deepEqual(
+		result.capAmbiguous.map((d) => [d.path, d.kind]),
+		[
+			["lead_client_links[]", "missing in new"],
+			["note", "value differs"],
+		],
+	);
+});
+
+test("rows sharing a key pair by their content, not their position", () => {
+	const twin = (phase: string) => ({ ...named(1), phase });
+	const bare = (to_name: string) => ({
+		from_ref: "C-1",
+		from_name: "Made-up Client",
+		kind: "org",
+		to_ref: null,
+		to_name,
+	});
+	const old = found({
+		deals: [twin("research"), twin("legal")],
+		connections: [bare("Made-up Org A"), bare("Made-up Org B")],
+		deals_via_link: [twin("research"), twin("legal")],
+	});
+	const reordered = find(
+		old,
+		found({
+			deals: [twin("legal"), twin("research")],
+			connections: [bare("Made-up Org B"), bare("Made-up Org A")],
+			deals_via_link: [twin("legal"), twin("research")],
+		}),
+	);
+	assert.deepEqual(reordered.differences, []);
+	const changed = find(
+		old,
+		found({
+			deals: [twin("research"), twin("closed")],
+			connections: old.connections,
+			deals_via_link: old.deals_via_link,
+		}),
+	);
+	assert.deepEqual(
+		changed.differences.map((d) => [d.path, d.kind, d.records]),
+		[
+			["deals[]", "missing in new", [{ id: "C-1" }]],
+			["deals[]", "missing in old", [{ id: "C-1" }]],
+		],
+	);
+	assert.ok(!JSON.stringify([reordered, changed]).includes("Made-up"));
+});
+
+test("a changed field on an edge to a party without a ref names that field", () => {
+	const edge = (note: string) => ({
+		from_ref: "C-1",
+		from_name: "Made-up Client",
+		kind: "org",
+		to_ref: null,
+		to_name: "Made-up Org",
+		note,
+	});
+	const result = find(
+		found({
+			connections: [
+				edge("Made-up note."),
+				{ ...edge(""), to_name: "Made-up Org B" },
+			],
+		}),
+		found({
+			connections: [
+				edge("Changed note."),
+				{ ...edge(""), to_name: "Made-up Org B" },
+			],
+		}),
+	);
+	assert.deepEqual(result.differences, [
+		{
+			path: "connections[].note",
+			records: [{ id: "C-1" }],
+			kind: "value differs",
+		},
+	]);
+});
+
+test("twenty lead links are a full answer, so a different twenty is a difference", () => {
+	const links = (from: number) =>
+		Array.from({ length: 20 }, (_, i) => ({
+			lead_ref: `L-${from + i}`,
+			client_ref: "C-1",
+			link_basis: "conversion",
+		}));
+	const result = find(
+		found({ lead_client_links: links(1) }),
+		found({ lead_client_links: links(2) }),
+	);
+	assert.deepEqual(
+		result.differences.map((d) => [d.path, d.kind, d.records]),
+		[
+			["lead_client_links[]", "missing in new", [{ id: "L-1" }]],
+			["lead_client_links[]", "missing in old", [{ id: "L-21" }]],
+		],
+	);
+});
+
+const l1 = uuid(31);
+const lead = (evaluated_at?: unknown) => ({
+	id: l1,
+	reachability: evaluated_at === undefined ? {} : { evaluated_at },
+});
+const leadBoard = (generated_at: unknown, evaluated_at: unknown) => ({
+	...(generated_at === undefined ? {} : { generated_at }),
+	leads: [lead(evaluated_at)],
+});
+const zulu = "2030-01-01T00:00:00.000Z";
+
+test("clock values may differ while their keys, types and formats match", () => {
+	const at = "2031-12-31T23:59:59.999Z";
+	assert.deepEqual(
+		compareAnswers(leadBoard(zulu, zulu), leadBoard(at, at), leadBoardShape),
+		none,
+	);
+	assert.deepEqual(
+		compareAnswers(
+			leadBoard(null, null),
+			leadBoard(null, null),
+			leadBoardShape,
+		),
+		none,
+	);
+});
+
+test("a missing, null or differently formatted clock is a difference at its path", () => {
+	const lost = (generated_at: unknown, evaluated_at: unknown) =>
+		compareAnswers(
+			leadBoard(zulu, zulu),
+			leadBoard(generated_at, evaluated_at),
+			leadBoardShape,
+		).differences;
+	const at = [{ id: l1 }];
+	const evaluated = "leads[].reachability.evaluated_at";
+	assert.deepEqual(lost(zulu, undefined), [
+		{ path: evaluated, records: at, kind: "missing in new" },
+	]);
+	assert.deepEqual(lost(zulu, null), [
+		{ path: evaluated, records: at, kind: "type differs" },
+	]);
+	assert.deepEqual(lost(undefined, zulu), [
+		{ path: "generated_at", records: [], kind: "missing in new" },
+	]);
+	for (const other of [
+		"2030-01-01T00:00:00+00:00",
+		"2030-01-01T00:00:00.000000Z",
+		"2030-01-01T00:00:00Z",
+	])
+		assert.deepEqual(lost(zulu, other), [
+			{ path: evaluated, records: at, kind: "value differs" },
+		]);
+});
+
+test("an opened lead without its clock is a difference", () => {
+	const opened = (detail: object) => ({
+		opened: { ...leadBoard(zulu, zulu), detail },
+		older_correspondence: [],
+		older_stage_history: [],
+	});
+	assert.deepEqual(
+		compareAnswers(opened(lead(zulu)), opened(lead()), leadShape).differences,
+		[
+			{
+				path: "opened.detail.reachability.evaluated_at",
+				records: [],
+				kind: "missing in new",
+			},
+		],
+	);
+});
+
+test("a reason card prints its bigint ID", () => {
+	const cards = (...ids: string[]) => ({
+		pages: [{ cards: ids.map((id) => ({ id, facts: {} })) }],
+	});
+	assert.deepEqual(
+		compareAnswers(cards("77", "78"), cards("77"), reasonsShape).differences,
+		[
+			{
+				path: "pages[].cards[]",
+				records: [{ index: 0 }, { id: "78" }],
+				kind: "missing in new",
 			},
 		],
 	);

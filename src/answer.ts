@@ -1,11 +1,7 @@
 import type { Context } from "hono";
+import { type Expression, sql } from "kysely";
 import { failureKind, sqlState } from "./failure.ts";
-import {
-	DATABASE_UNAVAILABLE,
-	type DatabaseEnv,
-	type Reader,
-	readSnapshot,
-} from "./reader.ts";
+import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
@@ -23,10 +19,23 @@ const HINTS = {
 		"The operation could not be completed. Quote the correlation_id when reporting it.",
 	missing_required:
 		"Supply the named required fields from the tool's documented input.",
+	unregistered_operation_fields: "Remove fields outside the documented input.",
+	caller_authority_field_forbidden: "Remove caller-supplied authority fields.",
+	invalid_number: "Supply a numeric value for the named fields.",
+	tool_call_markup_in_value: "Remove tool-call markup from the named fields.",
+	database_unavailable:
+		"The operation failed. Quote the correlation_id when reporting it.",
+	missing_idempotency_key: "Supply a fresh idempotency_key for this operation.",
+	invalid_idempotency_key:
+		"Supply a UUID as idempotency_key and reuse it only for the same action.",
+	key_reuse: "Use a fresh idempotency_key for changed arguments.",
+	actor_not_provisioned: "The authenticated actor is not provisioned.",
+	field_required:
+		"Supply the required field using the documented operation shape.",
 };
 
 export class Refusal {
-	readonly status: 400 | 404 | 409 | 422;
+	readonly status: 400 | 403 | 404 | 409 | 422 | 500 | 503;
 	readonly error: keyof typeof HINTS;
 	readonly extra: Record<string, unknown>;
 	constructor(
@@ -51,6 +60,83 @@ export const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
 		refusal.status,
 	);
 
+// The old system echoed back only identifier-shaped field names, at most 20.
+const ECHOED_FIELD = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
+
+// The old system kept these names for the caller's identity and refused them
+// before any other field check.
+const RESERVED_FIELDS = new Set([
+	"tenant",
+	"tenant_id",
+	"organization_tenant_id",
+	"sponsor",
+	"sponsoring_human_id",
+	"sponsoring_human_slug",
+	"human_slug",
+	"identity",
+	"actor",
+	"runtime_principal",
+	"audience",
+	"authorization",
+	"authorization_class",
+	"profile",
+	"capability",
+	"capabilities",
+	"action",
+	"actions",
+	"action_authority",
+	"action_authorities",
+	"allowed_actions",
+	"write",
+	"writes_records",
+	"calls_models",
+	"call_models",
+]);
+
+export function reservedFields(params: URLSearchParams) {
+	const reserved = [...new Set(params.keys())]
+		.filter((key) => RESERVED_FIELDS.has(key))
+		.sort();
+	return reserved.length === 0
+		? undefined
+		: new Refusal(403, "caller_authority_field_forbidden", {
+				fields: reserved.slice(0, 20),
+			});
+}
+
+export function unregisteredFields(
+	params: URLSearchParams,
+	known: readonly string[],
+) {
+	const reserved = reservedFields(params);
+	if (reserved) return reserved;
+	const extra = [...new Set(params.keys())].filter(
+		(key) => !known.includes(key),
+	);
+	return extra.length === 0
+		? undefined
+		: new Refusal(400, "unregistered_operation_fields", {
+				fields: extra
+					.sort()
+					.filter((key) => ECHOED_FIELD.test(key))
+					.slice(0, 20),
+			});
+}
+
+// The old system turned a numeric string into a number before the read's own
+// checks: absent gives the fallback, blank or non-finite gives undefined.
+export function asNumber(given: string | null, fallback: number) {
+	if (given === null) return fallback;
+	const trimmed = given.trim();
+	return trimmed !== "" && Number.isFinite(Number(trimmed))
+		? Number(trimmed)
+		: undefined;
+}
+
+// The old answer printed these driver Dates with JavaScript's toISOString.
+export const isoMillis = (stamp: Expression<unknown>) =>
+	sql<string>`to_char(${stamp} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+
 const isKnownPartner = async (db: Reader, slug: string) =>
 	(await db
 		.selectFrom("actor")
@@ -58,12 +144,30 @@ const isKnownPartner = async (db: Reader, slug: string) =>
 		.where("slug", "=", slug)
 		.executeTakeFirst()) !== undefined;
 
+// The old tools whose reads the engine serves. A failed read's body names one.
+type Verb =
+	| "capture-queue"
+	| "deal-room-board"
+	| "find"
+	| "find-and-catch-up"
+	| "get-deal-room"
+	| "ideal-client-profile"
+	| "lead-board"
+	| "list-practice-origination"
+	| "quiet-follow-ups"
+	| "read-invoice-tracker"
+	| "read-vendor-markets-v1"
+	| "territory-state-board";
+
 export async function answer(
 	c: Context<DatabaseEnv>,
+	verb: Verb,
 	read: (db: Reader) => Promise<unknown>,
 ) {
+	const failed = (status: 500 | 503) =>
+		refuse(c, new Refusal(status, "unhandled_verb_failure", { verb }));
 	const database = c.env.DATABASE;
-	if (!database) return c.json(DATABASE_UNAVAILABLE, 503);
+	if (!database) return failed(503);
 	const started = performance.now();
 	let result: unknown;
 	try {
@@ -79,7 +183,7 @@ export async function answer(
 			result = new Refusal(400, "database_refused_the_statement");
 		else {
 			console.warn("read failed:", failureKind(error));
-			return c.json({ error: "read_failed" }, 500);
+			return failed(500);
 		}
 	} finally {
 		c.header("Server-Timing", `db;dur=${performance.now() - started}`);

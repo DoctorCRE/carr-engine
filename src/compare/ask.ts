@@ -1,14 +1,26 @@
+import { isRecord } from "./answers.ts";
 import { type Ask, StopRun } from "./run.ts";
 
 type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
+type ToolAsk = Exclude<Ask, { read: "feed" }>;
+type FeedPage = { events: unknown[]; cursor: string };
+type Request = {
+	path: string;
+	call: { name: string; arguments: Record<string, unknown> };
+};
+
+const FEED_PAGE = 200;
+// A cursor that never advances would otherwise page forever.
+const PAGES = 25;
+const REASONS_PAGES = 100;
 
 const REFUSALS = new Set([400, 404, 409, 422]);
 
-// The old system allows a session 60 calls a minute, and each ask makes one.
+// The old system allows a session 60 tool calls a minute; each tool ask makes one.
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
-function refusal(ask: Ask, body: unknown) {
+function refusal(ask: ToolAsk, body: unknown) {
 	// A board for a listed workspace and the invoices have no refusal to
 	// compare. Comparing one would match two empty answers and ask no deals.
 	if (ask.read === "board" || ask.read === "invoices")
@@ -25,37 +37,153 @@ function lastData(stream: string) {
 	return line.slice(5);
 }
 
-function enginePath(ask: Ask) {
-	switch (ask.read) {
-		case "board":
-			return `/api/engine/deals?${new URLSearchParams({ workspace: ask.workspace })}`;
-		case "deal":
-			return `/api/engine/deals/${encodeURIComponent(ask.deal)}`;
-		case "client fit":
-			return "/api/engine/client-fit";
-		case "invoices":
-			return "/api/engine/invoices";
-	}
+const isFeedPage = (body: unknown): body is FeedPage =>
+	typeof body === "object" &&
+	body !== null &&
+	"events" in body &&
+	Array.isArray(body.events) &&
+	"cursor" in body &&
+	typeof body.cursor === "string";
+
+// Engine reads take the old tool's arguments as query text, an object as its JSON.
+function mirrored(
+	path: string,
+	name: string,
+	args: Record<string, unknown> = {},
+): Request {
+	const query = new URLSearchParams(
+		Object.entries(args).map(([key, value]) => [
+			key,
+			typeof value === "string" ? value : JSON.stringify(value),
+		]),
+	).toString();
+	return {
+		path: query ? `${path}?${query}` : path,
+		call: { name, arguments: args },
+	};
 }
 
-function oldCall(ask: Ask) {
+const leadPage = (cursor: Record<string, unknown> = {}) =>
+	mirrored("/api/engine/leads", "lead-board", {
+		workspace: "leads",
+		...cursor,
+	});
+
+// The app's first page of reasons and each "more" after it.
+const reasonsPage = (before_id?: string) =>
+	mirrored(
+		"/api/engine/reasons-to-reach-out",
+		"list-practice-origination",
+		before_id === undefined ? { limit: 25 } : { limit: 25, before_id },
+	);
+
+function requestOf(ask: Exclude<ToolAsk, { read: "lead" }>): Request {
 	switch (ask.read) {
 		case "board":
-			return {
-				name: "deal-room-board",
-				arguments: { workspace: ask.workspace },
-			};
+			return mirrored("/api/engine/deals", "deal-room-board", {
+				workspace: ask.workspace,
+			});
 		case "deal":
-			return { name: "get-deal-room", arguments: { deal: ask.deal } };
+			return {
+				path: `/api/engine/deals/${encodeURIComponent(ask.deal)}`,
+				call: { name: "get-deal-room", arguments: { deal: ask.deal } },
+			};
 		// The app's first ask, with no filters.
 		case "client fit":
-			return { name: "ideal-client-profile", arguments: {} };
+			return mirrored("/api/engine/client-fit", "ideal-client-profile");
+		case "capture queue":
+			return mirrored("/api/engine/capture-queue", "capture-queue");
+		case "find":
+			return mirrored("/api/engine/find", "find", { query: ask.query });
+		case "lead board":
+			return leadPage();
+		case "quiet follow-ups":
+			return mirrored("/api/engine/quiet-follow-ups", "quiet-follow-ups");
+		case "territory":
+			return mirrored(
+				"/api/engine/territory-state-board",
+				"territory-state-board",
+			);
+		case "reasons to reach out":
+			return reasonsPage();
 		case "invoices":
-			return { name: "read-invoice-tracker", arguments: {} };
+			return mirrored("/api/engine/invoices", "read-invoice-tracker");
 	}
 }
 
-export function askers(app: URL, session: string, fetch: Fetch) {
+function olderHistory(page: unknown, kind: "correspondence" | "stage_history") {
+	const detail = isRecord(page) ? page.detail : undefined;
+	const info = isRecord(detail) ? detail[`${kind}_page`] : undefined;
+	return isRecord(info) && info.has_more === true
+		? info.next_cursor
+		: undefined;
+}
+
+const olderMail = (page: unknown) => {
+	const cursor = olderHistory(page, "correspondence");
+	return isRecord(cursor) ? cursor : undefined;
+};
+const olderStages = (page: unknown) => {
+	const cursor = olderHistory(page, "stage_history");
+	return typeof cursor === "string" ? cursor : undefined;
+};
+const moreReasons = (page: unknown) =>
+	isRecord(page) && typeof page.next_cursor === "string"
+		? page.next_cursor
+		: undefined;
+
+// Each side follows the cursors its own answers hand back.
+async function answerOf(
+	ask: ToolAsk,
+	read: (request: Request) => Promise<unknown>,
+	beforePage: () => Promise<void>,
+) {
+	async function follow<Cursor>(
+		page: unknown,
+		next: (page: unknown) => Cursor | undefined,
+		request: (cursor: Cursor) => Request,
+		limit: number,
+	) {
+		const pages: unknown[] = [];
+		for (let cursor = next(page); cursor !== undefined; cursor = next(page)) {
+			if (pages.length === limit) throw new Error("pages did not end");
+			await beforePage();
+			page = await read(request(cursor));
+			pages.push(page);
+		}
+		return pages;
+	}
+
+	if (ask.read === "lead") {
+		const lead_id = ask.lead;
+		const opened = await read(leadPage({ lead_id }));
+		return {
+			opened,
+			older_correspondence: await follow(
+				opened,
+				olderMail,
+				(correspondence_cursor) => leadPage({ lead_id, correspondence_cursor }),
+				PAGES,
+			),
+			older_stage_history: await follow(
+				opened,
+				olderStages,
+				(stage_history_cursor) => leadPage({ lead_id, stage_history_cursor }),
+				PAGES,
+			),
+		};
+	}
+	const first = await read(requestOf(ask));
+	if (ask.read !== "reasons to reach out") return first;
+	return {
+		pages: [
+			first,
+			...(await follow(first, moreReasons, reasonsPage, REASONS_PAGES)),
+		],
+	};
+}
+
+export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 	const cookie = `__Host-dealroom_session=${session}`;
 
 	async function send(path: string, init: RequestInit) {
@@ -76,40 +204,78 @@ export function askers(app: URL, session: string, fetch: Fetch) {
 		return response;
 	}
 
+	// Presence and capture sessions change between any two requests, so only events and cursors are kept.
+	async function readFeed(path: string, start: string) {
+		const events: unknown[] = [];
+		const cursors: string[] = [];
+		let cursor = start;
+		for (let page = 0; page < PAGES; page++) {
+			const response = await send(
+				`${path}?${new URLSearchParams({ cursor })}`,
+				{
+					headers: { accept: "application/json" },
+				},
+			);
+			if (response.status !== 200) throw new Error("feed read failed");
+			const body: unknown = await response.json();
+			if (!isFeedPage(body)) throw new Error("feed page without events");
+			events.push(...body.events);
+			cursors.push(body.cursor);
+			if (body.events.length < FEED_PAGE) return { events, cursors };
+			cursor = body.cursor;
+		}
+		throw new Error("feed did not end");
+	}
+
 	async function askEngine(ask: Ask): Promise<unknown> {
-		const response = await send(enginePath(ask), {
-			headers: { accept: "application/json" },
-		});
-		if (response.status === 200) return response.json();
-		if (REFUSALS.has(response.status))
-			return refusal(ask, await response.json());
-		throw new Error("engine read failed");
+		if (ask.read === "feed")
+			return readFeed("/api/engine/pipeline/changes", ask.start);
+		return answerOf(
+			ask,
+			async ({ path }) => {
+				const response = await send(path, {
+					headers: { accept: "application/json" },
+				});
+				if (response.status === 200) return response.json();
+				if (REFUSALS.has(response.status))
+					return refusal(ask, await response.json());
+				throw new Error("engine read failed");
+			},
+			async () => {},
+		);
 	}
 
 	let rpcId = 0;
 	async function askOld(ask: Ask): Promise<unknown> {
-		const response = await send("/mcp", {
-			method: "POST",
-			headers: {
-				accept: "application/json, text/event-stream",
-				"content-type": "application/json",
-				origin: app.origin,
+		if (ask.read === "feed") return readFeed("/pipeline/changes", ask.start);
+		return answerOf(
+			ask,
+			async ({ call }) => {
+				const response = await send("/mcp", {
+					method: "POST",
+					headers: {
+						accept: "application/json, text/event-stream",
+						"content-type": "application/json",
+						origin: app.origin,
+					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: ++rpcId,
+						method: "tools/call",
+						params: call,
+					}),
+				});
+				if (response.status !== 200) throw new Error("old read failed");
+				const text = await response.text();
+				const stream = response.headers
+					.get("content-type")
+					?.includes("text/event-stream");
+				const { result } = JSON.parse(stream ? lastData(text) : text);
+				const body = JSON.parse(result.content[0].text);
+				return result.isError === true ? refusal(ask, body) : body;
 			},
-			body: JSON.stringify({
-				jsonrpc: "2.0",
-				id: ++rpcId,
-				method: "tools/call",
-				params: oldCall(ask),
-			}),
-		});
-		if (response.status !== 200) throw new Error("old read failed");
-		const text = await response.text();
-		const stream = response.headers
-			.get("content-type")
-			?.includes("text/event-stream");
-		const { result } = JSON.parse(stream ? lastData(text) : text);
-		const body = JSON.parse(result.content[0].text);
-		return result.isError === true ? refusal(ask, body) : body;
+			wait,
+		);
 	}
 
 	return { askEngine, askOld };

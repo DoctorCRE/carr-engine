@@ -5,23 +5,48 @@ import { test } from "node:test";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
+import { readRecentActivity } from "./activity/read.ts";
+import { readClient, readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
+import { readCaptureQueue } from "./deals/capture-queue.ts";
+import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { readInvoiceTracker } from "./invoices.ts";
+import { readLeadBoard } from "./leads/board.ts";
+import { readLeadDetail } from "./leads/detail.ts";
+import { readQuietFollowUps } from "./leads/quiet-follow-ups.ts";
+import { readReasonsToReachOut } from "./leads/reasons-to-reach-out.ts";
+import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
+import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
+import { readVendorMarkets } from "./vendors/markets.ts";
+import { readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
-// name. The views read their tables with their owner's rights.
+// name, and `carr_business_date()`. The views read their tables with their
+// owner's rights.
 const readable = [
+	"activity",
 	"actor",
 	"client",
+	"client_status",
+	"client_type",
 	"commission",
 	"deal",
 	"doctrine_section",
+	"lead",
+	"next_action",
 	"party",
+	"party_link",
+	"party_link_deal",
+	"practice_origination_event",
+	"practice_origination_feed",
+	"v_calendar_capture_receipt",
+	"v_capture_candidate_queue",
+	"v_capture_session_status",
 	"v_client_account",
 	"v_client_engagement_status",
 	"v_deal_board",
@@ -41,12 +66,33 @@ const readable = [
 	"v_deal_room_phase_change",
 	"v_deal_room_phase_start",
 	"v_deal_room_premises",
+	"v_deal_room_presence",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
 	"v_invoice_tracker",
+	"v_last_touch",
+	"v_lead_client_best",
+	"v_lead_prospect_engagement",
+	"v_lead_workspace",
+	"v_lead_workspace_correspondence",
+	"v_lead_workspace_stage_history",
 	"v_open_deal_room_board",
+	"v_party_graph",
+	"v_practice_origination_party_address",
+	"v_record_flag_subject",
 	"v_ref_index",
 	"v_requirement_request",
+	"v_subject_timeline",
+	"v_vendor_assignment_context",
+	"vendor",
+	"vendor_category",
+	"vendor_disposition",
+	"vendor_market",
+	"vendor_market_key",
+	"vendor_market_membership",
+	"vendor_market_regional_reference",
+	"vendor_relationship_level",
+	"vendor_stage",
 ];
 
 async function withAdmin<T>(
@@ -73,6 +119,20 @@ async function withReaderLogin(
 			await admin.query(`ALTER ROLE ${name} SET TimeZone = 'America/Chicago'`);
 			await admin.query(
 				`GRANT SELECT ON ${readable.map((t) => `public.${t}`).join(", ")} TO ${name}`,
+			);
+			// Production revoked PUBLIC's execute, so the login holds its own.
+			await admin.query(
+				"REVOKE EXECUTE ON FUNCTION public.carr_business_date(timestamptz) FROM PUBLIC",
+			);
+			await admin.query(
+				`GRANT EXECUTE ON FUNCTION public.carr_business_date(timestamptz) TO ${name}`,
+			);
+			// Production revoked PUBLIC's right to call this one.
+			await admin.query(
+				"REVOKE EXECUTE ON FUNCTION public.practice_address_key(text) FROM PUBLIC",
+			);
+			await admin.query(
+				`GRANT EXECUTE ON FUNCTION public.practice_address_key(text) TO ${name}`,
 			);
 			const login = new URL(database);
 			login.username = name;
@@ -150,6 +210,16 @@ async function seedDeal(database: string) {
 					actor_id: actor.id,
 				})
 				.execute();
+			await sql`with s as (insert into capture_session (nonce, device_id, actor_id,
+				mode, started_at, consent_announced_at, session_token_hash, expires_at, state_at)
+				values ('example-nonce', 'example-device', ${actor.id}, 'meeting', now(), now(),
+				'example-hash', now() + interval '1 hour', now()) returning id)
+				insert into capture_candidate (session_id, idempotency_key, batch_hash,
+				item_index, kind, payload, evidence_quote, confidence)
+				select id, 'example-key', 'example-batch', 0, 'next_step',
+				${JSON.stringify({ deal: deal.id })}, 'Example quote', 1 from s`.execute(
+				tx,
+			);
 			return { actor: actor.slug, deal: deal.id };
 		});
 	} finally {
@@ -158,7 +228,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit and the invoices and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, recent activity and the invoices and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -190,6 +260,188 @@ test("the reader login reads the board, a deal, the client fit and the invoices 
 				readInvoiceTracker(db, seeded.actor),
 			);
 			assert.deepEqual(tracker.entries, []);
+			const queue = await readSnapshot(login, readCaptureQueue);
+			assert.deepEqual(
+				queue.candidates.map((c) => [c.deal_name, c.confidence]),
+				[["Example Reader Deal", 1]],
+			);
+			const changes = await readSnapshot(login, (db) =>
+				readChanges(db, null, ""),
+			);
+			assert.deepEqual(
+				{
+					...changes,
+					capture_sessions: changes.capture_sessions.map((s) => s.device_id),
+				},
+				{
+					events: [],
+					presence: [],
+					capture_sessions: ["example-device"],
+					cursor: "",
+				},
+			);
+			const found = await readSnapshot(login, (db) => readFind(db, "Example"));
+			assert.deepEqual(
+				[found.parties.map((p) => p.kind), found.deals.map((d) => d.name)],
+				[["client"], ["Example Reader Deal"]],
+			);
+			const leads = await readSnapshot(login, readLeadBoard);
+			assert.deepEqual(leads.leads, []);
+			const opened = await readSnapshot(login, (db) =>
+				readLeadDetail(db, seeded.deal, {
+					correspondence: null,
+					stageHistory: null,
+				}),
+			);
+			assert.deepEqual("detail" in opened && opened.detail, null);
+			const quiet = await readSnapshot(login, (db) =>
+				readQuietFollowUps(db, { lead_days: 45, vendor_days: 90 }, null),
+			);
+			assert.deepEqual("proposals" in quiet && quiet.proposals, []);
+			const territory = await readSnapshot(login, (db) =>
+				readTerritory(db, { vertical: null, city: null, state: null }),
+			);
+			assert.deepEqual(territory, {
+				schema_version: "territory-state-board.v1",
+				coverage: "recorded_geographies_only",
+				submarkets: [],
+			});
+			const clients = await readSnapshot(login, (db) =>
+				readClientList(
+					db,
+					seeded.actor,
+					{
+						dataset: "clients",
+						scope: "team",
+						q: "Example",
+						owner: "all",
+						territory: null,
+						sort: "name",
+						page: 1,
+						page_size: 25,
+						status: null,
+						type: null,
+						pipeline: "any",
+					},
+					{ observedAt: new Date(), correlationId: "example" },
+				),
+			);
+			const [listed] = clients.rows;
+			assert.deepEqual(
+				[listed?.name, listed?.owned_by_viewer, clients.rows.length],
+				["Example Clinic", false, 1],
+			);
+			assert.ok(listed);
+			const client = await readSnapshot(login, (db) =>
+				readClient(db, seeded.actor, listed.id, "vendor-directory.v1", {
+					observedAt: new Date(),
+					correlationId: "example",
+				}),
+			);
+			assert.equal(client.record.name, "Example Clinic");
+			await withAdmin(async (admin) => {
+				await admin.query(
+					"insert into vendor_disposition values ('active', 'Example', true, 1)",
+				);
+				await admin.query(
+					`insert into vendor (party_id, category, created_by, updated_by,
+						deal_history_verified_at, deal_evidence)
+					select party.id, 'lender', actor.id, actor.id, '2026-01-01', jsonb_build_array(
+						jsonb_build_object('deal_id', $1::uuid, 'role', 'worked', 'occurred_at', '2026-01-02'))
+					from party, actor`,
+					[seeded.deal],
+				);
+			}, database);
+			const vendors = await readSnapshot(login, (db) =>
+				readVendorList(
+					db,
+					seeded.actor,
+					{
+						dataset: "vendors",
+						contract: "vendor-directory.v1",
+						scope: "team",
+						q: null,
+						owner: "all",
+						territory: null,
+						sort: "last_deal_desc",
+						page: 1,
+						page_size: 25,
+						category: null,
+						stage: null,
+						disposition: null,
+					},
+					{ observedAt: new Date(), correlationId: "example" },
+				),
+			);
+			assert.deepEqual(
+				vendors.rows.map(
+					(r) =>
+						"relationship" in r && [
+							r.relationship.deals_worked,
+							r.last_deal_at,
+						],
+				),
+				[[1, "2026-01-02T00:00:00+00:00"]],
+			);
+			await withAdmin(
+				(admin) =>
+					admin.query(`insert into vendor_market select 'example', 'Example', 'market',
+							'Example', 'Example', id, now() from actor;
+						insert into vendor_market_membership select 'example', vendor.id, true, null,
+							'Example', actor.id, now() from vendor, actor`),
+				database,
+			);
+			const markets = await readSnapshot(login, (db) =>
+				readVendorMarkets(db, "Example"),
+			);
+			assert.partialDeepStrictEqual(markets, {
+				selected_market: "example",
+				vendors: [{ name: "Example Clinic" }],
+			});
+			await withAdmin(
+				(admin) =>
+					admin.query(`insert into practice_origination_feed (source) values ('nppes');
+						insert into practice_origination_event (source, record_key, fingerprint, npi,
+							name, city, state, kind, evidence_date, date_basis, source_url, facts,
+							published_on, recorded_by)
+						select 'nppes', '1000000009', repeat('0', 64), '1000000009', 'Example Clinic',
+							'Exampleton', 'AL', 'enumeration', '2026-01-02', 'enumeration',
+							'https://example.test/1000000009', '{"address": "1 Example Way"}',
+							'2026-01-02', id from actor`),
+				database,
+			);
+			const reasons = await readSnapshot(login, (db) =>
+				readReasonsToReachOut(db, { limit: 25, before_id: null }),
+			);
+			assert.deepEqual(
+				reasons.cards.map((c) => [c.record_key, c.route]),
+				[["1000000009", "research"]],
+			);
+			await withAdmin(async (admin) => {
+				await admin.query(
+					"insert into activity_kind (slug, label, is_contact) values ('reader-call', 'Example', true)",
+				);
+				await admin.query(
+					`with a as (insert into activity (occurred_at, actor_id, kind, summary, deal_id)
+							select '2026-01-02 03:04:05.678901+00', actor.id, 'reader-call', 'Example call', $1
+							from actor returning id, actor_id)
+						insert into tool_call (idempotency_key, verb, actor_id, request_hash, response)
+						select 'calcap-reader', 'log-activity', actor_id, 'example',
+							jsonb_build_object('activity_id', id) from a`,
+					[seeded.deal],
+				);
+			}, database);
+			const recent = await readSnapshot(login, (db) =>
+				readRecentActivity(db, seeded.actor, "Reader Deal", 10),
+			);
+			assert.ok("catch_up" in recent, JSON.stringify(recent));
+			assert.deepEqual(
+				[
+					recent.catch_up.timeline.map((r) => r.occurred_at),
+					recent.catch_up.calendar_history.map((r) => r.key),
+				],
+				[["2026-01-02T03:04:05.678Z"], ["calcap-reader"]],
+			);
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(
@@ -204,7 +456,12 @@ test("the reader login reads the board, a deal, the client fit and the invoices 
 				visible.rows.map((r) => r.relname),
 				readable,
 			);
-			for (const outside of ["deal_note", "schema_migrations"] as const) {
+			for (const outside of [
+				"capture_candidate",
+				"deal_note",
+				"schema_migrations",
+				"tool_call",
+			] as const) {
 				await assert.rejects(
 					readSnapshot(login, (db) =>
 						db.selectFrom(outside).selectAll().execute(),
