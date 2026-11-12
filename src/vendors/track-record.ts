@@ -28,7 +28,12 @@ export type TrackRecordFacts = {
 	first_worked_at: string | null;
 	last_contacted_at: string | null;
 	last_contact_note: string | null;
-	override: unknown;
+	override: {
+		tier: "Trial" | "Established" | "Proven";
+		reason: string;
+		recorded_by: string;
+		recorded_at: string;
+	} | null;
 	recent_entries: Entry[];
 	introductions: Introduction[];
 };
@@ -51,8 +56,9 @@ const associations = sql`(select e.party_id, e.deal_id, e.role, e.occurred_at, d
 
 const contacts = sql`a.vendor_id = v.id and a.kind in ('call', 'email_out', 'email_in', 'meeting', 'text')`;
 
-// Join it laterally beside the vendor `v` and its party `p`. Coverage holds
-// only while every live vendor row of the party is verified.
+// Join it laterally beside the vendor `v`. Coverage holds only while every
+// live vendor row of the party is verified. Ties left unordered by the old
+// read fall back to the id, highest first.
 export const trackRecordFacts = sql<{
 	last_deal_at: string | null;
 	facts: TrackRecordFacts;
@@ -67,19 +73,19 @@ export const trackRecordFacts = sql<{
 	'last_contact_note', (select a.summary from activity a where ${contacts}
 		order by a.occurred_at desc, a.id desc limit 1),
 	'override', v.trust_override,
-	'recent_entries', (select coalesce(json_agg(t.entry order by t.occurred_at desc), '[]')
-		from (select a.occurred_at, json_build_object('id', a.id, 'kind', a.kind,
+	'recent_entries', (select coalesce(json_agg(t.entry order by t.occurred_at desc, t.id desc), '[]')
+		from (select a.occurred_at, a.id, json_build_object('id', a.id, 'kind', a.kind,
 				'when', a.occurred_at, 'summary', a.summary, 'detail', a.detail) as entry
 			from activity a where a.vendor_id = v.id
 			order by a.occurred_at desc, a.id desc limit 20) t),
 	'introductions', (select coalesce(json_agg(json_build_object('id', l.id, 'kind', l.kind,
 			'from_name', fp.name, 'to_name', tp.name, 'note', l.note,
-			'occurred_at', l.occurred_on, 'via_party', l.via_party) order by l.created_at desc), '[]')
+			'occurred_at', l.occurred_on, 'via_party', l.via_party) order by l.created_at desc, l.id desc), '[]')
 		from party_link l
 		join party fp on fp.id = l.from_party and fp.merged_into is null and fp.deleted_at is null
 		join party tp on tp.id = l.to_party and tp.merged_into is null and tp.deleted_at is null
 		left join party bp on bp.id = l.via_party
-		where p.id in (l.from_party, l.to_party, l.via_party)
+		where v.party_id in (l.from_party, l.to_party, l.via_party)
 			and l.kind in ('intro', 'intro_received', 'introduced', 'can_introduce', 'intro_requested')
 			and (l.via_party is null or (bp.merged_into is null and bp.deleted_at is null)))
 ) as facts
@@ -100,8 +106,8 @@ const INSTANT =
 // In microseconds: coverage recorded later in the clock's millisecond is
 // still in the future. Infinite and BC times are no coverage.
 function microseconds(value: string | null) {
-	const match = value === null ? null : INSTANT.exec(value);
-	if (!value || !match) return null;
+	const match = value && INSTANT.exec(value);
+	if (!match) return null;
 	const micros = (match[1] ?? "").padEnd(6, "0").slice(3);
 	return BigInt(Date.parse(value)) * 1000n + BigInt(micros);
 }

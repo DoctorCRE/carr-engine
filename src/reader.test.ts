@@ -21,7 +21,7 @@ import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 import { readVendorMarkets } from "./vendors/markets.ts";
-import { trackRecordFacts } from "./vendors/track-record.ts";
+import { readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
 // name, and `carr_business_date()`. The views read their tables with their
@@ -80,10 +80,14 @@ const readable = [
 	"v_requirement_request",
 	"v_vendor_assignment_context",
 	"vendor",
+	"vendor_category",
+	"vendor_disposition",
 	"vendor_market",
 	"vendor_market_key",
 	"vendor_market_membership",
 	"vendor_market_regional_reference",
+	"vendor_relationship_level",
+	"vendor_stage",
 ];
 
 async function withAdmin<T>(
@@ -219,7 +223,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, a vendor's track record and vendor markets and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list and vendor markets and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -339,17 +343,36 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 					[seeded.deal],
 				);
 			}, database);
-			const track = await readSnapshot(login, (db) =>
-				db
-					.selectFrom("vendor as v")
-					.innerJoin("party as p", "p.id", "v.party_id")
-					.innerJoinLateral(trackRecordFacts.as("vr"), (join) => join.onTrue())
-					.select("vr.facts")
-					.executeTakeFirstOrThrow(),
+			const vendors = await readSnapshot(login, (db) =>
+				readVendorList(
+					db,
+					seeded.actor,
+					{
+						dataset: "vendors",
+						contract: "vendor-directory.v1",
+						scope: "team",
+						q: null,
+						owner: "all",
+						territory: null,
+						sort: "last_deal_desc",
+						page: 1,
+						page_size: 25,
+						category: null,
+						stage: null,
+						disposition: null,
+					},
+					{ observedAt: new Date(), correlationId: "example" },
+				),
 			);
 			assert.deepEqual(
-				[track.facts.deals_worked, track.facts.first_worked_at],
-				[1, "2026-01-02T00:00:00+00:00"],
+				vendors.rows.map(
+					(r) =>
+						"relationship" in r && [
+							r.relationship.deals_worked,
+							r.last_deal_at,
+						],
+				),
+				[[1, "2026-01-02T00:00:00+00:00"]],
 			);
 			await withAdmin(
 				(admin) =>
