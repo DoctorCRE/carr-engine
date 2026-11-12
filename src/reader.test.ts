@@ -157,7 +157,7 @@ test("the reader login reads the board and a deal and changes nothing", () =>
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
 			const board = await readSnapshot(login, (db) =>
-				readBoard(db, { actor: seeded.actor, workspace: "all" }),
+				readBoard(db, { partner: seeded.actor, workspace: "all" }),
 			);
 			assert.deepEqual(
 				board.deals.map((d) => [d.id, d.name, d.next_date]),

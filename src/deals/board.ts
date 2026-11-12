@@ -4,6 +4,7 @@ import type { DB } from "../database.d.ts";
 import {
 	asText,
 	clientPortalUrlOf,
+	nextStepRequired,
 	phaseChangeOf,
 	phaseStartedOn,
 	phaseStartsOf,
@@ -16,10 +17,11 @@ export const WORKSPACES = ["team", "national_account", "all"] as const;
 export type Workspace = (typeof WORKSPACES)[number];
 
 type BoardInputs = {
-	actor: string;
+	partner: string;
 	workspace?: Workspace | null;
 	account_client_id?: string | null;
 };
+type Scope = { workspace: Workspace; account: string | null };
 
 const EDITABLE_FIELDS = [
 	"phase",
@@ -30,11 +32,37 @@ const EDITABLE_FIELDS = [
 ];
 export async function readBoard(
 	db: Kysely<DB>,
-	{ actor, workspace, account_client_id }: BoardInputs,
+	{ partner, workspace, account_client_id }: BoardInputs,
 ) {
-	const scope = workspace ?? "all";
-	const account = account_client_id || null;
-	const deals = await db
+	const scope = {
+		workspace: workspace ?? "all",
+		account: account_client_id || null,
+	};
+	const deals = await openDeals(db, scope).execute();
+	const closed = await closedDeals(db, scope).execute();
+	const accounts = await accountRows(db).execute();
+	const session = await openSession(db, partner, scope).executeTakeFirst();
+
+	return {
+		schema_version: "local-deals-board.v2",
+		actor: partner,
+		deals: deals.map((deal) => ({
+			...deal,
+			phase_started_on: phaseStartedOn(deal.phase_started_on),
+			field_base: Object.fromEntries(
+				deal.field_base.map(({ field, ...base }) => [field, base]),
+			),
+			short_name: shortName(deal),
+		})),
+		closed_deals: closed.filter((deal) => deal.outcome !== "lost"),
+		lost_deals: closed.filter((deal) => deal.outcome === "lost"),
+		accounts,
+		open_session: session ?? null,
+	};
+}
+
+const openDeals = (db: Kysely<DB>, { workspace, account }: Scope) =>
+	db
 		.selectFrom("v_open_deal_room_board as b")
 		.innerJoin("v_deal_reconciliation_read as r", "r.id", "b.id")
 		.innerJoin(
@@ -94,7 +122,7 @@ export async function readBoard(
 										sql<
 											string | null
 										>`coalesce(nullif(e.new_value->>'outcome', ''),
-											e.new_value->>'next_action', e.new_value->>'post_call_action')`.as(
+										e.new_value->>'next_action', e.new_value->>'post_call_action')`.as(
 											"summary",
 										),
 									)
@@ -116,9 +144,7 @@ export async function readBoard(
 					.orderBy("step.id", "desc")
 					.limit(1),
 			).as("last_step"),
-			q
-				.or([q("b.next_step", "is", null), q("b.next_date", "is", null)])
-				.as("next_step_required"),
+			nextStepRequired,
 			"b.market",
 			"b.segment",
 			"b.client_id",
@@ -161,14 +187,16 @@ export async function readBoard(
 					.orderBy("e.id", "desc"),
 			).as("field_base"),
 		])
-		.$if(scope !== "all", (q) => q.where("b.workspace_kind", "=", scope))
+		.$if(workspace !== "all", (q) =>
+			q.where("b.workspace_kind", "=", workspace),
+		)
 		.$if(account !== null, (q) => q.where("b.account_client_id", "=", account))
 		.orderBy("b.attention", "desc")
 		.orderBy("b.next_date", (o) => o.asc().nullsLast())
-		.orderBy("b.name")
-		.execute();
+		.orderBy("b.name");
 
-	const closed = await db
+const closedDeals = (db: Kysely<DB>, { workspace, account }: Scope) =>
+	db
 		.selectFrom("v_deal_board as b")
 		.leftJoin("v_client_account as a", (join) =>
 			join
@@ -205,16 +233,20 @@ export async function readBoard(
 				q("b.invoiced_on", "is not", null),
 			]),
 		)
-		.$if(scope !== "all", (q) =>
-			q.where("a.account_client_id", scope === "team" ? "is" : "is not", null),
+		.$if(workspace !== "all", (q) =>
+			q.where(
+				"a.account_client_id",
+				workspace === "team" ? "is" : "is not",
+				null,
+			),
 		)
 		.$if(account !== null, (q) => q.where("a.account_client_id", "=", account))
 		.orderBy("b.closed_on", (o) => o.desc().nullsLast())
 		.orderBy("b.name")
-		.orderBy("b.id")
-		.execute();
+		.orderBy("b.id");
 
-	const accountRows = await db
+const accountRows = (db: Kysely<DB>) =>
+	db
 		.selectFrom("v_deal_room_account as a")
 		.innerJoin(
 			"v_client_engagement_status as ce",
@@ -243,10 +275,14 @@ export async function readBoard(
 				q("ce.prospect_engagement_status", "=", "active"),
 			]),
 		)
-		.orderBy("a.account_name")
-		.execute();
+		.orderBy("a.account_name");
 
-	const openSession = await db
+const openSession = (
+	db: Kysely<DB>,
+	partner: string,
+	{ workspace, account }: Scope,
+) =>
+	db
 		.selectFrom("v_deal_room_session")
 		.select((q) => [
 			"session_id",
@@ -254,28 +290,9 @@ export async function readBoard(
 			"account_client_id",
 			asText(q.ref("started_at")).as("started_at"),
 		])
-		.where("started_by", "=", actor)
+		.where("started_by", "=", partner)
 		.where("status", "=", "open")
-		.$if(scope !== "all", (q) => q.where("workspace_kind", "=", scope))
+		.$if(workspace !== "all", (q) => q.where("workspace_kind", "=", workspace))
 		.$if(account !== null, (q) => q.where("account_client_id", "=", account))
 		.orderBy("started_at", "desc")
-		.limit(1)
-		.executeTakeFirst();
-
-	return {
-		schema_version: "local-deals-board.v2",
-		actor,
-		deals: deals.map((deal) => ({
-			...deal,
-			phase_started_on: phaseStartedOn(deal.phase_started_on),
-			field_base: Object.fromEntries(
-				deal.field_base.map(({ field, ...base }) => [field, base]),
-			),
-			short_name: shortName(deal),
-		})),
-		closed_deals: closed.filter((deal) => deal.outcome !== "lost"),
-		lost_deals: closed.filter((deal) => deal.outcome === "lost"),
-		accounts: accountRows,
-		open_session: openSession ?? null,
-	};
-}
+		.limit(1);

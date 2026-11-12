@@ -5,6 +5,7 @@ import { resolveSubject } from "./resolve.ts";
 import {
 	asText,
 	clientPortalUrlOf,
+	nextStepRequired,
 	phaseChangeOf,
 	phaseStartedOn,
 	phaseStartsOf,
@@ -303,9 +304,7 @@ const liveDeal = (db: Kysely<DB>, id: string) =>
 			"b.attention",
 			asText(eb.ref("b.next_date")).as("next_date"),
 			"b.next_step",
-			eb
-				.or([eb("b.next_step", "is", null), eb("b.next_date", "is", null)])
-				.as("next_step_required"),
+			nextStepRequired,
 			"b.client_id",
 			"b.client_ref",
 			"b.client_name",
@@ -360,8 +359,8 @@ const archivedDeal = (db: Kysely<DB>, id: string) =>
 			eb
 				.case()
 				.when("a.account_client_id", "is", null)
-				.then(eb.val("team"))
-				.else(eb.val("national_account"))
+				.then("team")
+				.else("national_account")
 				.end()
 				.as("workspace_kind"),
 			asText(eb.ref("b.closed_on")).as("closed_on"),
