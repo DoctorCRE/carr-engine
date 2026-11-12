@@ -237,6 +237,21 @@ CREATE FUNCTION public.org_identity_key(p_name text) RETURNS text
   end
 $$;
 
+CREATE FUNCTION public.practice_address_key(address text) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$
+  select string_agg(case token
+    when 'street' then 'st' when 'avenue' then 'ave' when 'road' then 'rd'
+    when 'boulevard' then 'blvd' when 'drive' then 'dr' when 'lane' then 'ln'
+    when 'court' then 'ct' when 'place' then 'pl' when 'parkway' then 'pkwy'
+    when 'highway' then 'hwy' when 'suite' then 'ste'
+    when 'apartment' then 'apt' when 'floor' then 'fl' else token end, ' ' order by ord)
+  from regexp_split_to_table(
+    regexp_replace(regexp_replace(lower(address), '\m([0-9]{5})-[0-9]{4}\M', '\1', 'g'),
+      '[^a-z0-9]+', ' ', 'g'), ' +') with ordinality as parts(token,ord)
+  where token <> '';
+$$;
+
 CREATE FUNCTION public.revise_deal_client_need() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -3515,6 +3530,13 @@ CREATE VIEW public.v_party_graph AS
      JOIN public.party tp ON ((tp.id = pl.to_party)))
      LEFT JOIN party_ref fr ON ((fr.party_id = pl.from_party)))
      LEFT JOIN party_ref tr ON ((tr.party_id = pl.to_party)));
+
+CREATE VIEW public.v_practice_origination_party_address AS
+ SELECT DISTINCT ON (subject_id) subject_id AS party_id,
+    (value ->> 'street_address'::text) AS street_address
+   FROM public.record_flag
+  WHERE ((subject_type = 'party'::text) AND (kind = 'address'::text) AND ((value ->> 'found'::text) = 'true'::text) AND ((value ->> 'epistemic_status'::text) = 'source_backed'::text) AND ((expires_on IS NULL) OR (expires_on >= CURRENT_DATE)))
+  ORDER BY subject_id, observed_at DESC, id DESC;
 
 CREATE VIEW public.v_requirement_request AS
  SELECT id,

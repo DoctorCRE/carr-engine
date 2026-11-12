@@ -130,7 +130,7 @@ test("quiet follow-ups answer with the old cadence, date text and refusals", () 
 		}
 	}));
 
-test("the board refuses a bad workspace, then unknown fields, then a cursor, before any read", async () => {
+test("the board refuses a bad workspace, then unknown fields, then a malformed or leadless cursor, before any read", async () => {
 	const unread = "postgres://made-up@127.0.0.1:1/none";
 	const refused = async (search: string) =>
 		refusal(await board(search, unread));
@@ -153,7 +153,122 @@ test("the board refuses a bad workspace, then unknown fields, then a cursor, bef
 	]);
 	assert.deepEqual(await refused("?stage_history_cursor=12"), [400, generic]);
 	assert.deepEqual(await refused("?correspondence_cursor="), [400, generic]);
+	const lead = "workspace=leads&lead_id=00000000-0000-4000-8000-000000000001";
+	const id = "00000000-0000-4000-8000-000000000002";
+	for (const cursor of [
+		"not-json",
+		"12",
+		JSON.stringify([id, "2026-03-01T12:00:00Z"]),
+		JSON.stringify({ id, occurred_at: "2026-03-01T12:00:00Z", extra: 1 }),
+		JSON.stringify({ id: "not-a-uuid", occurred_at: "2026-03-01T12:00:00Z" }),
+		JSON.stringify({ id, occurred_at: "2026-02-30T12:00:00Z" }),
+		JSON.stringify({ id, occurred_at: "2026-03-01 12:00:00Z" }),
+		JSON.stringify({ id, occurred_at: "2026-03-01T12:00:00.1234567Z" }),
+	])
+		assert.deepEqual(
+			await refused(
+				`?${lead}&correspondence_cursor=${encodeURIComponent(cursor)}`,
+			),
+			[400, generic],
+			cursor,
+		);
+	for (const cursor of ["", "-1", "9223372036854775808", `{"id":"${id}"}`])
+		assert.deepEqual(
+			await refused(
+				`?${lead}&stage_history_cursor=${encodeURIComponent(cursor)}`,
+			),
+			[400, generic],
+			cursor,
+		);
+	assert.deepEqual(await refused(`?lead_id=${id}&stage_history_cursor=12`), [
+		400,
+		generic,
+	]);
+	assert.deepEqual(
+		await refused("?workspace=leads&lead_id=&stage_history_cursor=12"),
+		[400, generic],
+	);
 });
+
+test("one lead opens with the board, pages by the returned cursor, and refuses a malformed id", () =>
+	withSnapshot(async (url) => {
+		const db = new pg.Client({ connectionString: url });
+		await db.connect();
+		try {
+			const {
+				rows: [seeded],
+			} = await db.query<{
+				id: string;
+			}>(`with a as (insert into actor (slug, kind, display_name)
+					values ('leads-route-partner', 'human', 'Example') returning id),
+				k as (insert into contact_state (slug, label, contactable, sort)
+					values ('active', 'Example', true, 1)),
+				s as (insert into lead_stage (slug, label, sort) values ('new', 'New', 1)),
+				c as (insert into activity_kind (slug, label, is_contact) values ('call', 'Call', true)),
+				p as (insert into party (kind, name, created_by, updated_by)
+					select 'org', 'Example Route Lead', id, id from a returning id, created_by),
+				l as (insert into lead (party_id, stage, created_by, updated_by)
+					select id, 'new', created_by, created_by from p returning id, created_by),
+				x as (insert into activity (occurred_at, actor_id, kind, summary, lead_id)
+					select '2026-03-01 12:00:00.5+00'::timestamptz - n * interval '1 minute',
+					created_by, 'call', 'Example call', id from l, generate_series(1, 101) n)
+				select id from l`);
+			assert.ok(seeded);
+			type Opened = {
+				leads: { id: string }[];
+				detail: {
+					id: string;
+					correspondence: { id: string }[];
+					correspondence_page: { next_cursor: object | null };
+				} | null;
+			};
+			const open = async (search: string) => {
+				const response = await board(`?workspace=leads${search}`, url);
+				assert.equal(response.status, 200);
+				return (await response.json()) as Opened;
+			};
+			const first = await open(`&lead_id=${seeded.id.toUpperCase()}`);
+			assert.equal(first.detail?.id, seeded.id);
+			assert.equal(first.detail?.correspondence.length, 100);
+			const cursor = first.detail?.correspondence_page.next_cursor;
+			assert.deepEqual(cursor, {
+				occurred_at: "2026-03-01T10:20:00.5+00:00",
+				id: first.detail?.correspondence.at(-1)?.id,
+			});
+			const last = await open(
+				`&lead_id=${seeded.id}&correspondence_cursor=${encodeURIComponent(JSON.stringify(cursor))}`,
+			);
+			assert.deepEqual(
+				[
+					last.detail?.correspondence.length,
+					last.detail?.correspondence_page.next_cursor,
+				],
+				[1, null],
+			);
+			const unknown = await open(
+				"&lead_id=00000000-0000-4000-8000-000000000099",
+			);
+			assert.deepEqual(
+				[unknown.leads.map((l) => l.id), unknown.detail],
+				[[seeded.id], null],
+			);
+			assert.equal("detail" in (await open("&lead_id=")), false);
+			assert.deepEqual(
+				await refusal(
+					await board(`?workspace=leads&lead_id=${"x".repeat(36)}`, url),
+				),
+				[
+					400,
+					{
+						error: "database_refused_the_statement",
+						hint: "The operation could not be completed. Quote the correlation_id when reporting it.",
+					},
+				],
+			);
+		} finally {
+			await db.end();
+		}
+	}));
 
 test("the board answers, and refuses whole on bad timing or past the finding limit", () =>
 	withSnapshot(async (url) => {
