@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { compareAnswers } from "./answers.ts";
 import { clientFitShape } from "./deals-shapes.ts";
+import { findShape } from "./search-shape.ts";
 
 const shape = {
 	rows: {
@@ -35,7 +36,7 @@ const board = (deals: object[], extra: object = {}) => ({
 });
 const compare = (old: unknown, next: unknown) =>
 	compareAnswers(old, next, shape);
-const none = { differences: [], tiedRowsReordered: [] };
+const none = { differences: [], tiedRowsReordered: [], capAmbiguous: [] };
 
 test("identical answers match whatever their key order", () => {
 	const old = board([deal(d1), deal(d2, { attention: true })]);
@@ -97,6 +98,7 @@ test("rows tied on every sort key may swap, and the swap is counted", () => {
 	assert.deepEqual(result, {
 		differences: [],
 		tiedRowsReordered: [{ path: "deals[]", records: [] }],
+		capAmbiguous: [],
 	});
 });
 
@@ -110,6 +112,7 @@ test("a tie group of three may shuffle between rows that are not tied", () => {
 	assert.deepEqual(result, {
 		differences: [],
 		tiedRowsReordered: [{ path: "deals[]", records: [] }],
+		capAmbiguous: [],
 	});
 });
 
@@ -122,6 +125,7 @@ test("a tie swap inside a record names the record", () => {
 	assert.deepEqual(result, {
 		differences: [],
 		tiedRowsReordered: [{ path: "deals[].vendors[]", records: [{ id: d1 }] }],
+		capAmbiguous: [],
 	});
 });
 
@@ -135,6 +139,7 @@ test("rows that differ on a sort key must keep their order", () => {
 			{ path: "deals[]", records: [{ id: d1 }], kind: "order differs" },
 		],
 		tiedRowsReordered: [],
+		capAmbiguous: [],
 	});
 });
 
@@ -208,6 +213,7 @@ test("rows without an ID pair by content and may swap when tied", () => {
 	assert.deepEqual(tied, {
 		differences: [],
 		tiedRowsReordered: [{ path: "participants[]", records: [] }],
+		capAmbiguous: [],
 	});
 	const changed = compare(
 		{ participants: [person("A")] },
@@ -318,4 +324,116 @@ test("a client fit profile compares by position, so a changed field names its ev
 			},
 		],
 	);
+});
+
+const party = (ref: string, fields: object = {}) => ({
+	name: "Made-up Name",
+	city: "Springfield",
+	ref,
+	kind: "client",
+	merged: false,
+	...fields,
+});
+const named = (n: number) => ({
+	name: `Made-up Deal ${n}`,
+	phase: "research",
+	client_ref: `C-${n}`,
+});
+const organization = (n: number) => ({ name: `Made-up Org ${n}`, refs: [] });
+const found = (fields: object = {}) => ({
+	parties: [party("C-1"), party("L-2"), party("V-CPA-3", { merged: true })],
+	deals: [named(1), named(2)],
+	connections: [
+		{ from_ref: "C-1", to_ref: "L-2", kind: "referral" },
+		{ from_ref: "L-2", to_ref: "C-1", kind: "referral" },
+	],
+	organizations: [organization(1), organization(2)],
+	lead_client_links: [],
+	deals_via_link: [],
+	note: "Made-up note.",
+	...fields,
+});
+const find = (old: unknown, next: unknown) =>
+	compareAnswers(old, next, findShape);
+
+test("find lists ranked on values the answer leaves out may come back in any order", () => {
+	const old = found();
+	assert.deepEqual(find(old, found()), none);
+	const reversed = find(
+		old,
+		found({
+			parties: [party("L-2"), party("C-1"), party("V-CPA-3", { merged: true })],
+			deals: [named(2), named(1)],
+			connections: old.connections.toReversed(),
+			organizations: [organization(2), organization(1)],
+		}),
+	);
+	assert.deepEqual(reversed.differences, []);
+	assert.deepEqual(
+		reversed.tiedRowsReordered.map((place) => place.path),
+		["parties[]", "deals[]", "connections[]", "organizations[]"],
+	);
+});
+
+test("a find difference names its path and ref, and never a name", () => {
+	const result = find(
+		found(),
+		found({
+			parties: [
+				party("C-1", { city: "Shelbyville" }),
+				party("L-2"),
+				party("V-CPA-3", { merged: true }),
+			],
+			deals: [named(1)],
+			organizations: [organization(1), { ...organization(2), refs: ["P-9"] }],
+		}),
+	);
+	assert.deepEqual(result.differences, [
+		{ path: "parties[].city", records: [{ id: "C-1" }], kind: "value differs" },
+		{ path: "deals[]", records: [{ id: "C-2" }], kind: "missing in new" },
+		{
+			path: "organizations[].refs[]",
+			records: [{ index: 1 }, { index: 0 }],
+			kind: "missing in old",
+		},
+	]);
+	assert.ok(!JSON.stringify(result).includes("Made-up"));
+});
+
+test("a full old list leaves which rows made it, and what they decide, as cap ambiguity", () => {
+	const five = [1, 2, 3, 4, 5].map(named);
+	const changed = {
+		deals: [...five.slice(0, 4), named(6)],
+		deals_via_link: [named(7)],
+		note: "Another made-up note.",
+	};
+	const full = find(found({ deals: five }), found(changed));
+	assert.deepEqual(full.differences, []);
+	assert.deepEqual(
+		full.capAmbiguous.map((d) => [d.path, d.kind, d.records]),
+		[
+			["deals[]", "missing in new", [{ id: "C-5" }]],
+			["deals[]", "missing in old", [{ id: "C-6" }]],
+			["deals_via_link[]", "missing in old", [{ id: "C-7" }]],
+			["note", "value differs", []],
+		],
+	);
+	const short = find(found({ deals: five.slice(0, 4) }), found(changed));
+	assert.deepEqual(
+		short.differences.map((d) => d.path),
+		["deals[]", "deals_via_link[]", "note"],
+	);
+	assert.deepEqual(short.capAmbiguous, []);
+});
+
+test("a field that differs on a deal in both answers is a difference even when the list is full", () => {
+	const five = [1, 2, 3, 4, 5].map(named);
+	const result = find(
+		found({ deals: five }),
+		found({ deals: five.with(0, { ...named(1), phase: "legal" }) }),
+	);
+	assert.deepEqual(result.differences, [
+		{ path: "deals[].phase", records: [{ id: "C-1" }], kind: "value differs" },
+	]);
+	assert.deepEqual(result.capAmbiguous, []);
 });

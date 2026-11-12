@@ -35,6 +35,12 @@ const feed = (events = [event(11), event(12)]) => ({
 	events,
 	cursors: ["made-up-cursor"],
 });
+const found = (fields: object = {}) => ({
+	parties: [{ name: "Made-up Name", ref: "C-1", merged: false }],
+	deals: [],
+	note: "Made-up note.",
+	...fields,
+});
 const answer = (ask: Ask) =>
 	ask.read === "board"
 		? board()
@@ -42,13 +48,17 @@ const answer = (ask: Ask) =>
 			? detail(ask.deal)
 			: ask.read === "feed"
 				? feed()
-				: fixed[ask.read];
+				: ask.read === "find"
+					? found()
+					: fixed[ask.read];
 const label = (ask: Ask) =>
 	ask.read === "board"
 		? ask.workspace
 		: ask.read === "deal"
 			? ask.deal
-			: ask.read;
+			: ask.read === "find"
+				? `find ${ask.query}`
+				: ask.read;
 
 async function runWith(
 	engine: (ask: Ask, call: number) => unknown,
@@ -74,7 +84,7 @@ async function runWith(
 	return { run, calls, pauses };
 }
 
-test("asks the engine, the old system and the engine again for every board, the client fit, the capture queue, the change feed and every deal, pausing between requests", async () => {
+test("asks the engine, the old system and the engine again for every board, the client fit, the capture queue, the change feed, the find probes and every deal, pausing between requests", async () => {
 	const { run, calls, pauses } = await runWith(answer);
 	const asks = run.outcomes.map((o) => label(o.ask));
 	assert.deepEqual(asks, [
@@ -84,6 +94,9 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"client fit",
 		"capture queue",
 		"feed",
+		"find %",
+		"find _",
+		"find  ",
 		d1,
 		d2,
 		d3,
@@ -95,8 +108,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 8);
-	assert.deepEqual([run.oldReads, run.engineReads], [9, 18]);
+	assert.equal(pauses, 11);
+	assert.deepEqual([run.oldReads, run.engineReads], [12, 24]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -136,6 +149,9 @@ test("a request whose two engine answers differ is unsettled and not compared", 
 			"matched",
 			"matched",
 			"matched",
+			"matched",
+			"matched",
+			"matched",
 			"unsettled",
 			"matched",
 		],
@@ -155,6 +171,9 @@ test("a failed request is counted and the run goes on", async () => {
 	assert.deepEqual(
 		run.outcomes.map((o) => o.result),
 		[
+			"matched",
+			"matched",
+			"matched",
 			"matched",
 			"matched",
 			"matched",
@@ -186,6 +205,9 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"client fit matched",
 			"capture queue matched",
 			"feed failed",
+			"find % matched",
+			"find _ matched",
+			"find   matched",
 			`${d1} matched`,
 			`${d2} matched`,
 			`${d3} matched`,
@@ -248,17 +270,18 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(exitCode(run), 1);
 	assert.equal(
 		report("production", run),
-		`Old and new Deals answers compared on production
-old reads made: 9, engine reads made: 18
+		`Old and new answers compared on production
+old reads made: 12, engine reads made: 24
 
-read                                         asked   matched tie order different unsettled    failed
-board team                                       1         1         0         0         0         0
-board national_account                           1         1         0         0         0         0
-board all                                        1         0         1         0         0         0
-client fit                                       1         1         0         0         0         0
-capture queue                                    1         1         0         0         0         0
-change feed                                      1         1         0         0         0         0
-deal detail                                      3         0         0         3         0         0
+read                                         asked   matched tie order    at cap different unsettled    failed
+board team                                       1         1         0         0         0         0         0
+board national_account                           1         1         0         0         0         0         0
+board all                                        1         0         1         0         0         0         0
+client fit                                       1         1         0         0         0         0         0
+capture queue                                    1         1         0         0         0         0         0
+change feed                                      1         1         0         0         0         0         0
+search find                                      3         3         0         0         0         0         0
+deal detail                                      3         0         0         0         3         0         0
 
 differences: field path, kind, records, first record IDs
 detail.vendors[].note  value differs  3  ${uuid(9)}
@@ -285,7 +308,7 @@ test("the change feed reports a differing event field by path and event ID, an e
 	const outcome = run.outcomes.find((o) => o.ask.read === "feed");
 	assert.equal(outcome?.result, "different");
 	const text = report("production", run);
-	assert.match(text, /\nchange feed +1 +0 +0 +1 +0 +0\n/);
+	assert.match(text, /\nchange feed +1 +0 +0 +0 +1 +0 +0\n/);
 	assert.match(
 		text,
 		new RegExp(
@@ -378,9 +401,17 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 			],
 			cursors: [m(s)],
 		},
+		find: {
+			parties: [{ name: m(s), ref: m(s), city: m(s), merged: false }],
+			deals: [{ name: m(s), client_ref: m(s) }],
+			organizations: [{ name: m(s), refs: [m(s)] }],
+			connections: [{ from_name: m(s), from_ref: m(s), note: m(s) }],
+			lead_client_links: [{ lead_name: m(s), lead_ref: m(s) }],
+			note: m(s),
+		},
 	});
 	const answers = (s: string) => {
-		const { board, detail, fixed, feed } = side(s);
+		const { board, detail, fixed, feed, find } = side(s);
 		const details = new Map([d1, d2, d3].map((deal) => [deal, detail(deal)]));
 		return (ask: Ask) =>
 			ask.read === "board"
@@ -389,9 +420,17 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 					? details.get(ask.deal)
 					: ask.read === "feed"
 						? feed
-						: fixed[ask.read];
+						: ask.read === "find"
+							? find
+							: fixed[ask.read];
 	};
 	const { run } = await runWith(answers("new"), answers("old"));
+	assert.ok(
+		run.outcomes.some(
+			(o) => o.ask.read === "find" && markers.includes(o.ask.query),
+		),
+		"a client name from the old board was asked",
+	);
 	assert.ok(run.outcomes.every((o) => o.result === "different"));
 	const text = report("production", run);
 	assert.ok(markers.length > 40);
@@ -399,4 +438,77 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 		assert.ok(!text.includes(marker), `${marker} reached the report`);
 	assert.match(text, /detail\.events\[\]\.old_value {2}value differs/);
 	assert.match(text, /feed\.events\[\]\.new_value {2}value differs/);
+});
+
+test("finds the first twelve client names on the old boards, each once, after the probes", async () => {
+	const clients = Array.from({ length: 15 }, (_, n) => ({
+		id: uuid(20 + n),
+		client_name: `Made-up Client ${n}`,
+	}));
+	const listed = (ask: Ask) =>
+		ask.read === "board"
+			? {
+					...board(clients),
+					closed_deals: [{ id: d3, client_name: "Made-up Client 0" }],
+				}
+			: answer(ask);
+	const { run } = await runWith(listed, listed);
+	assert.deepEqual(
+		run.outcomes.flatMap((o) => (o.ask.read === "find" ? [o.ask.query] : [])),
+		["%", "_", " ", ...clients.slice(0, 12).map((c) => c.client_name)],
+	);
+	assert.equal(exitCode(run), 0);
+});
+
+test("an engine find that fails is a failed item and the run goes on", async () => {
+	const { run } = await runWith((ask) => {
+		if (ask.read === "find") throw new Error("engine read failed");
+		return answer(ask);
+	});
+	assert.deepEqual(
+		run.outcomes.map((o) => `${label(o.ask)} ${o.result}`).slice(5),
+		[
+			"feed matched",
+			"find % failed",
+			"find _ failed",
+			"find   failed",
+			`${d1} matched`,
+			`${d2} matched`,
+			`${d3} matched`,
+		],
+	);
+	assert.equal(run.stopped, false);
+	assert.equal(exitCode(run), 2);
+	assert.match(
+		report("production", run),
+		/\nfailed {2}search find {2}-\nfailed {2}search find {2}-\nfailed {2}search find {2}-\n$/,
+	);
+});
+
+test("a find whose old deals list is full reports the other deals as cap ambiguity, not a difference", async () => {
+	const deal = (n: number) => ({
+		name: `Made-up Deal ${n}`,
+		client_ref: `C-${n}`,
+	});
+	const five = [1, 2, 3, 4, 5].map(deal);
+	const { run } = await runWith(
+		(ask) =>
+			ask.read === "find"
+				? found({ deals: [...five.slice(1), deal(6)] })
+				: answer(ask),
+		(ask) => (ask.read === "find" ? found({ deals: five }) : answer(ask)),
+	);
+	assert.ok(
+		run.outcomes
+			.filter((o) => o.ask.read === "find")
+			.every((o) => o.result === "at cap"),
+	);
+	assert.equal(exitCode(run), 0);
+	const text = report("production", run);
+	assert.match(text, /\nsearch find +3 +0 +0 +3 +0 +0 +0\n/);
+	assert.match(
+		text,
+		/\ncap ambiguity, the old list was full: field path, kind, records, first record IDs\nfind\.deals\[\] {2}missing in new {2}3 {2}C-1\nfind\.deals\[\] {2}missing in old {2}3 {2}C-6\n/,
+	);
+	assert.ok(!text.includes("Made-up"));
 });

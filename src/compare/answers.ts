@@ -1,6 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 
-type Rows = { id?: string; sortedBy: readonly string[] };
+// A list at its cap holds one of several right answers when its order has
+// ties, so which rows made it, and what `decides` derives from them, may differ.
+type Cap = { size: number; decides: readonly string[] };
+// `key` names the fields that pair rows without an ID; otherwise the whole row does.
+type Rows = {
+	id?: string;
+	key?: readonly string[];
+	ref?: string;
+	cap?: Cap;
+} & ({ sortedBy: readonly string[] } | { unordered: true });
 type ReadShape = {
 	rows: Record<string, Rows>;
 	opaque?: readonly string[];
@@ -14,11 +23,12 @@ type Kind =
 	| "order differs";
 type Step = { id: string } | { index: number };
 type Place = { path: string; records: Step[] };
-type Difference = Place & { kind: Kind };
+export type Difference = Place & { kind: Kind };
 type Row = { key: string; step: Step; value: unknown; ties: unknown[] | null };
 
 export const UUID =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REF = /^[A-Z]{1,3}(?:-[A-Z0-9]+)*-[0-9]+$/;
 const FIELD = /^[a-z][a-z0-9_]*$/;
 
 function kindOf(value: unknown) {
@@ -31,7 +41,7 @@ function kindOf(value: unknown) {
 	}
 	return typeof value;
 }
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
 	kindOf(value) === "object";
 const byKey = (a: Row, b: Row) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
@@ -47,20 +57,33 @@ function rowsOf(items: unknown[], rows: Rows): Row[] {
 	return items.map((value, index) => {
 		const id = isRecord(value) && rows.id ? value[rows.id] : undefined;
 		const named = typeof id === "string" || typeof id === "number";
-		const base = named ? `id:${id}` : `row:${canonical(value)}`;
+		const key =
+			rows.key && isRecord(value) ? rows.key.map((k) => value[k]) : value;
+		const base = named ? `id:${id}` : `row:${canonical(key)}`;
 		const count = seen.get(base) ?? 0;
 		seen.set(base, count + 1);
+		const ref = isRecord(value) && rows.ref ? value[rows.ref] : undefined;
 		const printable =
 			(typeof id === "string" && UUID.test(id)) || Number.isSafeInteger(id);
+		const sortedBy = "sortedBy" in rows ? rows.sortedBy : [];
 		const sortable =
-			rows.sortedBy.length > 0 &&
+			sortedBy.length > 0 &&
 			isRecord(value) &&
-			rows.sortedBy.every((key) => Object.hasOwn(value, key));
+			sortedBy.every((key) => Object.hasOwn(value, key));
 		return {
 			key: `${base}#${count}`,
-			step: printable ? { id: String(id) } : { index },
+			step: printable
+				? { id: String(id) }
+				: typeof ref === "string" && REF.test(ref)
+					? { id: ref }
+					: { index },
 			value,
-			ties: sortable ? rows.sortedBy.map((key) => value[key]) : null,
+			ties:
+				"unordered" in rows
+					? []
+					: sortable
+						? sortedBy.map((key) => value[key])
+						: null,
 		};
 	});
 }
@@ -83,6 +106,7 @@ function untie(rows: Row[]): Row[] {
 export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	const differences: Difference[] = [];
 	const tiedRowsReordered: Place[] = [];
+	const full: (Cap & { path: string })[] = [];
 	const opaque = new Set(shape.opaque);
 	const ignored = new Set(shape.ignore);
 
@@ -135,6 +159,7 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 		records: Step[],
 		rows: Rows,
 	): void {
+		if (rows.cap && a.length >= rows.cap.size) full.push({ ...rows.cap, path });
 		const left = rowsOf(a, rows);
 		const right = rowsOf(b, rows);
 		const inLeft = new Map(left.map((row) => [row.key, row]));
@@ -173,5 +198,16 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	}
 
 	walk(old, next, "", []);
-	return { differences, tiedRowsReordered };
+	const allowed = (d: Difference) =>
+		full.some(
+			(cap) =>
+				(d.path === cap.path &&
+					(d.kind === "missing in new" || d.kind === "missing in old")) ||
+				cap.decides.some((p) => d.path === p || d.path.startsWith(`${p}.`)),
+		);
+	return {
+		differences: differences.filter((d) => !allowed(d)),
+		tiedRowsReordered,
+		capAmbiguous: differences.filter(allowed),
+	};
 }
