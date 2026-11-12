@@ -55,11 +55,8 @@ export const detailShape = {
 	ignore,
 };
 
-// Profiles have no ID, and their sort keys are their group, so none can tie.
+// Profiles have no ID but a total order, so they compare by position.
 export const clientFitShape = {
-	rows: {
-		"profiles[]": { sortedBy: [] },
-		"profiles[].evidence[]": strict("deal_id"),
-	},
+	rows: { "profiles[].evidence[]": strict("deal_id") },
 	ignore,
 };

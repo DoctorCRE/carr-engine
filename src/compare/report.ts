@@ -9,12 +9,16 @@ const RESULTS = [
 	"failed",
 ] as const;
 
-const readOf = (ask: Ask) =>
-	ask.read === "board"
-		? `board ${ask.workspace}`
-		: ask.read === "deal"
-			? "deal detail"
-			: "client fit";
+function readOf(ask: Ask) {
+	switch (ask.read) {
+		case "board":
+			return `board ${ask.workspace}`;
+		case "deal":
+			return "deal detail";
+		case "client fit":
+			return "client fit";
+	}
+}
 const PREFIXES = { board: "board", deal: "detail", "client fit": "fit" };
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>

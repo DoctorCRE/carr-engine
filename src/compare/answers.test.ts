@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { compareAnswers } from "./answers.ts";
+import { clientFitShape } from "./deals-shapes.ts";
 
 const shape = {
 	rows: {
@@ -301,4 +302,20 @@ test("no value or data-made key from either answer reaches the result", () => {
 		assert.ok(!serialized.includes(marked(n)), `marker ${n} stayed out`);
 	assert.ok(!serialized.includes("marker_key_secret"), "opaque key stayed out");
 	assert.ok(!/\b1[15]\b/.test(serialized), "numeric values stayed out");
+});
+
+test("a client fit profile compares by position, so a changed field names its evidence row", () => {
+	const fit = (deal_name: string) => ({
+		profiles: [{ vertical: null, evidence: [{ deal_id: d1, deal_name }] }],
+	});
+	assert.deepEqual(
+		compareAnswers(fit("Old"), fit("New"), clientFitShape).differences,
+		[
+			{
+				path: "profiles[].evidence[].deal_name",
+				records: [{ index: 0 }, { id: d1 }],
+				kind: "value differs",
+			},
+		],
+	);
 });
