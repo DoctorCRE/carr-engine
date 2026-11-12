@@ -19,6 +19,7 @@ import { readQuietFollowUps } from "./leads/quiet-follow-ups.ts";
 import { readReasonsToReachOut } from "./leads/reasons-to-reach-out.ts";
 import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
+import { readNetwork } from "./relationships/network.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 import { readVendorMarkets } from "./vendors/markets.ts";
@@ -226,7 +227,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets and recent activity and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network and recent activity and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -392,6 +393,14 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				selected_market: "example",
 				vendors: [{ name: "Example Clinic" }],
 			});
+			const network = await readSnapshot(login, readNetwork);
+			assert.deepEqual(
+				network.edges.map((e) => [e.kind, e.when]),
+				[
+					["client_deal", null],
+					["worked", "2026-01-02T00:00:00+00:00"],
+				],
+			);
 			await withAdmin(
 				(admin) =>
 					admin.query(`insert into practice_origination_feed (source) values ('nppes');

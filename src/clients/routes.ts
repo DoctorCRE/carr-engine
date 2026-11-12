@@ -169,7 +169,7 @@ const vendorQuery = (params: URLSearchParams, viewer: string) => ({
 	disposition: slug(params, "disposition"),
 });
 
-function refusalOf(error: unknown) {
+export function refusalOf(error: unknown) {
 	if (error instanceof BusinessRefusal) return error;
 	const code =
 		typeof error === "object" && error !== null && "code" in error
