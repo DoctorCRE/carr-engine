@@ -140,6 +140,23 @@ export function listAnswer<
 	};
 }
 
+// The old single-record envelope.
+export const recordAnswer = <Row>(
+	dataset: Dataset,
+	viewer: string,
+	record: Row,
+	partial: object | null,
+	stamp: Stamp,
+) => ({
+	viewer,
+	dataset,
+	record,
+	partial,
+	not_in_this_read: NOT_IN_THIS_READ,
+	recorded_field_note: DATASETS[dataset].note,
+	source: source(dataset, stamp),
+});
+
 const PIPELINE = { active: true, other: false, unknown: null } as const;
 
 const liveClients = (db: Kysely<DB>) =>
@@ -311,13 +328,5 @@ export async function readClient(
 		])
 		.executeTakeFirst();
 	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
-	return {
-		viewer,
-		dataset: "clients",
-		record: shaped(record, contract),
-		partial: null,
-		not_in_this_read: NOT_IN_THIS_READ,
-		recorded_field_note: DATASETS.clients.note,
-		source: source("clients", stamp),
-	};
+	return recordAnswer("clients", viewer, shaped(record, contract), null, stamp);
 }

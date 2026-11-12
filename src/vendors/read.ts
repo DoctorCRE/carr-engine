@@ -1,11 +1,13 @@
 import { type Kysely, sql } from "kysely";
 import {
 	BusinessRefusal,
+	type Contract,
 	type ListQuery,
 	listAnswer,
 	ownedByViewer,
 	PAGE_SIZE,
 	partnerId,
+	recordAnswer,
 	SORTS,
 	type Stamp,
 	searched,
@@ -13,6 +15,7 @@ import {
 } from "../clients/read.ts";
 import type { DB } from "../database.d.ts";
 import { asText } from "../reader.ts";
+import { inJsonbOrder, people } from "./people.ts";
 import { rateTrackRecord, trackRecordFacts } from "./track-record.ts";
 
 export const VENDOR_SORTS = [...SORTS, "territory"] as const;
@@ -58,6 +61,16 @@ const liveVendors = (db: Kysely<DB>) =>
 		.where("p.merged_into", "is", null)
 		.where("p.deleted_at", "is", null);
 
+const withTrackRecord = (vendors: ReturnType<typeof liveVendors>) =>
+	vendors.innerJoinLateral(trackRecordFacts.as("vr"), (join) => join.onTrue());
+
+const V2 = "vendor-directory.v2";
+
+// v2 adds the vendor's people and, as the old read did, passes the whole row
+// through jsonb, which reorders its keys.
+const contracted = <Row>(row: Row, contract: Contract) =>
+	contract === V2 ? inJsonbOrder(row) : row;
+
 // Stage, disposition and level have foreign keys, so only the category can
 // be a code with no label.
 function unlabelled(rows: { recorded_category_label: string | null }[]) {
@@ -102,8 +115,7 @@ export async function readVendorList(
 	const { total } = await matching
 		.select(sql<number>`count(*)::int`.as("total"))
 		.executeTakeFirstOrThrow();
-	const rows = await matching
-		.innerJoinLateral(trackRecordFacts.as("vr"), (join) => join.onTrue())
+	const rows = await withTrackRecord(matching)
 		.select((eb) => [
 			"v.id",
 			"v.vendor_ref as ref",
@@ -133,6 +145,7 @@ export async function readVendorList(
 			ownedByViewer(sql.ref("v.owner_id"), ownerId).as("owned_by_viewer"),
 			asText(eb.ref("v.updated_at")).as("updated_at"),
 		])
+		.$if(query.contract === V2, (qb) => qb.select(people.as("people")))
 		.orderBy(ORDER[query.sort])
 		.limit(PAGE_SIZE)
 		.offset((query.page - 1) * PAGE_SIZE)
@@ -171,11 +184,13 @@ export async function readVendorList(
 		total,
 		{
 			rows: rows.map((row) => {
-				if (query.contract)
+				if (query.contract) {
+					const shaped = contracted(row, query.contract);
 					return {
-						...row,
-						relationship: rateTrackRecord(row.relationship, now),
+						...shaped,
+						relationship: rateTrackRecord(shaped.relationship, now),
 					};
+				}
 				const {
 					relationship,
 					vertical,
@@ -189,6 +204,88 @@ export async function readVendorList(
 			facets: territories ? { ...facets, territories } : facets,
 			partial: unlabelled(rows),
 		},
+		stamp,
+	);
+}
+
+export async function readVendor(
+	db: Kysely<DB>,
+	viewer: string,
+	id: string,
+	contract: Contract | null,
+	stamp: Stamp,
+) {
+	const ownerId = await viewerIdOf(db, viewer);
+	const record = await withTrackRecord(liveVendors(db))
+		.where("v.id", "=", id)
+		.select((eb) => [
+			"v.id",
+			"v.vendor_ref as ref",
+			"p.name",
+			"p.kind as party_kind",
+			"p.city",
+			"p.state",
+			"p.county",
+			"p.title",
+			"p.phone",
+			"p.cell",
+			"p.email",
+			"p.contact_state",
+			"p.contact_state_reason",
+			"p.contact_state_until",
+			"p.contact_state_cadence",
+			category.as("recorded_category"),
+			"vc.label as recorded_category_label",
+			"v.stage as recorded_stage",
+			"vs.label as recorded_stage_label",
+			"v.disposition as recorded_disposition",
+			"vd.label as recorded_disposition_label",
+			"vd.workable as recorded_disposition_workable",
+			"v.relationship_level",
+			"vrl.label as relationship_level_label",
+			"vrl.note as relationship_level_note",
+			"v.verticals",
+			"v.territory",
+			"v.offers",
+			"v.seeking",
+			"v.rivalry_group",
+			"v.originated",
+			"v.referral_active",
+			"v.is_target",
+			"v.out_of_market",
+			"v.last_touch",
+			"vr.facts as relationship",
+			"v.loan_programs",
+			"v.intro_notes",
+			"v.links_label",
+			"v.owner_label",
+			ownedByViewer(sql.ref("v.owner_id"), ownerId).as("owned_by_viewer"),
+			"v.version as record_version",
+			asText(eb.ref("v.created_at")).as("created_at"),
+			asText(eb.ref("v.updated_at")).as("updated_at"),
+		])
+		.$if(contract === V2, (qb) => qb.select(people.as("people")))
+		.executeTakeFirst();
+	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
+	const partial = unlabelled([record]);
+	if (contract) {
+		const shaped = contracted(record, contract);
+		const now = stamp.observedAt.valueOf();
+		return recordAnswer(
+			"vendors",
+			viewer,
+			{ ...shaped, relationship: rateTrackRecord(shaped.relationship, now) },
+			partial,
+			stamp,
+		);
+	}
+	// The legacy shape keeps the territory, moved to the end.
+	const { relationship, loan_programs, territory, ...legacy } = record;
+	return recordAnswer(
+		"vendors",
+		viewer,
+		{ ...legacy, territory },
+		partial,
 		stamp,
 	);
 }

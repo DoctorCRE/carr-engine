@@ -2,7 +2,12 @@ import { type Context, Hono } from "hono";
 import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
-import { readVendorList, VENDOR_SORTS } from "../vendors/read.ts";
+import {
+	readVendor,
+	readVendorList,
+	VENDOR_SORTS,
+	type VendorQuery,
+} from "../vendors/read.ts";
 import {
 	BusinessRefusal,
 	type ClientQuery,
@@ -34,8 +39,6 @@ const LIST_FIELDS = {
 	clients: [...SHARED_FIELDS, "status", "type", "pipeline"],
 	vendors: [...SHARED_FIELDS, "category", "stage", "disposition", "territory"],
 };
-// vendor-directory.v2 adds a vendor's people, which the engine does not read yet.
-const VENDOR_CONTRACTS = ["vendor-directory.v1"] as const;
 const RECORD_FIELDS = ["viewer", "contract"];
 const SCOPES = ["team", "mine"] as const;
 const OWNERS = ["all", ...PARTNERS] as const;
@@ -138,10 +141,9 @@ function listQuery<D extends Dataset, Sort extends string>(
 	params: URLSearchParams,
 	viewer: string,
 	sorts: readonly ("name" | Sort)[],
-	contracts: readonly Contract[],
 ): ListQuery<D, "name" | Sort> {
 	checkFields(params, LIST_FIELDS[dataset], viewer);
-	const contract = oneOf(params, "contract", contracts, null);
+	const contract = oneOf(params, "contract", CONTRACTS, null);
 	return {
 		dataset,
 		...(contract ? { contract } : {}),
@@ -156,14 +158,14 @@ function listQuery<D extends Dataset, Sort extends string>(
 }
 
 const clientQuery = (params: URLSearchParams, viewer: string): ClientQuery => ({
-	...listQuery("clients", params, viewer, SORTS, CONTRACTS),
+	...listQuery("clients", params, viewer, SORTS),
 	status: slug(params, "status"),
 	type: slug(params, "type"),
 	pipeline: oneOf(params, "pipeline", PIPELINES, "any"),
 });
 
-const vendorQuery = (params: URLSearchParams, viewer: string) => ({
-	...listQuery("vendors", params, viewer, VENDOR_SORTS, VENDOR_CONTRACTS),
+const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
+	...listQuery("vendors", params, viewer, VENDOR_SORTS),
 	category: slug(params, "category"),
 	stage: slug(params, "stage"),
 	disposition: slug(params, "disposition"),
@@ -233,19 +235,35 @@ directory.get("/clients", (c) =>
 );
 // The old door answered any id that is not a UUID before anything else.
 // It tested the raw path, where a percent-encoded id is not a UUID.
-directory.get("/clients/:id{.*}", async (c) => {
-	const id = c.req.param("id");
+async function record(
+	c: Context<DatabaseEnv>,
+	id: string,
+	read: (
+		db: Reader,
+		viewer: string,
+		id: string,
+		contract: Contract | null,
+		stamp: Stamp,
+	) => Promise<object>,
+) {
 	if (!UUID.test(id) || new URL(c.req.url).pathname !== c.req.path)
 		return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
 		const contract = oneOf(params, "contract", CONTRACTS, null);
-		return (db, stamp) => readClient(db, viewer, id, contract, stamp);
+		return (db, stamp) => read(db, viewer, id, contract, stamp);
 	});
-});
+}
+
+directory.get("/clients/:id{.*}", (c) =>
+	record(c, c.req.param("id"), readClient),
+);
 directory.get("/vendors", (c) =>
 	answer(c, (params, viewer) => {
 		const query = vendorQuery(params, viewer);
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
+);
+directory.get("/vendors/:id{.*}", (c) =>
+	record(c, c.req.param("id"), readVendor),
 );

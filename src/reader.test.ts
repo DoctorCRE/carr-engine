@@ -20,7 +20,7 @@ import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
-import { readVendorList } from "./vendors/read.ts";
+import { readVendor, readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
 // name, and `carr_business_date()`. The views read their tables with their
@@ -77,6 +77,7 @@ const readable = [
 	"v_record_flag_subject",
 	"v_ref_index",
 	"v_requirement_request",
+	"v_vendor_assignment_context",
 	"vendor",
 	"vendor_category",
 	"vendor_disposition",
@@ -217,7 +218,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details and the vendor list and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list and a vendor's details and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -368,6 +369,15 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				),
 				[[1, "2026-01-02T00:00:00+00:00"]],
 			);
+			const [shown] = vendors.rows;
+			assert.ok(shown);
+			const vendor = await readSnapshot(login, (db) =>
+				readVendor(db, seeded.actor, shown.id, "vendor-directory.v2", {
+					observedAt: new Date(),
+					correlationId: "example",
+				}),
+			);
+			assert.equal(vendor.record.people?.length, 1);
 			await withAdmin(
 				(admin) =>
 					admin.query(`insert into practice_origination_feed (source) values ('nppes');
