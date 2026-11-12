@@ -20,6 +20,7 @@ import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
+import { readVendorMarkets } from "./vendors/markets.ts";
 import { trackRecordFacts } from "./vendors/track-record.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
@@ -77,7 +78,12 @@ const readable = [
 	"v_record_flag_subject",
 	"v_ref_index",
 	"v_requirement_request",
+	"v_vendor_assignment_context",
 	"vendor",
+	"vendor_market",
+	"vendor_market_key",
+	"vendor_market_membership",
+	"vendor_market_regional_reference",
 ];
 
 async function withAdmin<T>(
@@ -213,7 +219,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details and a vendor's track record and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, a vendor's track record and vendor markets and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -344,6 +350,22 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			assert.deepEqual(
 				[track.facts.deals_worked, track.facts.first_worked_at],
 				[1, "2026-01-02T00:00:00+00:00"],
+			);
+			await withAdmin(
+				(admin) =>
+					admin.query(`insert into vendor_market select 'example', 'Example', 'market',
+							'Example', 'Example', id, now() from actor;
+						insert into vendor_market_membership select 'example', vendor.id, true, null,
+							'Example', actor.id, now() from vendor, actor`),
+				database,
+			);
+			const markets = await readSnapshot(login, (db) =>
+				readVendorMarkets(db, "Example"),
+			);
+			assert.ok("vendors" in markets);
+			assert.deepEqual(
+				[markets.selected_market, markets.vendors.map((v) => v.name)],
+				["example", ["Example Clinic"]],
 			);
 			await withAdmin(
 				(admin) =>
