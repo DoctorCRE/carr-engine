@@ -370,6 +370,8 @@ test("a client's details refuse bad paths and inputs with the old bodies, in the
 		["/example", 404, notFound],
 		[`/${id(1)}x`, 404, notFound],
 		[`/${id(1)}/deals`, 404, notFound],
+		[`/${id(1).slice(0, -1)}%31`, 404, notFound, { database: null }],
+		[`/${id(1).replace("-", "%2D")}`, 404, notFound, { database: null }],
 		["/example", 404, notFound, { database: null, slug: "example" }],
 		[`/${id(1)}`, 503, { error: "DEPENDENCY_UNAVAILABLE" }, { database: null }],
 		[
