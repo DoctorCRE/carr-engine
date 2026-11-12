@@ -3,6 +3,7 @@ import { answer, Refusal, refuse } from "../answer.ts";
 import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
 import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
+import { readCaptureQueue } from "./capture-queue.ts";
 import { decodeCursor, readChanges } from "./changes.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
@@ -66,6 +67,8 @@ deals.get("/client-fit", (c) =>
 		return "error" in fit ? new Refusal(422, "unhandled_verb_failure") : fit;
 	}),
 );
+
+deals.get("/capture-queue", (c) => answer(c, readCaptureQueue));
 
 // The old feed checked the partner, then the method, then the cursor, and
 // answered with bare error bodies.

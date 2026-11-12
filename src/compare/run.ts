@@ -2,6 +2,7 @@ import { WORKSPACES, type Workspace } from "../deals/board.ts";
 import { compareAnswers, UUID } from "./answers.ts";
 import {
 	boardShape,
+	captureQueueShape,
 	clientFitShape,
 	detailShape,
 	feedShape,
@@ -13,6 +14,7 @@ export type Ask =
 	| { read: "board"; workspace: Workspace }
 	| { read: "deal"; deal: string }
 	| { read: "client fit" }
+	| { read: "capture queue" }
 	| { read: "feed"; start: string };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
@@ -45,6 +47,7 @@ const SHAPES = {
 	board: boardShape,
 	deal: detailShape,
 	"client fit": clientFitShape,
+	"capture queue": captureQueueShape,
 	feed: feedShape,
 };
 
@@ -72,6 +75,7 @@ export async function compareDeals(
 	const queue: Ask[] = [
 		...WORKSPACES.map((workspace) => ({ read: "board", workspace }) as const),
 		{ read: "client fit" },
+		{ read: "capture queue" },
 		// Every read of the feed starts here. A write between the reads shows as an unsettled feed.
 		{ read: "feed", start: feedStart(Date.now()) },
 	];

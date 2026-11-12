@@ -61,6 +61,12 @@ export const clientFitShape = {
 	ignore,
 };
 
+export const captureQueueShape = {
+	rows: { "candidates[]": strict("id") },
+	opaque: ["candidates[].payload"],
+	ignore,
+};
+
 export const feedShape = {
 	rows: { "events[]": strict("id") },
 	opaque: ["events[].old_value", "events[].new_value"],

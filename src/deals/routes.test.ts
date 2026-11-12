@@ -8,6 +8,7 @@ import type { DB } from "../database.d.ts";
 import { readSnapshot } from "../reader.ts";
 import worker from "../worker.ts";
 import { readBoard } from "./board.ts";
+import { readCaptureQueue } from "./capture-queue.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 
@@ -114,6 +115,16 @@ async function seed(url: string) {
 			"routes-agent": await session(actor.id),
 			"routes-other": await session(other.id),
 		};
+		await sql`with s as (insert into capture_session (nonce, device_id, actor_id,
+			mode, started_at, consent_announced_at, session_token_hash, expires_at, state_at)
+			values ('example-nonce', 'example-device', ${actor.id}, 'meeting', now(), now(),
+			'example-hash', now() + interval '1 hour', now()) returning id)
+			insert into capture_candidate (session_id, idempotency_key, batch_hash,
+			item_index, kind, payload, evidence_quote, confidence)
+			select id, 'example-key', 'example-batch', 0, 'next_step',
+			${JSON.stringify({ deal: first.id })}, 'Example quote', 0.75 from s`.execute(
+			db,
+		);
 		const survivor = await db
 			.insertInto("client")
 			.values({ party_id: (await party("Example Survivor")).id, ...audit })
@@ -219,6 +230,21 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 				},
 			);
 
+			await t.test("a signed-in partner gets the capture queue", async () => {
+				const response = await get("/capture-queue");
+				assert.equal(response.status, 200);
+				assert.equal(response.headers.get("Cache-Control"), "no-store");
+				const text = await response.text();
+				assert.match(
+					text,
+					/"confidence":0\.75,"deal_name":"Example Route Deal"/,
+				);
+				assert.equal(
+					text,
+					JSON.stringify(await readSnapshot(url, readCaptureQueue)),
+				);
+			});
+
 			await t.test(
 				"a partner with no actor record is refused for every read",
 				async () => {
@@ -232,11 +258,8 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 						422,
 						expected,
 					);
-					await refused(
-						await get("/client-fit", "no-such-partner"),
-						422,
-						expected,
-					);
+					for (const path of ["/client-fit", "/capture-queue"])
+						await refused(await get(path, "no-such-partner"), 422, expected);
 				},
 			);
 
@@ -343,7 +366,12 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 });
 
 test("without a database binding every read answers 503", async () => {
-	for (const path of ["/deals", "/deals/Example", "/client-fit"]) {
+	for (const path of [
+		"/deals",
+		"/deals/Example",
+		"/client-fit",
+		"/capture-queue",
+	]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{ headers: { Cookie: cookie } },
@@ -357,7 +385,12 @@ test("without a database binding every read answers 503", async () => {
 
 test("a request with no session is refused before any read", async () => {
 	let sessionChecks = 0;
-	for (const path of ["/deals", "/deals/Example", "/client-fit"]) {
+	for (const path of [
+		"/deals",
+		"/deals/Example",
+		"/client-fit",
+		"/capture-queue",
+	]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{},

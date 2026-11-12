@@ -17,6 +17,8 @@ function readOf(ask: Ask) {
 			return "deal detail";
 		case "client fit":
 			return "client fit";
+		case "capture queue":
+			return "capture queue";
 		case "feed":
 			return "change feed";
 	}
@@ -25,6 +27,7 @@ const PREFIXES = {
 	board: "board",
 	deal: "detail",
 	"client fit": "fit",
+	"capture queue": "queue",
 	feed: "feed",
 };
 const table = (rows: (string | number)[][]) =>
