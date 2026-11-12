@@ -109,7 +109,7 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 		],
 	},
 ];
-// Milestones the partners record as facts, not documents a client sends.
+// Items the partners record as facts, not documents a client sends.
 const NOT_DOCUMENTS = new Set([
 	"executed_comp",
 	"expiration_recorded",
@@ -232,13 +232,13 @@ function settle(
 	};
 }
 
-function deadlinesOf({ deal, criticalDates, today }: Facts): Item[] {
+function criticalDateItems({ deal, criticalDates, today }: Facts): Item[] {
 	return criticalDates.flatMap((date) =>
 		date.status === "open" && date.source?.trim() && isDate(date.due_on)
 			? [
 					{
 						id: `critical-date:${date.id}`,
-						label: String(date.kind).replaceAll("_", " "),
+						label: (date.kind ?? "").replaceAll("_", " "),
 						status: dueStatus(date.due_on, today),
 						due_on: date.due_on,
 						evidence_ref: date.source,
@@ -271,9 +271,9 @@ export function checklistOf(facts: Facts) {
 		deal_type: type,
 		sources: SOURCES,
 		observed_on: facts.today,
-		requests_state: "current",
 	};
-	if (!cited) return { ...head, phases: [], due_items: [] };
+	if (!cited)
+		return { ...head, phases: [], due_items: [], requests_state: "current" };
 
 	const evidence = evidenceOf(facts);
 	const requests = new Map(facts.requests.map((r) => [r.row_key, r]));
@@ -306,7 +306,7 @@ export function checklistOf(facts: Facts) {
 						facts.today,
 					),
 				),
-			...(id === "legal" ? deadlinesOf(facts) : []),
+			...(id === "legal" ? criticalDateItems(facts) : []),
 		],
 	}));
 	const due_items = phases
@@ -314,10 +314,10 @@ export function checklistOf(facts: Facts) {
 		.filter((item) => item.status === "due" || item.status === "overdue")
 		.sort(
 			(a, b) =>
-				String(a.due_on).localeCompare(String(b.due_on)) ||
+				(a.due_on ?? "").localeCompare(b.due_on ?? "") ||
 				a.id.localeCompare(b.id),
 		);
-	return { ...head, phases, due_items };
+	return { ...head, phases, due_items, requests_state: "current" };
 }
 
 const requestsOf = (db: Kysely<DB>, deal: string) =>
@@ -375,7 +375,8 @@ export async function readChecklist(
 		.execute();
 	const requests = await requestsOf(db, deal.id);
 	const { today } = await db
-		.selectNoFrom(sql<string>`carr_business_date()::text`.as("today"))
+		.selectNoFrom(asText(sql`carr_business_date()`).as("today"))
+		.$narrowType<{ today: string }>()
 		.executeTakeFirstOrThrow();
 	return checklistOf({
 		deal,

@@ -712,7 +712,7 @@ test("the checklist reads its sources, commissions and requests", async () => {
 		const { checklist } = detail;
 		const today = await sql<{
 			today: string;
-		}>`select carr_business_date()::text as today`.execute(tx);
+		}>`select to_jsonb(carr_business_date())#>>'{}' as today`.execute(tx);
 		assert.equal(checklist.observed_on, today.rows[0]?.today);
 		assert.equal(checklist.template_state, "deal_type_unknown");
 		const items = checklist.phases.flatMap((p) => p.items);

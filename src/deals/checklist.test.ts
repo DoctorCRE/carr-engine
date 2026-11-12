@@ -51,18 +51,18 @@ test("a changed or retired source turns the checklist off", () => {
 				sections: cited.map((s, i) => (i === 2 ? { ...s, ...change } : s)),
 			}),
 		);
-		assert.deepEqual(
-			{ ...checklist, sources: checklist.sources.length },
-			{
+		assert.equal(
+			JSON.stringify({ ...checklist, sources: checklist.sources.length }),
+			JSON.stringify({
 				schema_version: "deal-checklist.v1",
 				template_state: "source_changed",
 				deal_type: "lease",
 				sources: 5,
 				observed_on: "2030-06-15",
-				requests_state: "current",
 				phases: [],
 				due_items: [],
-			},
+				requests_state: "current",
+			}),
 		);
 	}
 });
@@ -162,17 +162,30 @@ test("recorded facts complete items and requests set owner, date and status", ()
 		"example-agreement.pdf",
 	]);
 	assert.deepEqual(status("tour_notes"), ["upcoming", null]);
-	assert.deepEqual(items.get("executed_lease"), {
-		id: "executed_lease",
-		label: "Executed lease / amendment",
-		status: "complete",
-		due_on: "2030-07-01",
-		evidence_ref: "example-lease.pdf",
-		owner: "Example Owner",
-		document_type: "executed_lease",
-		source: SOURCES[0],
-		request: requests[0],
-	});
+	assert.deepEqual(Object.keys(checklist), [
+		"schema_version",
+		"template_state",
+		"deal_type",
+		"sources",
+		"observed_on",
+		"phases",
+		"due_items",
+		"requests_state",
+	]);
+	assert.equal(
+		JSON.stringify(items.get("executed_lease")),
+		JSON.stringify({
+			id: "executed_lease",
+			label: "Executed lease / amendment",
+			status: "complete",
+			due_on: "2030-07-01",
+			evidence_ref: "example-lease.pdf",
+			owner: "Example Owner",
+			document_type: "executed_lease",
+			source: SOURCES[0],
+			request: requests[0],
+		}),
+	);
 	assert.deepEqual(items.get("invoice_recorded")?.source, {
 		request: "per-deal standard checklist",
 		record_verb: "record-deal-invoice",
