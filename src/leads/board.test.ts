@@ -441,6 +441,37 @@ test("a successful contact is the newest connected or bound mail in the last 90 
 		assert.equal(bound?.successful_contact?.activity_id, uuid(97));
 	}));
 
+test("findings tied on time are ordered by id", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await party(tx, 1, "Example Tie");
+		await lead(tx, 78, 1);
+		for (const n of [87, 86])
+			await finding(tx, n, ["party", 1], "note", {}, "2026-03-01 00:00:00+00");
+		const [label] = await labels(tx);
+		assert.deepEqual(
+			label?.evidence.map((f) => f.flag_id),
+			[86, 87].map(uuid),
+		);
+	}));
+
+test("activity from before the lead was created is left out", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await activityKinds(tx);
+		await party(tx, 1, "Example New");
+		await lead(tx, 79, 1);
+		await sql`update lead set created_at = now() - interval '2 days'
+			where id = ${uuid(79)}::uuid`.execute(tx);
+		await activity(tx, 98, 79, "1 day");
+		await activity(tx, 99, 79, "3 days");
+		const [label] = await labels(tx);
+		assert.deepEqual(
+			label?.source_inputs.activities.map((a) => a.id),
+			[uuid(98)],
+		);
+	}));
+
 test("conflicting, expired and restricted leads stay in research", () =>
 	withRollback(async (tx) => {
 		await seed(tx);

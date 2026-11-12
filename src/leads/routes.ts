@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { answer, Refusal, refuse } from "../answer.ts";
+import { answer, Refusal, refuse, unregisteredFields } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard } from "./board.ts";
 import { readQuietFollowUps } from "./quiet-follow-ups.ts";
@@ -12,8 +12,6 @@ const BOARD_FIELDS = [
 	"stage_history_cursor",
 ];
 const QUIET_FIELDS = ["lead_days", "vendor_days", "owner_slug"];
-// The old system echoed back only identifier-shaped field names, at most 20.
-const ECHOED_FIELD = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
 
 // The old system turned a numeric string into a number and checked neither
 // whole numbers nor the declared 1 to 365 range.
@@ -38,19 +36,8 @@ leads.get("/leads", async (c) => {
 				fields: ["workspace"],
 			}),
 		);
-	const extra = [...new Set(params.keys())].filter(
-		(key) => !BOARD_FIELDS.includes(key),
-	);
-	if (extra.length > 0)
-		return refuse(
-			c,
-			new Refusal(400, "unregistered_operation_fields", {
-				fields: extra
-					.sort()
-					.filter((key) => ECHOED_FIELD.test(key))
-					.slice(0, 20),
-			}),
-		);
+	const unregistered = unregisteredFields(params, BOARD_FIELDS);
+	if (unregistered) return refuse(c, unregistered);
 	// The old read refused any history cursor sent without a lead, and its
 	// error was not public, so it answered generically.
 	if (params.has("correspondence_cursor") || params.has("stage_history_cursor"))
@@ -65,19 +52,8 @@ leads.get("/leads", async (c) => {
 
 leads.get("/quiet-follow-ups", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const extra = [...new Set(params.keys())].filter(
-		(key) => !QUIET_FIELDS.includes(key),
-	);
-	if (extra.length > 0)
-		return refuse(
-			c,
-			new Refusal(400, "unregistered_operation_fields", {
-				fields: extra
-					.sort()
-					.filter((key) => ECHOED_FIELD.test(key))
-					.slice(0, 20),
-			}),
-		);
+	const unregistered = unregisteredFields(params, QUIET_FIELDS);
+	if (unregistered) return refuse(c, unregistered);
 	const lead_days = asNumber(params.get("lead_days"), 45);
 	if (lead_days === undefined)
 		return refuse(

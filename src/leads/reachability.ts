@@ -13,6 +13,7 @@ export type Finding = {
 
 type ContactActivity = {
 	id: string;
+	lead_id: string;
 	kind: string;
 	connected: boolean | null;
 	occurred_at: string;
@@ -30,7 +31,7 @@ export type ContactInputs = {
 	activities: ContactActivity[];
 };
 
-type Lead = { id: string; base_version: number; contact_eligible: boolean };
+type Lead = { base_version: number; contact_eligible: boolean };
 
 export const EVIDENCE_LIMIT = 500;
 const FRESHNESS_DAYS = 90;
