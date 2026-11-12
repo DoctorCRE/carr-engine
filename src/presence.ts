@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { sql } from "kysely";
 import { isoMillis, Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
-import { resolveSubject } from "./deals/resolve.ts";
+import { lookupRefusal, resolveDeal } from "./deals/resolve.ts";
 import {
 	answerSave,
 	SaveRefusal,
@@ -26,18 +26,8 @@ presence.post("/presence", (c) =>
 
 // Expiry is only ever compared at read time, and the ping writes no history.
 async function lease({ tx, actor_id }: Saving, { deal, field }: JsonObject) {
-	const subject = await resolveSubject(tx, String(deal));
-	if ("error" in subject)
-		throw new SaveRefusal(
-			subject.error === "needs_disambiguation"
-				? new Refusal(409, "needs_disambiguation", {
-						candidates: subject.candidates,
-					})
-				: // Not one of the old system's public errors, so it answered generically.
-					new Refusal(404, "unhandled_verb_failure"),
-		);
-	if (subject.type !== "deal")
-		throw new SaveRefusal(new Refusal(422, "not_a_deal"));
+	const subject = await resolveDeal(tx, String(deal));
+	if ("error" in subject) throw new SaveRefusal(lookupRefusal(subject));
 	if (typeof field !== "string" || !field.trim())
 		throw new SaveRefusal(new Refusal(400, "field_required"));
 	const { expires_at } = await tx
