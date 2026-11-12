@@ -382,6 +382,40 @@ board.deals[]  1
 	);
 });
 
+test("keys in another order are reported as key order by path and record ID, apart from a changed value", async () => {
+	const { id, ...rest } = leadRow(l2);
+	const { run } = await runWith(
+		(ask) => {
+			switch (ask.read) {
+				case "board":
+					return board([{ id: d1 }, { name: "Made-up", id: d2 }]);
+				case "deal":
+					return ask.deal === d1
+						? { name: "Made-up", deal_id: d1 }
+						: detail(ask.deal, { name: "Changed" });
+				case "lead board":
+					return workspace([leadRow(l1), { ...rest, id }]);
+				default:
+					return answer(ask);
+			}
+		},
+		(ask) =>
+			ask.read === "board"
+				? board([{ id: d1 }, { id: d2, name: "Made-up" }])
+				: answer(ask),
+	);
+	assert.equal(exitCode(run), 1);
+	assert.equal(
+		report("production", run).split("differences: ")[1],
+		`field path, kind, records, first record IDs
+board.deals[].id  key order  3  ${d2}
+leads.leads[].id  key order  1  ${l2}
+detail.deal_id  key order  1  ${d1}
+detail.name  value differs  2  ${d2}, ${d3}
+`,
+	);
+});
+
 test("the change feed reports a differing event field by path and event ID, an event on one side by its ID, and a differing cursor by path, without values", async () => {
 	const engineFeed = {
 		events: [event(11, { field: "next_date" }), event(12), event(13)],
