@@ -27,8 +27,20 @@ function readOf(ask: Ask) {
 			return "change feed";
 		case "find":
 			return "search find";
+		case "lead board":
+			return "lead board";
+		case "lead":
+			return "lead detail";
+		case "quiet follow-ups":
+			return "quiet follow-ups";
+		case "territory":
+			return "territory";
+		case "reasons to reach out":
+			return "reasons to reach out";
 	}
 }
+const recordOf = (ask: Ask) =>
+	ask.read === "deal" ? ask.deal : ask.read === "lead" ? ask.lead : undefined;
 const PREFIXES = {
 	board: "board",
 	deal: "detail",
@@ -36,6 +48,11 @@ const PREFIXES = {
 	"capture queue": "queue",
 	feed: "feed",
 	find: "find",
+	"lead board": "leads",
+	lead: "lead",
+	"quiet follow-ups": "quiet",
+	territory: "territory",
+	"reasons to reach out": "reasons",
 };
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>
@@ -52,8 +69,7 @@ function tally(into: Tally, prefix: string, ask: Ask, difference: Difference) {
 	const entry = into.get(key) ?? { records: 0, ids: new Set() };
 	entry.records++;
 	const id =
-		difference.records.findLast((step) => "id" in step)?.id ??
-		(ask.read === "deal" ? ask.deal : undefined);
+		difference.records.findLast((step) => "id" in step)?.id ?? recordOf(ask);
 	if (id && entry.ids.size < SHOWN_IDS) entry.ids.add(id);
 	into.set(key, entry);
 }
@@ -128,13 +144,9 @@ export function report(target: string, run: Run): string {
 	if (open.length > 0)
 		lines.push(
 			"",
-			"not compared: result, read, deal ID",
+			"not compared: result, read, record ID",
 			...open.map((o) =>
-				[
-					o.result,
-					readOf(o.ask),
-					o.ask.read === "deal" ? o.ask.deal : "-",
-				].join("  "),
+				[o.result, readOf(o.ask), recordOf(o.ask) ?? "-"].join("  "),
 			),
 		);
 	return `${lines.join("\n")}\n`;
