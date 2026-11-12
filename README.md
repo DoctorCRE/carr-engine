@@ -52,9 +52,12 @@ the app asks them: the first page of each list, every record on it, and recent
 activity for the first five records of each read with a name and ref. Vendor
 markets and the Relationships map are asked once. The old system answers the
 lists, records and map at its `/api/v1/business` paths. Their `observed_at`,
-`valid_until` and `correlation_id` may differ in value, not in format. A refused
-deal, client or vendor is compared as its refusal; a refused board, invoices
-read or list counts as failed. A network or sign-in failure stops the run. It
-prints counts, field paths and record IDs, never values, bodies or the cookie.
-Exit codes are 0 for a match, 1 for differences or unsettled requests and 2 for
-failure.
+`valid_until` and `correlation_id` may differ in value, not in format. Keys in
+another order are a `key order` difference at the first moved key. A field
+compared whole, such as a card's facts, reports it at its own path. Order is
+read from the parsed answers, where JavaScript puts whole-number keys first, so
+their order is not checked. A refused deal, client or vendor is compared as its
+refusal; a refused board, invoices read or list counts as failed. A network or
+sign-in failure stops the run. It prints counts, field paths and record IDs,
+never values, bodies or the cookie. Exit codes are 0 for a match, 1 for
+differences or unsettled requests and 2 for failure.
