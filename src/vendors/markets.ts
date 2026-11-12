@@ -1,81 +1,6 @@
 import { sql } from "kysely";
 import type { Reader } from "../reader.ts";
 
-type Reviewed = { source: string; reviewed_by: string; reviewed_at: string };
-
-type Membership = Reviewed & {
-	market_slug: string;
-	vendor_id: string;
-	office_presence: boolean;
-	service_coverage: string | null;
-};
-
-type RegionalReference = Reviewed & {
-	market_slug: string;
-	regional_slug: string;
-	note: string;
-	market_kind: "market";
-	regional_kind: "regional";
-};
-
-// Every column of `vendor_market`, as `to_jsonb` sends it.
-type Market = Reviewed & {
-	slug: string;
-	name: string;
-	kind: "market" | "regional";
-	boundary: string;
-	aliases: string[];
-	vendor_count: number;
-	memberships: Membership[];
-	regional_references: RegionalReference[];
-};
-
-type Finding = {
-	finding_id: string | null;
-	observed_at: string | null;
-	expires_on: string | null;
-};
-
-type Person = {
-	company: { id: string; name: string } | null;
-	contact: {
-		id: string;
-		name: string;
-		email: string | null;
-		phone: string | null;
-		cell: string | null;
-	};
-	office:
-		| (Finding & {
-				street_address: string;
-				city: string;
-				state: string;
-				source: string;
-		  })
-		| null;
-	research: Finding & {
-		status: "not_researched" | "office_verified" | "needs_review";
-	};
-};
-
-type Vendor = {
-	id: string;
-	ref: string | null;
-	category: string;
-	name: string;
-	people: Person[];
-	market_slugs: string[];
-};
-
-export type VendorMarkets = {
-	ok: true;
-	schema_version: "vendor-markets.v1";
-	state: "empty" | "ready";
-	selected_market: string | null;
-	markets: Market[];
-	vendors: Vendor[];
-};
-
 const MARKET_CAP = 100;
 const MEMBERSHIP_CAP = 5000;
 
@@ -86,7 +11,7 @@ export const isMarketName = (market: string) => {
 };
 
 const filled = (key: string) =>
-	sql`jsonb_typeof(f.value->${key}) = 'string' and btrim(f.value->>${key}) <> ''`;
+	sql`jsonb_typeof(f.value->${sql.lit(key)}) = 'string' and btrim(f.value->>${sql.lit(key)}) <> ''`;
 
 // A person's latest address finding counts as an office only when every one
 // of these holds.
@@ -126,8 +51,8 @@ type Registry = {
 	market_count: number;
 	membership_count: number;
 	selected_market: string | null;
-	markets: Market[];
-	vendors: Vendor[];
+	markets: unknown[];
+	vendors: unknown[];
 };
 
 // One row more than each cap is read, so an over-cap registry is refused, never cut.
@@ -159,13 +84,7 @@ const registry = (alias: string | null) => sql<Registry>`with
 		from vendor v join party p on p.id = v.party_id
 		where v.id in (select vendor_id from memberships)), '[]') as vendors`;
 
-export async function readVendorMarkets(
-	db: Reader,
-	market: string | null,
-): Promise<
-	| VendorMarkets
-	| { error: "vendor_market_capacity_exceeded" | "vendor_market_not_found" }
-> {
+export async function readVendorMarkets(db: Reader, market: string | null) {
 	const alias = market === null ? null : market.trim().toLowerCase();
 	const [found] = (await registry(alias).execute(db)).rows;
 	if (!found) throw new Error("The registry query returned no row");
@@ -173,13 +92,13 @@ export async function readVendorMarkets(
 		found.market_count > MARKET_CAP ||
 		found.membership_count > MEMBERSHIP_CAP
 	)
-		return { error: "vendor_market_capacity_exceeded" };
+		return { error: "vendor_market_capacity_exceeded" } as const;
 	if (
 		alias !== null &&
 		found.market_count > 0 &&
 		found.selected_market === null
 	)
-		return { error: "vendor_market_not_found" };
+		return { error: "vendor_market_not_found" } as const;
 	return {
 		ok: true,
 		schema_version: "vendor-markets.v1",

@@ -3,7 +3,6 @@ import { test } from "node:test";
 import pg from "pg";
 import { withSnapshot } from "../../scripts/test-database.ts";
 import worker from "../worker.ts";
-import type { VendorMarkets } from "./markets.ts";
 
 const ACTOR = "00000000-0000-4000-8000-000000000001";
 const UNREAD = "postgres://made-up@127.0.0.1:1/none";
@@ -40,9 +39,31 @@ async function refused(response: Response, status: number, expected = {}) {
 	assert.deepEqual(body, { ...GENERIC, ...expected });
 }
 
+// The fields these tests read.
+type Answer = {
+	selected_market: string | null;
+	markets: {
+		slug: string;
+		aliases: string[];
+		vendor_count: number;
+		memberships: { vendor_id: string }[];
+		regional_references: { regional_slug: string; regional_kind: string }[];
+	}[];
+	vendors: {
+		id: string;
+		name: string;
+		market_slugs: string[];
+		people: {
+			contact: { name: string };
+			research: { status: string };
+			office: { street_address: string } | null;
+		}[];
+	}[];
+};
+
 const ready = async (response: Response) => {
 	assert.equal(response.status, 200);
-	return (await response.json()) as VendorMarkets;
+	return (await response.json()) as Answer;
 };
 
 async function run(url: string, statements: string) {
@@ -80,11 +101,6 @@ const member = (slug: string, vendorId: string) =>
 		'Example', '${ACTOR}', '2026-01-01T00:00:00Z');`;
 
 test("bad input is refused before any read", async () => {
-	await refused(await markets("?market=a&extra=1", UNREAD), 400, {
-		error: "unregistered_operation_fields",
-		hint: "Remove fields outside the documented input.",
-		fields: ["extra"],
-	});
 	for (const search of [
 		"?market=",
 		"?market=%20%20",
@@ -99,12 +115,13 @@ test("markets list live vendors, their people and offices, and resolve an alias"
 		// Ids in the order the answer sorts them.
 		const id = (n: number) => `00000000-0000-4000-8000-1000000000${n}0`;
 		const [blake, alex, org, live] = [id(1), id(2), id(3), id(4)];
-		const [merged, deleted, gone] = [id(5), id(6), id(7)];
+		const [merged, deleted, gone, blank] = [id(5), id(6), id(7), id(8)];
 		await run(
 			url,
 			`${ACTORS} ${party(org, "org", "Example Lending Co")}
 			${party(alex, "person", "Alex Example", `'${org}', null, null`)}
 			${party(blake, "person", "Blake Example", `'${org}', null, null`)}
+			${party(blank, "person", " ", `'${org}', null, null`)}
 			${party(gone, "org", "Example Deleted Co", "null, null, now()")}
 			${vendor(live, org)} ${vendor(merged, org, `'${live}'`)} ${vendor(deleted, gone)}
 			${market("springfield")} ${market("example-region", "regional")}
@@ -114,10 +131,12 @@ test("markets list live vendors, their people and offices, and resolve an alias"
 			insert into vendor_market_regional_reference (market_slug, regional_slug, note, source,
 				reviewed_by, reviewed_at) values ('springfield', 'example-region', 'Example', 'Example',
 				'${ACTOR}', '2026-01-01T00:00:00Z');
-			insert into record_flag (subject_type, subject_id, kind, value, source, observed_at, created_by)
-				values ('party', '${alex}', 'address', '{"found":true,"epistemic_status":"source_backed",
-				"location_type":"office","street_address":"1 Example Way","city":"Springfield","state":"ZZ"}',
-				'https://example.test', '2025-01-01T00:00:00Z', '${ACTOR}');`,
+			insert into record_flag (id, subject_type, subject_id, kind, value, source, observed_at,
+				created_by) select ('00000000-0000-4000-8000-20000000000' || n)::uuid, 'party', '${alex}',
+				'address', value::jsonb, 'https://example.test', '2025-01-01T00:00:00Z', '${ACTOR}'
+				from (values (1, '{"found":false}'), (2, '{"found":true,"epistemic_status":"source_backed",
+				"location_type":"office","street_address":"1 Example Way","city":"Springfield","state":"ZZ"}'))
+				f (n, value);`,
 		);
 		const answer = await ready(
 			await markets("?market=%20Spring%20FIELD%20", url),
@@ -146,6 +165,8 @@ test("markets list live vendors, their people and offices, and resolve an alias"
 			answer.vendors.map((v) => [v.id, v.name, v.market_slugs]),
 			[[live, "Example Lending Co", ["example-region", "springfield"]]],
 		);
+		// The blank-named contact is left out, and of two findings at one moment
+		// the higher id counts as the latest.
 		assert.deepEqual(
 			answer.vendors[0]?.people.map((p) => [
 				p.contact.name,

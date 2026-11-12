@@ -385,11 +385,10 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			const markets = await readSnapshot(login, (db) =>
 				readVendorMarkets(db, "Example"),
 			);
-			assert.ok("vendors" in markets);
-			assert.deepEqual(
-				[markets.selected_market, markets.vendors.map((v) => v.name)],
-				["example", ["Example Clinic"]],
-			);
+			assert.partialDeepStrictEqual(markets, {
+				selected_market: "example",
+				vendors: [{ name: "Example Clinic" }],
+			});
 			await withAdmin(
 				(admin) =>
 					admin.query(`insert into practice_origination_feed (source) values ('nppes');
