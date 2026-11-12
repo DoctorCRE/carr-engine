@@ -10,7 +10,7 @@ const FEED_PAGES = 25;
 
 const REFUSALS = new Set([400, 404, 409, 422]);
 
-// The old system allows a session 60 calls a minute, and each ask makes one.
+// The old system allows a session 60 tool calls a minute; each tool ask makes one.
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 

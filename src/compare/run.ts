@@ -53,12 +53,15 @@ const SHAPES = {
 
 const FEED_DAYS = 3;
 
-// Built as the app builds its start cursor: a time and the zero ID.
+// Built as the app builds its start cursor: a time and the zero ID, base64url without padding.
 function feedStart(now: number) {
 	const recorded_at = new Date(now - FEED_DAYS * 86_400_000).toISOString();
 	return btoa(
 		JSON.stringify({ recorded_at, id: "00000000-0000-0000-0000-000000000000" }),
-	);
+	)
+		.replaceAll("+", "-")
+		.replaceAll("/", "_")
+		.replace(/=+$/, "");
 }
 
 export async function compareDeals(

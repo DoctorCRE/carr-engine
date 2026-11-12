@@ -101,7 +101,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 	assert.equal(exitCode(run), 0);
 });
 
-test("every read of the change feed starts three days back at the zero ID, in a cursor the engine accepts", async (t) => {
+test("every read of the change feed starts three days back at the zero ID, in the cursor text the app sends", async (t) => {
 	mock.timers.enable({
 		apis: ["Date"],
 		now: Date.parse("2030-01-04T00:00:00Z"),
@@ -113,8 +113,10 @@ test("every read of the change feed starts three days back at the zero ID, in a 
 		return answer(ask);
 	};
 	await runWith(remember, remember);
-	assert.equal(starts.size, 1);
-	assert.deepEqual(decodeCursor([...starts][0] ?? ""), {
+	const start =
+		"eyJyZWNvcmRlZF9hdCI6IjIwMzAtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAwIn0";
+	assert.deepEqual([...starts], [start]);
+	assert.deepEqual(decodeCursor(start), {
 		recorded_at: "2030-01-01T00:00:00.000Z",
 		id: "00000000-0000-0000-0000-000000000000",
 	});
