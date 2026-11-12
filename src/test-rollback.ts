@@ -9,10 +9,7 @@ if (!configured)
 export const url = configured;
 const db = new Kysely<DB>({
 	dialect: new PostgresDialect({
-		pool: new pg.Pool({
-			connectionString: url,
-			options: "-c TimeZone=America/Chicago",
-		}),
+		pool: new pg.Pool({ connectionString: url }),
 	}),
 });
 after(() => db.destroy());

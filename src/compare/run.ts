@@ -1,12 +1,11 @@
+import { WORKSPACES, type Workspace } from "../deals/board.ts";
 import { compareAnswers, UUID } from "./answers.ts";
 import { boardShape, detailShape } from "./deals-shapes.ts";
-
-const WORKSPACES = ["team", "national_account", "all"] as const;
 
 export class StopRun extends Error {}
 
 export type Ask =
-	| { read: "board"; workspace: (typeof WORKSPACES)[number] }
+	| { read: "board"; workspace: Workspace }
 	| { read: "deal"; deal: string };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;

@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono";
 import { type Reader, readSnapshot } from "../reader.ts";
 import type { SessionEnv } from "../session.ts";
-import { readBoard } from "./board.ts";
+import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
 import { readDealDetail } from "./detail.ts";
 
 export type DealsEnv = SessionEnv & {
@@ -41,8 +41,7 @@ class Refusal {
 	}
 }
 
-const WORKSPACES = ["team", "national_account", "all"] as const;
-const isWorkspace = (value: string): value is (typeof WORKSPACES)[number] =>
+const isWorkspace = (value: string): value is Workspace =>
 	(WORKSPACES as readonly string[]).includes(value);
 
 const refuse = (c: Context<DealsEnv>, refusal: Refusal) =>

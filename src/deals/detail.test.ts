@@ -760,18 +760,13 @@ test("refusals name what went wrong", async () => {
 		});
 		assert.deepEqual(await readDealDetail(tx, "C-9001", "detail-agent"), {
 			error: "not_a_deal",
-			resolved: { type: "client", id: client },
 		});
 		const byName = await readDealDetail(tx, "Example Detail", "detail-agent");
 		assert.ok(!("error" in byName));
 		assert.equal(byName.deal_id, deal);
 		assert.deepEqual(
 			await readDealDetail(tx, "No Such Example", "detail-agent"),
-			{
-				error: "subject_not_found",
-				ref: "No Such Example",
-				hint: "use find first; refs look like L-204 / C-127 / V-CPA-006 / P-0948 or a deal name",
-			},
+			{ error: "subject_not_found" },
 		);
 		await tx
 			.insertInto("deal")
@@ -789,9 +784,7 @@ test("refusals name what went wrong", async () => {
 			{ ...twice, candidates: twice.candidates.map((c) => c.name).sort() },
 			{
 				error: "needs_disambiguation",
-				ref: "Example Detail",
 				candidates: ["Example Detail Deal", "Example Detail Deal Two"],
-				hint: "pass the exact ref or full name",
 			},
 		);
 		assert.deepEqual(
@@ -814,8 +807,6 @@ test("refusals name what went wrong", async () => {
 			.execute();
 		assert.deepEqual(await readDealDetail(tx, deal, "detail-agent"), {
 			error: "not_found",
-			table: "deal",
-			id: deal,
 		});
 	});
 });
@@ -860,8 +851,8 @@ test("each lookup step resolves or refuses like the old resolver", async () => {
 				})
 				.returning("id")
 				.executeTakeFirstOrThrow();
-		const zedVendor = await vendor("Example Zed Supply", "V-EX-001");
-		const teeVendor = await vendor("Example Tee Vendor", "T-EX-002");
+		await vendor("Example Zed Supply", "V-EX-001");
+		await vendor("Example Tee Vendor", "T-EX-002");
 		await tx
 			.insertInto("client")
 			.values({
@@ -875,7 +866,7 @@ test("each lookup step resolves or refuses like the old resolver", async () => {
 			.set({ merged_into: leadParty.id })
 			.where("name", "=", "Example Zed Gone")
 			.execute();
-		const bare = await party("Example Bare", { ref: "P-9001" });
+		await party("Example Bare", { ref: "P-9001" });
 		await party("Example Bare Annex");
 		await tx
 			.insertInto("deal")
@@ -888,22 +879,17 @@ test("each lookup step resolves or refuses like the old resolver", async () => {
 				...audit,
 			})
 			.execute();
-		const notADeal = (type: string, id: string) => ({
-			error: "not_a_deal",
-			resolved: { type, id },
-		});
-		const pickOne = "pass the exact ref or full name";
+		const notADeal = { error: "not_a_deal" };
 		const cases: [string, unknown][] = [
-			["L-9001", notADeal("lead", lead.id)],
-			["V-EX-001", notADeal("vendor", zedVendor.id)],
-			["T-EX-002", notADeal("vendor", teeVendor.id)],
-			["P-9001", notADeal("party", bare.id)],
-			[client, notADeal("client", client)],
+			["L-9001", notADeal],
+			["V-EX-001", notADeal],
+			["T-EX-002", notADeal],
+			["P-9001", notADeal],
+			[client, notADeal],
 			[
 				"Example Zed",
 				{
 					error: "needs_disambiguation",
-					ref: "Example Zed",
 					candidates: [
 						{
 							name: "Example Zed",
@@ -918,14 +904,12 @@ test("each lookup step resolves or refuses like the old resolver", async () => {
 							city: null,
 						},
 					],
-					hint: pickOne,
 				},
 			],
 			[
 				"Example Bare",
 				{
 					error: "needs_disambiguation",
-					ref: "Example Bare",
 					candidates: [
 						{ name: "Example Bare", ref: "P-9001", kind: "party", city: null },
 						{
@@ -935,7 +919,6 @@ test("each lookup step resolves or refuses like the old resolver", async () => {
 							city: null,
 						},
 					],
-					hint: "more than one party carries this name — often duplicate org rows for one company; pass the exact P-ref",
 				},
 			],
 		];

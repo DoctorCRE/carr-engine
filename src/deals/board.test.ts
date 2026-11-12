@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { type Insertable, type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
 import { withRollback } from "../test-rollback.ts";
-import { readBoard, shortName } from "./board.ts";
+import { readBoard } from "./board.ts";
+import { shortName } from "./shared.ts";
 
 const withRows = (
 	run: (rows: Awaited<ReturnType<typeof seed>>) => Promise<void>,
@@ -481,13 +482,11 @@ test("open deals leave out closed and lost ones, sort, and filter", () =>
 		assert.equal(all[2]?.parked_at, "2026-01-05T00:00:00+00:00");
 		assert.equal(all[1]?.next_step_required, true);
 		assert.equal(all[3]?.next_step_required, true);
-		for (const workspace of [null, ""] as const) {
-			const board = await readBoard(tx, { actor: partner.slug, workspace });
-			assert.deepEqual(
-				board.deals.filter((d) => d.id && mine.includes(d.id)),
-				all,
-			);
-		}
+		const board = await readBoard(tx, { actor: partner.slug, workspace: null });
+		assert.deepEqual(
+			board.deals.filter((d) => d.id && mine.includes(d.id)),
+			all,
+		);
 		assert.deepEqual(
 			(await read("team")).map((d) => d.id),
 			[flagged, later, parked, undated],
@@ -612,9 +611,12 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 		]);
 		assert.deepEqual((await read("national_account")).closed, [national]);
 		assert.deepEqual((await read(undefined, account.id)).closed, [national]);
-		const empty = await readBoard(tx, { actor: partner.slug, workspace: "" });
+		const unscoped = await readBoard(tx, {
+			actor: partner.slug,
+			workspace: null,
+		});
 		assert.deepEqual(
-			empty.closed_deals
+			unscoped.closed_deals
 				.map((d) => d.id)
 				.filter((id) => id && mine.includes(id)),
 			all.closed,

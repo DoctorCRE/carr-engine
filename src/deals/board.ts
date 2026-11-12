@@ -11,11 +11,12 @@ import {
 	vendorsOf,
 } from "./shared.ts";
 
-export { shortName };
+export const WORKSPACES = ["team", "national_account", "all"] as const;
+export type Workspace = (typeof WORKSPACES)[number];
 
 type BoardInputs = {
 	actor: string;
-	workspace?: "team" | "national_account" | "all" | "" | null;
+	workspace?: Workspace | null;
 	account_client_id?: string | null;
 };
 
@@ -30,7 +31,7 @@ export async function readBoard(
 	db: Kysely<DB>,
 	{ actor, workspace, account_client_id }: BoardInputs,
 ) {
-	const scope = workspace || "all";
+	const scope = workspace ?? "all";
 	const account = account_client_id || null;
 	const deals = await db
 		.selectFrom("v_open_deal_room_board as b")
