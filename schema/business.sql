@@ -958,6 +958,18 @@ CREATE TABLE public.client_type (
     label text NOT NULL
 );
 
+CREATE TABLE public.code_subject (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    repo text NOT NULL,
+    commit_sha text,
+    label text,
+    note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid,
+    CONSTRAINT code_subject_repo_shape CHECK (((repo = lower(btrim(repo))) AND (repo ~ '^[a-z0-9._-]+/[a-z0-9._-]+$'::text))),
+    CONSTRAINT code_subject_sha_shape CHECK (((commit_sha IS NULL) OR (commit_sha ~ '^[0-9a-f]{7,40}$'::text)))
+);
+
 CREATE TABLE public.commission (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     deal_id uuid NOT NULL,
@@ -2251,6 +2263,59 @@ UNION ALL
           WHERE (c.party_id = p.id)))) AND (NOT (EXISTS ( SELECT 1
            FROM public.vendor v
           WHERE (v.party_id = p.id)))));
+
+CREATE VIEW public.v_record_flag_subject AS
+ SELECT f.id AS flag_id,
+    f.subject_type,
+    f.subject_id,
+        CASE f.subject_type
+            WHEN 'campaign'::text THEN ( SELECT c.name
+               FROM public.campaign c
+              WHERE (c.id = f.subject_id))
+            WHEN 'platform'::text THEN ( SELECT m.label
+               FROM public.marketing_subject m
+              WHERE (m.id = f.subject_id))
+            WHEN 'pillar'::text THEN ( SELECT m.label
+               FROM public.marketing_subject m
+              WHERE (m.id = f.subject_id))
+            WHEN 'format'::text THEN ( SELECT m.label
+               FROM public.marketing_subject m
+              WHERE (m.id = f.subject_id))
+            WHEN 'repo'::text THEN ( SELECT COALESCE(k.label, k.repo) AS "coalesce"
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            WHEN 'commit'::text THEN ( SELECT COALESCE(k.label, ((k.repo || '@'::text) || "left"(k.commit_sha, 7))) AS "coalesce"
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            ELSE ( SELECT r.display_name
+               FROM public.v_ref_index r
+              WHERE ((r.subject_type = f.subject_type) AND (r.subject_id = f.subject_id))
+             LIMIT 1)
+        END AS subject_label,
+        CASE
+            WHEN (f.subject_type = ANY (ARRAY['campaign'::text, 'platform'::text, 'pillar'::text, 'format'::text])) THEN NULL::text
+            WHEN (f.subject_type = 'repo'::text) THEN ( SELECT k.repo
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            WHEN (f.subject_type = 'commit'::text) THEN ( SELECT ((k.repo || '@'::text) || k.commit_sha)
+               FROM public.code_subject k
+              WHERE (k.id = f.subject_id))
+            ELSE ( SELECT r.ref
+               FROM public.v_ref_index r
+              WHERE ((r.subject_type = f.subject_type) AND (r.subject_id = f.subject_id))
+             LIMIT 1)
+        END AS subject_ref,
+    f.kind,
+    COALESCE(((f.value ->> 'found'::text))::boolean, true) AS found,
+    (f.value ? 'proposes_correction'::text) AS proposes_correction,
+    f.value,
+    f.source,
+    f.observed_at,
+    f.expires_on,
+    ((f.expires_on IS NOT NULL) AND (f.expires_on < CURRENT_DATE)) AS expired,
+    a.slug AS recorded_by
+   FROM (public.record_flag f
+     LEFT JOIN public.actor a ON ((a.id = f.created_by)));
 
 CREATE VIEW public.v_capture_candidate_queue AS
  SELECT c.id,
@@ -3808,6 +3873,9 @@ ALTER TABLE ONLY public.client_type
 
 ALTER TABLE ONLY public.commission_allocation
     ADD CONSTRAINT commission_allocation_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.code_subject
+    ADD CONSTRAINT code_subject_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.commission
     ADD CONSTRAINT commission_pkey PRIMARY KEY (id);
