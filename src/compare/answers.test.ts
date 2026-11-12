@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { compareAnswers } from "./answers.ts";
 import { clientFitShape } from "./deals-shapes.ts";
-import { activityShape, clientListShape } from "./directory-shapes.ts";
+import {
+	activityShape,
+	clientListShape,
+	vendorShape,
+} from "./directory-shapes.ts";
 import { leadBoardShape, leadShape, reasonsShape } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
 
@@ -698,6 +702,33 @@ test("a correlation id may differ in value, but not in format", () => {
 	assert.deepEqual(
 		compareAnswers(listed(d1), listed("made-up"), clientListShape).differences,
 		[{ path: "source.correlation_id", records: [], kind: "value differs" }],
+	);
+});
+
+test("a vendor's tied recent entries and its introductions may come back in any order (decision 16)", () => {
+	const vendor = (entries: object[], introductions: object[] = []) => ({
+		record: { relationship: { recent_entries: entries, introductions } },
+	});
+	const [tiedA, tiedB] = [
+		{ id: d1, when: zulu },
+		{ id: d2, when: zulu },
+	];
+	const older = { id: d3, when: "2029-01-01T00:00:00.000Z" };
+	const intros = [{ id: d4 }, { id: d0 }];
+	const result = compareAnswers(
+		vendor([tiedA, tiedB, older], intros),
+		vendor([tiedB, tiedA, older], intros.toReversed()),
+		vendorShape,
+	);
+	assert.deepEqual(result.differences, []);
+	assert.equal(result.tiedRowsReordered.length, 2);
+	assert.deepEqual(
+		compareAnswers(
+			vendor([tiedA, tiedB, older]),
+			vendor([older, tiedA, tiedB]),
+			vendorShape,
+		).differences.map((d) => d.kind),
+		["order differs"],
 	);
 });
 
