@@ -1,0 +1,76 @@
+// The old system's mcp-server/src/origination-sources.json at 7a8ca32, key
+// for key and in its order, because the read spreads each entry into its
+// coverage answer. Change both together while the old system imports (decision 15).
+export const ORIGINATION_SOURCES = [
+	{
+		source: "nppes",
+		enabled: true,
+		coverage:
+			"AL/FL practices in the existing NPPES territory filter; recent enumeration and registry updates only",
+		terms_url:
+			"https://www.cms.gov/medicare/regulations-guidance/administrative-simplification/data-dissemination",
+		access_terms:
+			"CMS publishes FOIA-disclosable downloadable data without charge. Exclude deactivated NPI details. Enumeration and updates do not prove practice opening.",
+		rate_control:
+			"Local published-file import only; at most 100 records per transaction, sequential batches. No network fetching by this API.",
+		recovery:
+			"Echo the read checkpoint; atomic batch and checkpoint, content deduplication on retry.",
+	},
+	{
+		source: "pecos",
+		enabled: true,
+		coverage:
+			"AL/FL Medicare public provider enrollment observations; not all healthcare practices",
+		terms_url:
+			"https://www.cms.gov/newsroom/fact-sheets/public-provider-and-supplier-enrollment-files",
+		access_terms:
+			"CMS releases quarterly public provider enrollment files. Observation dates are publication dates, not inferred enrollment or practice opening dates. Enrollment IDs are identifiers, not verified effective dates.",
+		rate_control:
+			"Local published-file import only; at most 100 records per transaction, sequential batches. No network fetching by this API.",
+		recovery:
+			"Echo the read checkpoint; atomic batch and checkpoint, content deduplication on retry.",
+	},
+	{
+		source: "formation-al",
+		enabled: false,
+		coverage: "unavailable",
+		reason:
+			"Alabama formation adapter and public automated-access terms have not been reviewed.",
+	},
+	{
+		source: "formation-fl",
+		enabled: false,
+		coverage:
+			"FL principal ZIP prefixes within the existing NPPES territory; healthcare-name research candidates only",
+		reason:
+			"Corporate-file adapter uses official cor.html offsets. Confirm date order, ZIP hyphen convention and document-number padding on a real row before enabling; confirm Filing Type, Status, Country, Registered Agent Type, Registered Agent State and Registered Agent Zip+4 values on a real daily file and quarterly slice. Daily files are as-is and events omit some changes; never a complete change history.",
+		terms_url:
+			"https://dos.fl.gov/sunbiz/other-services/data-downloads/data-usage-guide/",
+		rate_control:
+			"Local file only; no downloads. Atomic batches of at most 100 records.",
+		healthcare_name_pattern:
+			"\\b(DENTAL|DENTIST|MEDICAL|CLINIC|HEALTHCARE|HEALTH CARE|PHYSICIAN|THERAPY|ORTHOPEDIC|PEDIATRIC|DERMATOLOGY|CARDIOLOGY|OPTOMETRY|CHIROPRACTIC)\\b",
+		territory_zip_prefixes: ["323", "324", "325"],
+	},
+	{
+		source: "recorder-escambia-fl",
+		enabled: false,
+		coverage: "unavailable",
+		reason:
+			"Escambia County, Florida is in launch scope; adapter and public automated-access terms remain unverified.",
+	},
+	{
+		source: "recorder-baldwin-al",
+		enabled: false,
+		coverage: "unavailable",
+		reason:
+			"Baldwin County, Alabama is in launch scope; adapter and public automated-access terms remain unverified.",
+	},
+	{
+		source: "recorder-other",
+		enabled: false,
+		coverage: "uncovered",
+		reason:
+			"All other counties are outside the approved recorder launch scope.",
+	},
+] as const;

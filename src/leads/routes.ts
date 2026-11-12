@@ -4,6 +4,7 @@ import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard } from "./board.ts";
 import { historyCursors, readLeadDetail } from "./detail.ts";
 import { readQuietFollowUps } from "./quiet-follow-ups.ts";
+import { readReasonsToReachOut } from "./reasons-to-reach-out.ts";
 import { readTerritory } from "./territory.ts";
 
 const BOARD_FIELDS = [
@@ -13,10 +14,12 @@ const BOARD_FIELDS = [
 	"stage_history_cursor",
 ];
 const QUIET_FIELDS = ["lead_days", "vendor_days", "owner_slug"];
+const REASON_FIELDS = ["limit", "before_id"];
+const BEFORE_ID = /^[1-9][0-9]{0,18}$/u;
 const TERRITORY_FIELDS = ["vertical", "city", "state"];
 
-// The old system turned a numeric string into a number and checked neither
-// whole numbers nor the declared 1 to 365 range.
+// The old system turned a numeric string into a number before the read's own
+// checks. Quiet follow-ups checked neither whole numbers nor their 1 to 365 range.
 function asNumber(given: string | null, fallback: number) {
 	if (given === null) return fallback;
 	const trimmed = given.trim();
@@ -103,4 +106,25 @@ leads.get("/territory-state-board", async (c) => {
 			? new Refusal(422, "unhandled_verb_failure")
 			: territory;
 	});
+});
+
+leads.get("/reasons-to-reach-out", async (c) => {
+	const params = new URL(c.req.url).searchParams;
+	const unregistered = unregisteredFields(params, REASON_FIELDS);
+	if (unregistered) return refuse(c, unregistered);
+	const limit = asNumber(params.get("limit"), 25);
+	if (limit === undefined)
+		return refuse(c, new Refusal(400, "invalid_number", { fields: ["limit"] }));
+	const before_id = params.get("before_id");
+	// The old schema check refused with a private code, so it answered generically.
+	if (
+		!Number.isInteger(limit) ||
+		limit < 1 ||
+		limit > 100 ||
+		(before_id !== null && !BEFORE_ID.test(before_id))
+	)
+		return refuse(c, new Refusal(400, "unhandled_verb_failure"));
+	return answer(c, "list-practice-origination", (db) =>
+		readReasonsToReachOut(db, { limit, before_id }),
+	);
 });
