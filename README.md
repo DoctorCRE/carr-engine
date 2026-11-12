@@ -31,11 +31,12 @@ values or definitions. Exit codes are 0 for a match, 1 for drift and 2 for failu
 It compares public and ops columns, defaults, constraints, indexes, public-function
 triggers, policies, views, sequences and functions belonging to the snapshot.
 Unrelated extra relations and functions are outside this selected snapshot.
-Before comparison, both catalogs replace every quoted SQL string literal in each
-definition with the same placeholder. Literal-only changes, including privacy
-scrubbing, do not report drift. This also excludes changes to literal values in
-function bodies, defaults and constraints from drift detection. This command does
-not update the snapshot or apply any schema change to its target.
+Definitions are compared exactly. A quoted SQL string literal is ignored only where
+the snapshot holds one of the made-up values in `schema/made-up-literals.json` that
+replaced a real one, so privacy scrubbing does not report drift and any other
+changed value does. A value newly scrubbed in a later snapshot update must be added
+to that file, or the command reports it. This command does not update the snapshot
+or apply any schema change to its target.
 
 To compare the old system's and the engine's Deals answers outside CI, set
 `COMPARE_TARGET` to `staging` or `production`, `COMPARE_APP_URL` to the app's
@@ -45,13 +46,14 @@ because sign-in works only there. Production also needs
 `COMPARE_CONFIRM_PRODUCTION=read-only`. It only reads and waits 1.5 seconds
 between requests. It asks the engine before and after the old system and sets a
 request aside as unsettled when the engine's two answers differ. Boards are asked
-by workspace only, not by national account. Clients are asked as the app asks
-them: the first page of the client list, every client on it, and recent activity
-for the first five client names. The old system answers the client reads at
-its `/api/v1/business` paths. Their `observed_at`, `valid_until` and
-`correlation_id` may differ in value, not in format. A refused deal or client is
-compared as its refusal; a refused board, invoices read or client list counts as
-failed. A network or sign-in
-failure stops the run. It prints counts, field paths and record IDs, never values, bodies or the
-cookie. Exit codes are 0 for a match, 1 for differences or unsettled requests and
-2 for failure.
+by workspace only, not by national account. Clients and vendors are asked as
+the app asks them: the first page of each list, every record on it, and recent
+activity for the first five records of each read with a name and ref. Vendor
+markets and the Relationships map are asked once. The old system answers the
+lists, records and map at its `/api/v1/business` paths. Their `observed_at`,
+`valid_until` and `correlation_id` may differ in value, not in format. A refused
+deal, client or vendor is compared as its refusal; a refused board, invoices
+read or list counts as failed. A network or sign-in failure stops the run. It
+prints counts, field paths and record IDs, never values, bodies or the cookie.
+Exit codes are 0 for a match, 1 for differences or unsettled requests and 2 for
+failure.

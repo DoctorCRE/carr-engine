@@ -162,11 +162,26 @@ test("drift compares catalogs read-only and prints object names", () =>
 			await target.query(
 				original.replace("'partner_one'", "'example partner''s slug'"),
 			);
-			const literalOnly = run();
-			assert.equal(literalOnly.status, 0, literalOnly.stderr);
-			assert.equal(literalOnly.stdout, "");
 			await target.query(
-				`ALTER TABLE public.party ADD COLUMN example_drift text;
+				"ALTER TABLE public.next_action ALTER COLUMN organization_tenant_id SET DEFAULT 'example-other-tenant'",
+			);
+			const madeUpOnly = run();
+			assert.equal(madeUpOnly.status, 0, madeUpOnly.stderr);
+			assert.equal(madeUpOnly.stdout, "");
+			const view = await target.query<{ definition: string }>(
+				"SELECT pg_get_viewdef('public.v_lead_prospect_engagement'::regclass) AS definition",
+			);
+			const filter = view.rows[0]?.definition;
+			assert.ok(filter);
+			assert.ok(filter.includes("'prospect'::text"));
+			await target.query(
+				`CREATE OR REPLACE VIEW public.v_lead_prospect_engagement AS ${filter.replace("'prospect'::text", "'example-status'::text")}`,
+			);
+			await target.query(
+				`ALTER TABLE public.negotiation_round DROP CONSTRAINT negotiation_round_side_check,
+				ADD CONSTRAINT negotiation_round_side_check CHECK (side = ANY (ARRAY['tenant', 'landlord', 'buyer', 'example-side']));
+			ALTER TABLE public.candidate_pool ALTER COLUMN status SET DEFAULT 'example-pool';
+			ALTER TABLE public.party ADD COLUMN example_drift text;
 			ALTER TABLE public.party ADD CONSTRAINT example_drift_check CHECK (example_drift <> 'example');
 			CREATE INDEX example_drift_index ON public.party(example_drift);
 			ALTER TABLE public.party DISABLE TRIGGER party_touch;
@@ -180,6 +195,14 @@ test("drift compares catalogs read-only and prints object names", () =>
 		assert.equal(drift.status, 1, drift.stderr);
 		assert.equal(
 			drift.stdout,
-			"ops.client_portal\npublic.party\npublic.trg_touch_row()\n",
+			[
+				"ops.client_portal",
+				"public.candidate_pool",
+				"public.negotiation_round",
+				"public.party",
+				"public.trg_touch_row()",
+				"public.v_lead_prospect_engagement",
+				"",
+			].join("\n"),
 		);
 	}));
