@@ -54,3 +54,9 @@ export const detailShape = {
 	],
 	ignore,
 };
+
+// Profiles have no ID but a total order, so they compare by position.
+export const clientFitShape = {
+	rows: { "profiles[].evidence[]": strict("deal_id") },
+	ignore,
+};

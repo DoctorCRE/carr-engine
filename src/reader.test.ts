@@ -7,16 +7,20 @@ import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
+import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { url } from "./test-rollback.ts";
 
-// The engine login's whole read grant: every relation the board and deal
-// reads name. The views read their tables with their owner's rights.
+// The engine login's whole read grant: every relation the engine's reads
+// name. The views read their tables with their owner's rights.
 const readable = [
 	"actor",
+	"client",
 	"commission",
+	"deal",
 	"doctrine_section",
+	"party",
 	"v_client_account",
 	"v_client_engagement_status",
 	"v_deal_board",
@@ -152,7 +156,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board and a deal and changes nothing", () =>
+test("the reader login reads the board, a deal and the client fit and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -172,6 +176,14 @@ test("the reader login reads the board and a deal and changes nothing", () =>
 				detail.thread.map((n) => n.text),
 				["Example reader note"],
 			);
+			const fit = await readSnapshot(login, (db) =>
+				readClientFit(db, { vertical: null, city: null, state: null }),
+			);
+			assert.deepEqual(fit, {
+				schema_version: "ideal-client-profile.v1",
+				coverage: "recorded_closed_won_only",
+				profiles: [],
+			});
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(
@@ -186,7 +198,7 @@ test("the reader login reads the board and a deal and changes nothing", () =>
 				visible.rows.map((r) => r.relname),
 				readable,
 			);
-			for (const outside of ["deal", "schema_migrations"] as const) {
+			for (const outside of ["deal_note", "schema_migrations"] as const) {
 				await assert.rejects(
 					readSnapshot(login, (db) =>
 						db.selectFrom(outside).selectAll().execute(),

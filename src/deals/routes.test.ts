@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mock, test } from "node:test";
-import { Kysely, PostgresDialect } from "kysely";
+import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../../scripts/test-database.ts";
 import type { DB } from "../database.d.ts";
 import { readSnapshot } from "../reader.ts";
 import worker from "../worker.ts";
 import { readBoard } from "./board.ts";
+import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 
 const cookie = "__Host-dealroom_session=made-up-session";
@@ -127,6 +128,19 @@ async function seed(url: string) {
 					.set({ merged_into: survivor.id })
 					.where("id", "=", client.id)
 					.execute(),
+			// Each win is its own group, so the count crosses the old group limit.
+			addWins: async (from: number, to: number) => {
+				await db
+					.insertInto("deal_phase")
+					.values({ slug: "closed", label: "Example closed" })
+					.onConflict((c) => c.doNothing())
+					.execute();
+				await sql`insert into deal (client_id, name, deal_type, phase, outcome,
+					closed_on, city, created_by, updated_by)
+					select ${survivor.id}, 'Example Win ' || n, 'routes-lease', 'closed',
+					'won', '2024-05-01', 'Example City ' || n, ${actor.id}, ${actor.id}
+					from generate_series(${from}::int, ${to}::int) n`.execute(db);
+			},
 			close,
 		};
 	} catch (error) {
@@ -206,7 +220,7 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 			);
 
 			await t.test(
-				"a partner with no actor record is refused for both reads",
+				"a partner with no actor record is refused for every read",
 				async () => {
 					const expected = {
 						error: "unauthenticated",
@@ -215,6 +229,11 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 					await refused(await get("/deals", "no-such-partner"), 422, expected);
 					await refused(
 						await get(`/deals/${rows.deal}`, "no-such-partner"),
+						422,
+						expected,
+					);
+					await refused(
+						await get("/client-fit", "no-such-partner"),
 						422,
 						expected,
 					);
@@ -285,14 +304,46 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 					});
 				},
 			);
+
+			await t.test(
+				"the client fit answers with its filters and refuses past 1000 groups",
+				async () => {
+					await rows.addWins(1, 2);
+					const everything = { vertical: null, city: null, state: null };
+					for (const [query, filters] of [
+						["", everything],
+						[
+							"?vertical=&city=Example%20City%202",
+							{ ...everything, city: "Example City 2" },
+						],
+					] as const) {
+						const response = await get(`/client-fit${query}`);
+						assert.equal(response.status, 200);
+						assert.equal(response.headers.get("Cache-Control"), "no-store");
+						assert.deepEqual(
+							await response.text(),
+							JSON.stringify(
+								await readSnapshot(url, (db) => readClientFit(db, filters)),
+							),
+						);
+					}
+					await rows.addWins(3, 1000);
+					assert.equal((await get("/client-fit")).status, 200);
+					await rows.addWins(1001, 1001);
+					await refused(await get("/client-fit"), 422, {
+						error: "unhandled_verb_failure",
+						hint: "The operation failed. Quote the correlation_id when reporting it.",
+					});
+				},
+			);
 		} finally {
 			await rows.close();
 		}
 	});
 });
 
-test("without a database binding both reads answer 503", async () => {
-	for (const path of ["/deals", "/deals/Example"]) {
+test("without a database binding every read answers 503", async () => {
+	for (const path of ["/deals", "/deals/Example", "/client-fit"]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{ headers: { Cookie: cookie } },
@@ -306,7 +357,7 @@ test("without a database binding both reads answer 503", async () => {
 
 test("a request with no session is refused before any read", async () => {
 	let sessionChecks = 0;
-	for (const path of ["/deals", "/deals/Example"]) {
+	for (const path of ["/deals", "/deals/Example", "/client-fit"]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{},

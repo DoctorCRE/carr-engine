@@ -17,9 +17,15 @@ const detail = (deal: string, fields: object = {}) => ({
 	name: "Made-up",
 	...fields,
 });
+const fit = { schema_version: "ideal-client-profile.v1", profiles: [] };
 const answer = (ask: Ask) =>
-	ask.read === "board" ? board() : detail(ask.deal);
-const label = (ask: Ask) => (ask.read === "board" ? ask.workspace : ask.deal);
+	ask.read === "board" ? board() : ask.read === "deal" ? detail(ask.deal) : fit;
+const label = (ask: Ask) =>
+	ask.read === "board"
+		? ask.workspace
+		: ask.read === "deal"
+			? ask.deal
+			: ask.read;
 
 async function runWith(
 	engine: (ask: Ask, call: number) => unknown,
@@ -45,10 +51,18 @@ async function runWith(
 	return { run, calls, pauses };
 }
 
-test("asks the engine, the old system and the engine again for every board and deal, pausing between requests", async () => {
+test("asks the engine, the old system and the engine again for every board, the client fit and every deal, pausing between requests", async () => {
 	const { run, calls, pauses } = await runWith(answer);
 	const asks = run.outcomes.map((o) => label(o.ask));
-	assert.deepEqual(asks, ["team", "national_account", "all", d1, d2, d3]);
+	assert.deepEqual(asks, [
+		"team",
+		"national_account",
+		"all",
+		"client fit",
+		d1,
+		d2,
+		d3,
+	]);
 	assert.deepEqual(calls.slice(0, 5), [
 		"engine team",
 		"old team",
@@ -56,8 +70,8 @@ test("asks the engine, the old system and the engine again for every board and d
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 5);
-	assert.deepEqual([run.oldReads, run.engineReads], [6, 12]);
+	assert.equal(pauses, 6);
+	assert.deepEqual([run.oldReads, run.engineReads], [7, 14]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -68,7 +82,15 @@ test("a request whose two engine answers differ is unsettled and not compared", 
 	);
 	assert.deepEqual(
 		run.outcomes.map((o) => o.result),
-		["matched", "matched", "matched", "matched", "unsettled", "matched"],
+		[
+			"matched",
+			"matched",
+			"matched",
+			"matched",
+			"matched",
+			"unsettled",
+			"matched",
+		],
 	);
 	assert.equal(exitCode(run), 1);
 	assert.match(
@@ -84,7 +106,15 @@ test("a failed request is counted and the run goes on", async () => {
 	});
 	assert.deepEqual(
 		run.outcomes.map((o) => o.result),
-		["matched", "matched", "matched", "matched", "failed", "matched"],
+		[
+			"matched",
+			"matched",
+			"matched",
+			"matched",
+			"matched",
+			"failed",
+			"matched",
+		],
 	);
 	assert.equal(run.stopped, false);
 	assert.equal(calls.at(-1), `engine ${d3}`);
@@ -135,22 +165,27 @@ test("the report counts each read and lists differing paths with record IDs and 
 		(ask) =>
 			ask.read === "board"
 				? board(ask.workspace === "all" ? tied.toReversed() : tied)
-				: detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "New" }] }),
+				: ask.read === "deal"
+					? detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "New" }] })
+					: fit,
 		(ask) =>
 			ask.read === "board"
 				? board(tied)
-				: detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "Old" }] }),
+				: ask.read === "deal"
+					? detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "Old" }] })
+					: fit,
 	);
 	assert.equal(exitCode(run), 1);
 	assert.equal(
 		report("production", run),
 		`Old and new Deals answers compared on production
-old reads made: 6, engine reads made: 12
+old reads made: 7, engine reads made: 14
 
 read                                         asked   matched tie order different unsettled    failed
 board team                                       1         1         0         0         0         0
 board national_account                           1         1         0         0         0         0
 board all                                        1         0         1         0         0         0
+client fit                                       1         1         0         0         0         0
 deal detail                                      3         0         0         3         0         0
 
 differences: field path, kind, records, first record IDs
@@ -206,11 +241,21 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 				participants: [{ role: m(s), name: m(s), party_id: null }],
 				email_threads: [{ conversation_id: m(s), subject: m(s) }],
 			}),
+		fit: {
+			profiles: [
+				{ vertical: m(s), evidence: [{ deal_id: uuid(4), deal_name: m(s) }] },
+			],
+		},
 	});
 	const answers = (s: string) => {
-		const { board, detail } = side(s);
+		const { board, detail, fit } = side(s);
 		const details = new Map([d1, d2, d3].map((deal) => [deal, detail(deal)]));
-		return (ask: Ask) => (ask.read === "board" ? board : details.get(ask.deal));
+		return (ask: Ask) =>
+			ask.read === "board"
+				? board
+				: ask.read === "deal"
+					? details.get(ask.deal)
+					: fit;
 	};
 	const { run } = await runWith(answers("new"), answers("old"));
 	assert.ok(run.outcomes.every((o) => o.result === "different"));
