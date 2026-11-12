@@ -23,6 +23,32 @@ const signedIn = (slug: string) => ({
 		}),
 });
 
+const reads = [
+	["/deals", "deal-room-board"],
+	["/deals/Example", "get-deal-room"],
+	["/client-fit", "ideal-client-profile"],
+	["/capture-queue", "capture-queue"],
+	["/find?query=Example", "find"],
+] as const;
+const failedRead = (verb: string) => ({
+	error: "unhandled_verb_failure",
+	hint: "The operation failed. Quote the correlation_id when reporting it.",
+	verb,
+});
+
+async function refused(
+	response: Response,
+	status: number,
+	expected: Record<string, unknown>,
+): Promise<void> {
+	assert.equal(response.status, status);
+	const text = await response.text();
+	const { correlation_id } = JSON.parse(text);
+	assert.match(correlation_id, /^[0-9a-f-]{36}$/);
+	const { error, ...rest } = expected;
+	assert.equal(text, JSON.stringify({ error, correlation_id, ...rest }));
+}
+
 async function seed(url: string) {
 	// pg.Pool's end() resolves before its sockets close, and withSnapshot's
 	// forced drop would then kill a still-open connection with an error nothing
@@ -170,16 +196,6 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 				{ CARR: signedIn(slug), DATABASE: { connectionString: url } },
 			);
 		const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
-		const refused = async (
-			response: Response,
-			status: number,
-			expected: Record<string, unknown>,
-		) => {
-			assert.equal(response.status, status);
-			const { correlation_id, ...body } = await json(response);
-			assert.match(correlation_id, /^[0-9a-f-]{36}$/);
-			assert.deepEqual(body, expected);
-		};
 		try {
 			await t.test(
 				"a signed-in partner gets the board and the deal",
@@ -366,33 +382,20 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 });
 
 test("without a database binding every read answers 503", async () => {
-	for (const path of [
-		"/deals",
-		"/deals/Example",
-		"/client-fit",
-		"/capture-queue",
-		"/find?query=Example",
-	]) {
+	for (const [path, verb] of reads) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{ headers: { Cookie: cookie } },
 			{ CARR: signedIn("routes-agent") },
 		);
-		assert.equal(response.status, 503);
 		assert.equal(response.headers.get("Cache-Control"), "no-store");
-		assert.deepEqual(await response.json(), { error: "database_unavailable" });
+		await refused(response, 503, failedRead(verb));
 	}
 });
 
 test("a request with no session is refused before any read", async () => {
 	let sessionChecks = 0;
-	for (const path of [
-		"/deals",
-		"/deals/Example",
-		"/client-fit",
-		"/capture-queue",
-		"/find?query=Example",
-	]) {
+	for (const [path] of reads) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{},
@@ -408,7 +411,10 @@ test("a request with no session is refused before any read", async () => {
 		);
 		assert.equal(response.status, 401);
 		assert.equal(response.headers.get("Cache-Control"), "no-store");
-		assert.deepEqual(await response.json(), { error: "unauthorized" });
+		assert.equal(
+			await response.text(),
+			'{"error":"unauthorized","state":"sign_in_required"}',
+		);
 	}
 	assert.equal(sessionChecks, 0);
 });
@@ -420,9 +426,10 @@ test("a failed read answers a fixed body and logs no input", async () => {
 		"0f0e0d0c-0b0a-4908-8706-050403020100",
 	] as const;
 	try {
-		for (const path of [
-			`/deals?account_client_id=${secrets[1]}`,
-			`/deals/${encodeURIComponent(secrets[0])}`,
+		for (const [path, verb] of [
+			[`/deals?account_client_id=${secrets[1]}`, "deal-room-board"],
+			[`/deals/${encodeURIComponent(secrets[0])}`, "get-deal-room"],
+			...reads.slice(2),
 		]) {
 			const response = await worker.request(
 				`https://app.example.test/api/engine${path}`,
@@ -432,16 +439,12 @@ test("a failed read answers a fixed body and logs no input", async () => {
 					DATABASE: { connectionString: "postgres://made-up@127.0.0.1:1/none" },
 				},
 			);
-			assert.equal(response.status, 500);
 			assert.equal(response.headers.get("Cache-Control"), "no-store");
-			assert.deepEqual(await response.json(), { error: "read_failed" });
+			await refused(response, 500, failedRead(verb));
 		}
 		assert.deepEqual(
 			warnings.mock.calls.map((call) => call.arguments),
-			[
-				["read failed:", "Error"],
-				["read failed:", "Error"],
-			],
+			reads.map(() => ["read failed:", "Error"]),
 		);
 		const logged = JSON.stringify(warnings.mock.calls.map((c) => c.arguments));
 		for (const secret of secrets) assert.ok(!logged.includes(secret));
