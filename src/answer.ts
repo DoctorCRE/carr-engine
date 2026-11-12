@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { type Expression, sql } from "kysely";
 import { failureKind, sqlState } from "./failure.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 
@@ -20,6 +21,7 @@ const HINTS = {
 		"Supply the named required fields from the tool's documented input.",
 	unregistered_operation_fields: "Remove fields outside the documented input.",
 	invalid_number: "Supply a numeric value for the named fields.",
+	tool_call_markup_in_value: "Remove tool-call markup from the named fields.",
 	database_unavailable:
 		"The operation failed. Quote the correlation_id when reporting it.",
 };
@@ -70,6 +72,20 @@ export function unregisteredFields(
 			});
 }
 
+// The old system turned a numeric string into a number before the read's own
+// checks: absent gives the fallback, blank or non-finite gives undefined.
+export function asNumber(given: string | null, fallback: number) {
+	if (given === null) return fallback;
+	const trimmed = given.trim();
+	return trimmed !== "" && Number.isFinite(Number(trimmed))
+		? Number(trimmed)
+		: undefined;
+}
+
+// The old answer printed these driver Dates with JavaScript's toISOString.
+export const isoMillis = (stamp: Expression<unknown>) =>
+	sql<string>`to_char(${stamp} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+
 const isKnownPartner = async (db: Reader, slug: string) =>
 	(await db
 		.selectFrom("actor")
@@ -82,6 +98,7 @@ type Verb =
 	| "capture-queue"
 	| "deal-room-board"
 	| "find"
+	| "find-and-catch-up"
 	| "get-deal-room"
 	| "ideal-client-profile"
 	| "lead-board"
