@@ -6,6 +6,7 @@ import {
 	type ClientQuery,
 	CONTRACTS,
 	type Dependency,
+	invalid,
 	PAGE_SIZE,
 	PARTNERS,
 	PIPELINES,
@@ -51,12 +52,6 @@ const UNAVAILABLE = new Set([
 	"08000",
 	"57P01",
 ]);
-
-const invalid = (detail: {
-	parameter: string;
-	reason?: string;
-	limit?: number;
-}) => new BusinessRefusal({ error: "QUERY_INVALID", detail });
 
 const isOneOf = <T extends string>(
 	allowed: readonly T[],
@@ -170,7 +165,7 @@ function stampOf(c: Context<DatabaseEnv>): Stamp {
 
 export const clients = new Hono<DatabaseEnv>();
 
-// The old door checked its database, then the query, then the partner.
+// The old read parsed the query before checking the partner.
 clients.get("/clients", async (c) => {
 	const viewer = c.get("partner").slug;
 	const database = c.env.DATABASE;

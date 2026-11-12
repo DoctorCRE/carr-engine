@@ -320,27 +320,18 @@ test("the client list answers the old JSON across pages, searches, sorts and fil
 			const mine = await ask("?scope=mine&q=03", "joe");
 			assert.deepEqual([mine.total, mine.rows[0].owned_by_viewer], [1, true]);
 
-			assert.deepEqual((await ids("?sort=recent")).slice(0, 3), [
-				id(27),
-				id(28),
-				id(26),
-			]);
-			assert.deepEqual((await ids("?sort=last_deal_desc")).slice(0, 2), [
-				id(27),
-				id(1),
-			]);
-			assert.deepEqual(
-				(await ids("?sort=last_deal_asc&page=2")).at(-1),
-				id(28),
-			);
-			assert.deepEqual((await ids("?sort=vertical")).slice(0, 2), [
-				id(27),
-				id(1),
-			]);
-			assert.deepEqual((await ids("?sort=deal_type")).slice(0, 2), [
-				id(27),
-				id(1),
-			]);
+			for (const [search, expected] of [
+				["recent", [id(27), id(28), id(26)]],
+				["last_deal_desc", [id(27), id(1)]],
+				["last_deal_asc&page=2", [id(25), id(26), id(28)]],
+				["vertical", [id(27), id(1)]],
+				["deal_type", [id(27), id(1)]],
+			] as const)
+				assert.deepEqual(
+					(await ids(`?sort=${search}`)).slice(0, expected.length),
+					expected,
+					search,
+				);
 
 			assert.deepEqual(await ids("?pipeline=active"), [id(27)]);
 			assert.deepEqual(await ids("?pipeline=other"), [id(2), id(3)]);

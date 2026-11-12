@@ -60,6 +60,9 @@ export class BusinessRefusal {
 	}
 }
 
+export const invalid = (detail: NonNullable<RefusalBody["detail"]>) =>
+	new BusinessRefusal({ error: "QUERY_INVALID", detail });
+
 const NOTE =
 	"Status and ETL are what someone entered on this record. They are shown as entered, and they are not proof that an agreement was signed or that anyone was put on the work.";
 const FRESH_FOR_MS = 60_000;
@@ -86,6 +89,8 @@ const source = ({ observedAt, correlationId }: Stamp) => ({
 	safe_explanation:
 		"Fresh because this is a no-store request-time canonical database read of live business records; valid for 60 seconds.",
 });
+
+const PIPELINE = { active: true, other: false, unknown: null } as const;
 
 const liveClients = (db: Kysely<DB>) =>
 	db
@@ -123,25 +128,9 @@ function matchingClients(db: Kysely<DB>, query: ClientQuery, viewer: string) {
 	}
 	if (status !== null) clients = clients.where("c.status", "=", status);
 	if (type !== null) clients = clients.where("c.client_type", "=", type);
-	if (pipeline === "active" || pipeline === "other")
-		clients = clients.where(
-			"cs.is_active_pipeline",
-			"=",
-			pipeline === "active",
-		);
-	if (pipeline === "unknown")
-		clients = clients.where("cs.is_active_pipeline", "is", null);
+	if (pipeline !== "any")
+		clients = clients.where("cs.is_active_pipeline", "is", PIPELINE[pipeline]);
 	return clients;
-}
-
-// The legacy shape, for a caller that names no contract.
-function shaped<Row extends { last_deal_at: unknown; deal_type: unknown }>(
-	row: Row,
-	contract: Contract | undefined,
-) {
-	if (contract) return row;
-	const { last_deal_at: _, deal_type: __, ...legacy } = row;
-	return legacy;
 }
 
 export async function readClientList(
@@ -204,7 +193,10 @@ export async function readClientList(
 		page_size: PAGE_SIZE,
 		page_count,
 		out_of_range: query.page > page_count,
-		rows: rows.map((row) => shaped(row, query.contract)),
+		// The legacy shape, for a caller that names no contract.
+		rows: query.contract
+			? rows
+			: rows.map(({ last_deal_at: _, deal_type: __, ...legacy }) => legacy),
 		facets: { statuses, types },
 		// The status and type foreign keys always find a label, so the old
 		// signal for an unlabelled code is always null.
