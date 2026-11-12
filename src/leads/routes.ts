@@ -4,6 +4,7 @@ import {
 	asNumber,
 	Refusal,
 	refuse,
+	reservedFields,
 	unregisteredFields,
 } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
@@ -28,6 +29,8 @@ export const leads = new Hono<DatabaseEnv>();
 
 leads.get("/leads", async (c) => {
 	const params = new URL(c.req.url).searchParams;
+	const reserved = reservedFields(params);
+	if (reserved) return refuse(c, reserved);
 	const workspace = params.get("workspace");
 	if (workspace !== null && workspace !== "leads")
 		return refuse(

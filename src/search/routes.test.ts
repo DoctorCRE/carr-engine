@@ -18,11 +18,15 @@ const find = (search: string, connectionString: string) =>
 		{ CARR: signedIn, DATABASE: { connectionString } },
 	);
 
-test("find refuses unknown fields, then a missing query, before any read", async () => {
+test("find refuses reserved fields, then unknown fields, then a missing query, before any read", async () => {
 	const unread = "postgres://made-up@127.0.0.1:1/none";
-	const refused = async (search: string, expected: Record<string, unknown>) => {
+	const refused = async (
+		search: string,
+		expected: Record<string, unknown>,
+		status = 400,
+	) => {
 		const response = await find(search, unread);
-		assert.equal(response.status, 400);
+		assert.equal(response.status, status);
 		const { correlation_id, ...body } = (await response.json()) as {
 			correlation_id: string;
 		};
@@ -38,6 +42,15 @@ test("find refuses unknown fields, then a missing query, before any read", async
 		fields: ["a", "b"],
 	});
 	await refused("?%24bad=1", { ...unknown, fields: [] });
+	await refused(
+		"?organization_tenant_id=x&a=1",
+		{
+			error: "caller_authority_field_forbidden",
+			hint: "Remove caller-supplied authority fields.",
+			fields: ["organization_tenant_id"],
+		},
+		403,
+	);
 	const missing = {
 		error: "missing_required",
 		hint: "Supply the named required fields from the tool's documented input.",

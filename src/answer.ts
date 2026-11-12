@@ -20,6 +20,7 @@ const HINTS = {
 	missing_required:
 		"Supply the named required fields from the tool's documented input.",
 	unregistered_operation_fields: "Remove fields outside the documented input.",
+	caller_authority_field_forbidden: "Remove caller-supplied authority fields.",
 	invalid_number: "Supply a numeric value for the named fields.",
 	tool_call_markup_in_value: "Remove tool-call markup from the named fields.",
 	database_unavailable:
@@ -27,7 +28,7 @@ const HINTS = {
 };
 
 export class Refusal {
-	readonly status: 400 | 404 | 409 | 422 | 500 | 503;
+	readonly status: 400 | 403 | 404 | 409 | 422 | 500 | 503;
 	readonly error: keyof typeof HINTS;
 	readonly extra: Record<string, unknown>;
 	constructor(
@@ -55,10 +56,53 @@ export const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
 // The old system echoed back only identifier-shaped field names, at most 20.
 const ECHOED_FIELD = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
 
+// The old system kept these names for the caller's identity and refused them
+// before any other field check.
+const RESERVED_FIELDS = new Set([
+	"tenant",
+	"tenant_id",
+	"organization_tenant_id",
+	"sponsor",
+	"sponsoring_human_id",
+	"sponsoring_human_slug",
+	"human_slug",
+	"identity",
+	"actor",
+	"runtime_principal",
+	"audience",
+	"authorization",
+	"authorization_class",
+	"profile",
+	"capability",
+	"capabilities",
+	"action",
+	"actions",
+	"action_authority",
+	"action_authorities",
+	"allowed_actions",
+	"write",
+	"writes_records",
+	"calls_models",
+	"call_models",
+]);
+
+export function reservedFields(params: URLSearchParams) {
+	const reserved = [...new Set(params.keys())]
+		.filter((key) => RESERVED_FIELDS.has(key))
+		.sort();
+	return reserved.length === 0
+		? undefined
+		: new Refusal(403, "caller_authority_field_forbidden", {
+				fields: reserved.slice(0, 20),
+			});
+}
+
 export function unregisteredFields(
 	params: URLSearchParams,
 	known: readonly string[],
 ) {
+	const reserved = reservedFields(params);
+	if (reserved) return reserved;
 	const extra = [...new Set(params.keys())].filter(
 		(key) => !known.includes(key),
 	);
