@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { answer, asNumber, checkFields, Refusal, refuse } from "../answer.ts";
+import { answer, checkFields, Refusal, refuse } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
-import { hasToolCallMarkup, readRecentActivity } from "./read.ts";
+import { readRecentActivity } from "./read.ts";
 
 const FIELDS = ["query", "limit"];
 const QUERY_MAX = 200;
@@ -12,31 +12,23 @@ const generic = () => new Refusal(422, "unhandled_verb_failure");
 
 export const activity = new Hono<DatabaseEnv>();
 
-// The old door's checks in its order: unknown fields, markup, numbers, the
-// required query, then the read's own checks on the trimmed query and limit.
+// The old door's checks in its order: the field gate, the required query,
+// then the read's own checks on the trimmed query and limit.
 activity.get("/recent-activity", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const refused = checkFields(params, FIELDS);
+	const refused = checkFields(params, FIELDS, { numbers: ["limit"] });
 	if (refused) return refuse(c, refused);
-	for (const field of FIELDS) {
-		const value = params.get(field);
-		if (value !== null && hasToolCallMarkup(field, value))
-			return refuse(
-				c,
-				new Refusal(400, "tool_call_markup_in_value", { fields: [field] }),
-			);
-	}
-	const limit = asNumber(params.get("limit"), 20);
-	if (limit === undefined)
-		return refuse(c, new Refusal(400, "invalid_number", { fields: ["limit"] }));
-	const query = params.get("query");
-	if (!query)
+	const limit = Number(params.get("limit") ?? 20);
+	// A repeated query is the old input's list: present, but not a string.
+	const [query, ...more] = params.getAll("query");
+	if (query === undefined || (!query && more.length === 0))
 		return refuse(
 			c,
 			new Refusal(400, "missing_required", { fields: ["query"] }),
 		);
 	const trimmed = query.trim();
-	if (!trimmed || trimmed.length > QUERY_MAX) return refuse(c, generic());
+	if (more.length > 0 || !trimmed || trimmed.length > QUERY_MAX)
+		return refuse(c, generic());
 	if (!Number.isInteger(limit) || limit < 1 || limit > LIMIT_MAX)
 		return refuse(c, generic());
 	return answer(c, "find-and-catch-up", async (db) => {

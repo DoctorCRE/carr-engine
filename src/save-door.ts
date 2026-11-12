@@ -1,5 +1,4 @@
-import { hasToolCallMarkup } from "./activity/read.ts";
-import { checkFields, Refusal } from "./answer.ts";
+import { checkFields, hasToolCallMarkup, Refusal } from "./answer.ts";
 import type { JsonObject, JsonValue } from "./database.d.ts";
 
 // A field as the old schema declared it. The old door converted only a plain
