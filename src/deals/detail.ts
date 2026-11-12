@@ -2,7 +2,7 @@ import { type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
 import { asText } from "../reader.ts";
 import { readChecklist } from "./checklist.ts";
-import { resolveSubject } from "./resolve.ts";
+import { resolveDeal } from "./resolve.ts";
 import {
 	clientPortalUrlOf,
 	nextStepRequired,
@@ -26,9 +26,8 @@ const PLACEHOLDERS = new Set([
 ]);
 
 export async function readDealDetail(db: Kysely<DB>, deal: string) {
-	const subject = await resolveSubject(db, deal);
+	const subject = await resolveDeal(db, deal);
 	if ("error" in subject) return subject;
-	if (subject.type !== "deal") return { error: "not_a_deal" as const };
 	const id = subject.id;
 	const live = await liveDeal(db, id).executeTakeFirst();
 	const record = live ?? (await archivedDeal(db, id).executeTakeFirst());

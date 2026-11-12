@@ -216,6 +216,48 @@ test("a presence ping refuses as the old verb did", () =>
 		);
 	}));
 
+test("a presence ping refuses an ambiguous deal name as the old verb did", () =>
+	withSnapshot(async (url) => {
+		await withClient(url, (db) =>
+			db.query(`${SEED}
+				insert into deal (client_id, name, deal_type, phase, created_by, updated_by)
+					values ('${CLIENT}', 'Example Presence Deal Two', 'presence-lease',
+						'presence-open', '${PARTNER}', '${PARTNER}');`),
+		);
+		const response = await request(url, {
+			idempotency_key: randomUUID(),
+			deal: "Example Presence",
+			field: "phase",
+		});
+		assert.equal(response.status, 409);
+		const { correlation_id, candidates, ...rest } = JSON.parse(
+			await response.text(),
+		);
+		assert.match(correlation_id, /^[0-9a-f-]{36}$/);
+		assert.deepEqual(rest, {
+			error: "needs_disambiguation",
+			hint: "Choose an exact record reference from the candidates before retrying.",
+		});
+		assert.deepEqual(
+			candidates.sort((a: { name: string }, b: { name: string }) =>
+				a.name.localeCompare(b.name),
+			),
+			[
+				{
+					name: "Example Presence Deal",
+					phase: "presence-open",
+					client_ref: null,
+				},
+				{
+					name: "Example Presence Deal Two",
+					phase: "presence-open",
+					client_ref: null,
+				},
+			],
+		);
+		assert.deepEqual(await leases(url), []);
+	}));
+
 // The writer login's grants from the old job's inventory (#41), plus the two it
 // lacks: its own presence line, and reading back a stored answer.
 const WRITER_GRANTS = [
