@@ -29,6 +29,7 @@ const reads = [
 	["/client-fit", "ideal-client-profile"],
 	["/capture-queue", "capture-queue"],
 	["/find?query=Example", "find"],
+	["/invoices", "read-invoice-tracker"],
 ] as const;
 const failedRead = (verb: string) => ({
 	error: "unhandled_verb_failure",
@@ -274,7 +275,7 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 						422,
 						expected,
 					);
-					for (const path of ["/client-fit", "/capture-queue"])
+					for (const path of ["/client-fit", "/capture-queue", "/invoices"])
 						await refused(await get(path, "no-such-partner"), 422, expected);
 				},
 			);
@@ -450,6 +451,7 @@ test("the deal reads refuse reserved fields, then a bad workspace, then unknown 
 				failedRead("ideal-client-profile"),
 			],
 			["/capture-queue", "", failedRead("capture-queue")],
+			["/invoices", "", failedRead("read-invoice-tracker")],
 		] as const) {
 			await refused(
 				await get(`${path}?${documented}&b=1&a=2&a=3&%24bad=4`),

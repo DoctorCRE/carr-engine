@@ -37,6 +37,8 @@ function readOf(ask: Ask) {
 			return "territory";
 		case "reasons to reach out":
 			return "reasons to reach out";
+		case "invoices":
+			return "invoices";
 	}
 }
 const recordOf = (ask: Ask) =>
@@ -53,6 +55,7 @@ const PREFIXES = {
 	"quiet follow-ups": "quiet",
 	territory: "territory",
 	"reasons to reach out": "reasons",
+	invoices: "invoices",
 };
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>
