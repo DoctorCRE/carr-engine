@@ -66,3 +66,8 @@ export const captureQueueShape = {
 	opaque: ["candidates[].payload"],
 	ignore,
 };
+
+export const feedShape = {
+	rows: { "events[]": strict("id") },
+	opaque: ["events[].old_value", "events[].new_value"],
+};

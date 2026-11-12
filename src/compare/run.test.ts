@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
+import { decodeCursor } from "../deals/changes.ts";
 import { report } from "./report.ts";
 import { type Ask, compareDeals, exitCode, StopRun } from "./run.ts";
 
@@ -21,12 +22,27 @@ const fixed = {
 	"client fit": { schema_version: "ideal-client-profile.v1", profiles: [] },
 	"capture queue": { candidates: [] },
 };
+const event = (n: number, fields: object = {}) => ({
+	id: uuid(n),
+	recorded_at: "2030-01-01T00:00:00+00:00",
+	actor: "example",
+	field: "phase",
+	old_value: "research",
+	new_value: "legal",
+	...fields,
+});
+const feed = (events = [event(11), event(12)]) => ({
+	events,
+	cursors: ["made-up-cursor"],
+});
 const answer = (ask: Ask) =>
 	ask.read === "board"
 		? board()
 		: ask.read === "deal"
 			? detail(ask.deal)
-			: fixed[ask.read];
+			: ask.read === "feed"
+				? feed()
+				: fixed[ask.read];
 const label = (ask: Ask) =>
 	ask.read === "board"
 		? ask.workspace
@@ -58,7 +74,7 @@ async function runWith(
 	return { run, calls, pauses };
 }
 
-test("asks the engine, the old system and the engine again for every board, the client fit, the capture queue and every deal, pausing between requests", async () => {
+test("asks the engine, the old system and the engine again for every board, the client fit, the capture queue, the change feed and every deal, pausing between requests", async () => {
 	const { run, calls, pauses } = await runWith(answer);
 	const asks = run.outcomes.map((o) => label(o.ask));
 	assert.deepEqual(asks, [
@@ -67,6 +83,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"all",
 		"client fit",
 		"capture queue",
+		"feed",
 		d1,
 		d2,
 		d3,
@@ -78,10 +95,31 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 7);
-	assert.deepEqual([run.oldReads, run.engineReads], [8, 16]);
+	assert.equal(pauses, 8);
+	assert.deepEqual([run.oldReads, run.engineReads], [9, 18]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
+});
+
+test("every read of the change feed starts three days back at the zero ID, in the cursor text the app sends", async (t) => {
+	mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2030-01-04T00:00:00Z"),
+	});
+	t.after(() => mock.timers.reset());
+	const starts = new Set<string>();
+	const remember = (ask: Ask) => {
+		if (ask.read === "feed") starts.add(ask.start);
+		return answer(ask);
+	};
+	await runWith(remember, remember);
+	const start =
+		"eyJyZWNvcmRlZF9hdCI6IjIwMzAtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAwIn0";
+	assert.deepEqual([...starts], [start]);
+	assert.deepEqual(decodeCursor(start), {
+		recorded_at: "2030-01-01T00:00:00.000Z",
+		id: "00000000-0000-0000-0000-000000000000",
+	});
 });
 
 test("a request whose two engine answers differ is unsettled and not compared", async () => {
@@ -91,6 +129,7 @@ test("a request whose two engine answers differ is unsettled and not compared", 
 	assert.deepEqual(
 		run.outcomes.map((o) => o.result),
 		[
+			"matched",
 			"matched",
 			"matched",
 			"matched",
@@ -122,6 +161,7 @@ test("a failed request is counted and the run goes on", async () => {
 			"matched",
 			"matched",
 			"matched",
+			"matched",
 			"failed",
 			"matched",
 		],
@@ -133,6 +173,26 @@ test("a failed request is counted and the run goes on", async () => {
 		report("production", run),
 		/not compared: result, read, deal ID\nfailed {2}deal detail {2}0{8}-0{4}-4000-8000-0{11}2\n$/,
 	);
+});
+
+test("an engine feed that fails its read is a failed item and the deals are still asked", async () => {
+	const { run } = await runWith((ask) => {
+		if (ask.read === "feed") throw new Error("engine read failed");
+		return answer(ask);
+	});
+	assert.deepEqual(
+		run.outcomes.map((o) => `${label(o.ask)} ${o.result}`).slice(3),
+		[
+			"client fit matched",
+			"capture queue matched",
+			"feed failed",
+			`${d1} matched`,
+			`${d2} matched`,
+			`${d3} matched`,
+		],
+	);
+	assert.equal(run.stopped, false);
+	assert.match(report("production", run), /\nfailed {2}change feed {2}-\n$/);
 });
 
 test("a network or sign-in failure stops the run", async () => {
@@ -177,19 +237,19 @@ test("the report counts each read and lists differing paths with record IDs and 
 				? board(ask.workspace === "all" ? tied.toReversed() : tied)
 				: ask.read === "deal"
 					? detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "New" }] })
-					: fixed[ask.read],
+					: answer(ask),
 		(ask) =>
 			ask.read === "board"
 				? board(tied)
 				: ask.read === "deal"
 					? detail(ask.deal, { vendors: [{ party_id: uuid(9), note: "Old" }] })
-					: fixed[ask.read],
+					: answer(ask),
 	);
 	assert.equal(exitCode(run), 1);
 	assert.equal(
 		report("production", run),
 		`Old and new Deals answers compared on production
-old reads made: 8, engine reads made: 16
+old reads made: 9, engine reads made: 18
 
 read                                         asked   matched tie order different unsettled    failed
 board team                                       1         1         0         0         0         0
@@ -197,6 +257,7 @@ board national_account                           1         1         0         0
 board all                                        1         0         1         0         0         0
 client fit                                       1         1         0         0         0         0
 capture queue                                    1         1         0         0         0         0
+change feed                                      1         1         0         0         0         0
 deal detail                                      3         0         0         3         0         0
 
 differences: field path, kind, records, first record IDs
@@ -206,6 +267,39 @@ tied rows in another order: array path, requests
 board.deals[]  1
 `,
 	);
+});
+
+test("the change feed reports a differing event field by path and event ID, an event on one side by its ID, and a differing cursor by path, without values", async () => {
+	const engineFeed = {
+		events: [event(11, { field: "next_date" }), event(12), event(13)],
+		cursors: ["engine-cursor"],
+	};
+	const oldFeed = {
+		events: [event(14), event(11), event(12)],
+		cursors: ["old-cursor"],
+	};
+	const { run } = await runWith(
+		(ask) => (ask.read === "feed" ? engineFeed : answer(ask)),
+		(ask) => (ask.read === "feed" ? oldFeed : answer(ask)),
+	);
+	const outcome = run.outcomes.find((o) => o.ask.read === "feed");
+	assert.equal(outcome?.result, "different");
+	const text = report("production", run);
+	assert.match(text, /\nchange feed +1 +0 +0 +1 +0 +0\n/);
+	assert.match(
+		text,
+		new RegExp(
+			[
+				"differences: field path, kind, records, first record IDs",
+				`feed.events\\[\\]  missing in new  1  ${uuid(14)}`,
+				`feed.events\\[\\].field  value differs  1  ${uuid(11)}`,
+				`feed.events\\[\\]  missing in old  1  ${uuid(13)}`,
+				"feed.cursors\\[\\]  value differs  1  -",
+			].join("\n"),
+		),
+	);
+	for (const value of ["next_date", "phase", "engine-cursor", "old-cursor"])
+		assert.ok(!text.includes(value), `${value} reached the report`);
 });
 
 test("no value, free-form key or non-ID text from either answer reaches the report", async () => {
@@ -271,16 +365,31 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 				],
 			},
 		},
+		feed: {
+			events: [
+				{
+					id: uuid(7),
+					[upper(s)]: m(s),
+					actor: m(s),
+					field: m(s),
+					old_value: { [m(s)]: m(s) },
+					new_value: [{ [m(s)]: m(s) }],
+				},
+			],
+			cursors: [m(s)],
+		},
 	});
 	const answers = (s: string) => {
-		const { board, detail, fixed } = side(s);
+		const { board, detail, fixed, feed } = side(s);
 		const details = new Map([d1, d2, d3].map((deal) => [deal, detail(deal)]));
 		return (ask: Ask) =>
 			ask.read === "board"
 				? board
 				: ask.read === "deal"
 					? details.get(ask.deal)
-					: fixed[ask.read];
+					: ask.read === "feed"
+						? feed
+						: fixed[ask.read];
 	};
 	const { run } = await runWith(answers("new"), answers("old"));
 	assert.ok(run.outcomes.every((o) => o.result === "different"));
@@ -289,4 +398,5 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 	for (const marker of markers)
 		assert.ok(!text.includes(marker), `${marker} reached the report`);
 	assert.match(text, /detail\.events\[\]\.old_value {2}value differs/);
+	assert.match(text, /feed\.events\[\]\.new_value {2}value differs/);
 });

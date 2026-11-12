@@ -5,6 +5,7 @@ import {
 	captureQueueShape,
 	clientFitShape,
 	detailShape,
+	feedShape,
 } from "./deals-shapes.ts";
 
 export class StopRun extends Error {}
@@ -13,7 +14,8 @@ export type Ask =
 	| { read: "board"; workspace: Workspace }
 	| { read: "deal"; deal: string }
 	| { read: "client fit" }
-	| { read: "capture queue" };
+	| { read: "capture queue" }
+	| { read: "feed"; start: string };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -46,7 +48,21 @@ const SHAPES = {
 	deal: detailShape,
 	"client fit": clientFitShape,
 	"capture queue": captureQueueShape,
+	feed: feedShape,
 };
+
+const FEED_DAYS = 3;
+
+// Built as the app builds its start cursor: a time and the zero ID, base64url without padding.
+function feedStart(now: number) {
+	const recorded_at = new Date(now - FEED_DAYS * 86_400_000).toISOString();
+	return btoa(
+		JSON.stringify({ recorded_at, id: "00000000-0000-0000-0000-000000000000" }),
+	)
+		.replaceAll("+", "-")
+		.replaceAll("/", "_")
+		.replace(/=+$/, "");
+}
 
 export async function compareDeals(
 	askEngine: Fetch,
@@ -63,6 +79,8 @@ export async function compareDeals(
 		...WORKSPACES.map((workspace) => ({ read: "board", workspace }) as const),
 		{ read: "client fit" },
 		{ read: "capture queue" },
+		// Every read of the feed starts here. A write between the reads shows as an unsettled feed.
+		{ read: "feed", start: feedStart(Date.now()) },
 	];
 	const queued = new Set<string>();
 	for (const [index, ask] of queue.entries()) {

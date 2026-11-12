@@ -168,3 +168,71 @@ test("pauses one and a half seconds between asks", async (t) => {
 	await paused;
 	assert.equal(done, true);
 });
+
+const feedAsk: Ask = { read: "feed", start: "made-up-start" };
+const events = (from: number, count: number) =>
+	Array.from({ length: count }, (_, i) => ({ id: `event-${from + i}` }));
+const feedPage = (body: { events: object[]; cursor: string }) =>
+	json({ ...body, presence: [{ actor: "a" }], capture_sessions: [{}] });
+
+test("pages each side's feed from the start with that side's cursors until a short page, keeping only events and cursors", async () => {
+	const last = { events: events(400, 3), cursor: "c3" };
+	const pages = new Map([
+		["made-up-start", { events: events(0, 200), cursor: "c1" }],
+		["c1", { events: events(200, 200), cursor: "c2" }],
+		["c2", last],
+	]);
+	const sides = [
+		["askEngine", "/api/engine/pipeline/changes"],
+		["askOld", "/pipeline/changes"],
+	] as const;
+	for (const [side, path] of sides) {
+		const asked = fake(({ url }) =>
+			feedPage(pages.get(url.searchParams.get("cursor") ?? "") ?? last),
+		);
+		assert.deepEqual(await asked[side](feedAsk), {
+			events: events(0, 403),
+			cursors: ["c1", "c2", "c3"],
+		});
+		assert.deepEqual(
+			asked.sent.map((s) => [s.url.pathname, s.url.searchParams.get("cursor")]),
+			[
+				[path, "made-up-start"],
+				[path, "c1"],
+				[path, "c2"],
+			],
+		);
+		for (const s of asked.sent) {
+			assert.equal(header(s, "cookie"), `__Host-dealroom_session=${session}`);
+			assert.equal(s.init.method ?? "GET", "GET");
+		}
+	}
+});
+
+test("a full last page is followed by one more request, which hands back its cursor", async () => {
+	const { askOld, sent } = fake(({ url }) =>
+		url.searchParams.get("cursor") === "c1"
+			? feedPage({ events: [], cursor: "c1" })
+			: feedPage({ events: events(0, 200), cursor: "c1" }),
+	);
+	assert.deepEqual(await askOld(feedAsk), {
+		events: events(0, 200),
+		cursors: ["c1", "c1"],
+	});
+	assert.equal(sent.length, 2);
+});
+
+test("an unavailable feed or one that never ends fails its read without stopping the run", async () => {
+	const unavailable = () =>
+		json({ error: "database_unavailable", correlation_id: "made-up" }, 503);
+	const endless = () => feedPage({ events: events(0, 200), cursor: "c1" });
+	for (const respond of [unavailable, endless])
+		for (const ask of [fake(respond).askEngine, fake(respond).askOld])
+			await assert.rejects(
+				ask(feedAsk),
+				(error: Error) => !(error instanceof StopRun),
+			);
+	const { askEngine, sent } = fake(endless);
+	await assert.rejects(askEngine(feedAsk));
+	assert.equal(sent.length, 25);
+});
