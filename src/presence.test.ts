@@ -190,10 +190,10 @@ test("a presence ping refuses as the old verb did", () =>
 			error: "not_a_deal",
 			hint: "Choose a deal record, not a client or lead.",
 		});
-		await refused(await ping({ field: "phase", tenant: "x" }), 400, {
+		await refused(await ping({ field: "phase", note: "x" }), 400, {
 			error: "unregistered_operation_fields",
 			hint: "Remove fields outside the documented input.",
-			fields: ["tenant"],
+			fields: ["note"],
 		});
 		assert.deepEqual(await leases(url), []);
 		assert.equal((await ping({ field: "phase" })).status, 200);
