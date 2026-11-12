@@ -371,6 +371,7 @@ test("without a database binding every read answers 503", async () => {
 		"/deals/Example",
 		"/client-fit",
 		"/capture-queue",
+		"/find?query=Example",
 	]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
@@ -390,6 +391,7 @@ test("a request with no session is refused before any read", async () => {
 		"/deals/Example",
 		"/client-fit",
 		"/capture-queue",
+		"/find?query=Example",
 	]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
