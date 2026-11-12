@@ -13,6 +13,7 @@ import { readCaptureQueue } from "./deals/capture-queue.ts";
 import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
+import { readInvoiceTracker } from "./invoices.ts";
 import { readLeadBoard } from "./leads/board.ts";
 import { readLeadDetail } from "./leads/detail.ts";
 import { readQuietFollowUps } from "./leads/quiet-follow-ups.ts";
@@ -23,7 +24,7 @@ import { readNetwork } from "./relationships/network.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 import { readVendorMarkets } from "./vendors/markets.ts";
-import { readVendorList } from "./vendors/read.ts";
+import { readVendor, readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
 // name, and `carr_business_date()`. The views read their tables with their
@@ -69,6 +70,7 @@ const readable = [
 	"v_deal_room_presence",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
+	"v_invoice_tracker",
 	"v_last_touch",
 	"v_lead_client_best",
 	"v_lead_prospect_engagement",
@@ -227,7 +229,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network and recent activity and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details and the invoices and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -255,6 +257,10 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				coverage: "recorded_closed_won_only",
 				profiles: [],
 			});
+			const tracker = await readSnapshot(login, (db) =>
+				readInvoiceTracker(db, seeded.actor),
+			);
+			assert.deepEqual(tracker.entries, []);
 			const queue = await readSnapshot(login, readCaptureQueue);
 			assert.deepEqual(
 				queue.candidates.map((c) => [c.deal_name, c.confidence]),
@@ -378,6 +384,15 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				),
 				[[1, "2026-01-02T00:00:00+00:00"]],
 			);
+			const [shown] = vendors.rows;
+			assert.ok(shown);
+			const vendor = await readSnapshot(login, (db) =>
+				readVendor(db, seeded.actor, shown.id, "vendor-directory.v2", {
+					observedAt: new Date(),
+					correlationId: "example",
+				}),
+			);
+			assert.deepEqual(vendor.record.people, []);
 			await withAdmin(
 				(admin) =>
 					admin.query(`insert into vendor_market select 'example', 'Example', 'market',
