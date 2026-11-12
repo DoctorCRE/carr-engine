@@ -2,12 +2,12 @@ import { Hono } from "hono";
 import { answer, Refusal, refuse, unregisteredFields } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard } from "./board.ts";
+import { historyCursors, readLeadDetail } from "./detail.ts";
 import { readQuietFollowUps } from "./quiet-follow-ups.ts";
 
-// The old input also took `lead_id` to open one lead, which the engine does
-// not serve yet.
 const BOARD_FIELDS = [
 	"workspace",
+	"lead_id",
 	"correspondence_cursor",
 	"stage_history_cursor",
 ];
@@ -38,12 +38,14 @@ leads.get("/leads", async (c) => {
 		);
 	const unregistered = unregisteredFields(params, BOARD_FIELDS);
 	if (unregistered) return refuse(c, unregistered);
-	// The old read refused any history cursor sent without a lead, and its
-	// error was not public, so it answered generically.
-	if (params.has("correspondence_cursor") || params.has("stage_history_cursor"))
-		return refuse(c, new Refusal(400, "unhandled_verb_failure"));
+	const cursors = historyCursors(params);
+	// The old refusal of a cursor was not public, so it answered generically.
+	if (!cursors) return refuse(c, new Refusal(400, "unhandled_verb_failure"));
+	const leadId = params.get("lead_id");
 	return answer(c, "lead-board", async (db) => {
-		const board = await readLeadBoard(db);
+		const board = leadId
+			? await readLeadDetail(db, leadId, cursors)
+			: await readLeadBoard(db);
 		return "error" in board
 			? new Refusal(422, "unhandled_verb_failure")
 			: board;
