@@ -13,7 +13,7 @@ export const deals = new Hono<DatabaseEnv>();
 deals.get("/deals", async (c) => {
 	const params = new URL(c.req.url).searchParams;
 	const refused = checkFields(params, ["workspace", "account_client_id"], {
-		workspace: WORKSPACES,
+		vocabularies: { workspace: WORKSPACES },
 	});
 	if (refused) return refuse(c, refused);
 	const given = params.get("workspace");
@@ -26,16 +26,26 @@ deals.get("/deals", async (c) => {
 	);
 });
 
+// The deal page's argument is its path, never a query field.
+function dealArguments(url: string, deal?: string) {
+	const params = new URL(url).searchParams;
+	params.delete("deal");
+	if (deal !== undefined) params.set("deal", deal);
+	return params;
+}
+
 deals.get("/deals/", (c) =>
 	refuse(
 		c,
-		checkFields(new URL(c.req.url).searchParams, ["deal"]) ??
+		checkFields(dealArguments(c.req.url), ["deal"]) ??
 			new Refusal(400, "missing_required", { fields: ["deal"] }),
 	),
 );
 
 deals.get("/deals/:deal{.+}", async (c) => {
-	const refused = checkFields(new URL(c.req.url).searchParams, ["deal"]);
+	const refused = checkFields(dealArguments(c.req.url, c.req.param("deal")), [
+		"deal",
+	]);
 	if (refused) return refuse(c, refused);
 	return answer(c, "get-deal-room", async (db) => {
 		const detail = await readDealDetail(db, c.req.param("deal"));

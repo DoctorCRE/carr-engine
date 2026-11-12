@@ -15,6 +15,8 @@ const HINTS = {
 		"Use a value from the field's documented vocabulary.",
 	unhandled_verb_failure:
 		"The operation failed. Quote the correlation_id when reporting it.",
+	invalid_field_value:
+		"Check the named fields against the tool's documented input.",
 	database_refused_the_statement:
 		"The operation could not be completed. Quote the correlation_id when reporting it.",
 	missing_required:
@@ -49,11 +51,15 @@ export class Refusal {
 	}
 }
 
-export const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
+export const refuse = (
+	c: Context<DatabaseEnv>,
+	refusal: Refusal,
+	correlation_id = crypto.randomUUID(),
+) =>
 	c.json(
 		{
 			error: refusal.error,
-			correlation_id: crypto.randomUUID(),
+			correlation_id,
 			hint: HINTS[refusal.error],
 			...refusal.extra,
 		},
@@ -93,12 +99,72 @@ const RESERVED_FIELDS = new Set([
 	"call_models",
 ]);
 
+const TOOL_CALL_MARKERS = ["<parameter", "</parameter", "<invoke", "</invoke"];
+
+// The old door refused a value carrying its own closing tag, or a marker
+// outside a backtick pair on one line.
+export function hasToolCallMarkup(field: string, value: string) {
+	if (value.includes(`</${field}>`)) return true;
+	return TOOL_CALL_MARKERS.some((marker) => {
+		for (
+			let at = value.indexOf(marker);
+			at !== -1;
+			at = value.indexOf(marker, at + 1)
+		) {
+			const before = value.lastIndexOf("`", at);
+			const after = value.indexOf("`", at);
+			if (
+				before === -1 ||
+				after === -1 ||
+				value.slice(before, after).includes("\n")
+			)
+				return true;
+		}
+		return false;
+	});
+}
+
+function objectIn(text: string): Record<string, unknown> | undefined {
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// An object's own field is not named, because the old answer named only the
+// documented top-level fields.
+function markedFields(field: string, value: string, own?: readonly string[]) {
+	const object = own && objectIn(value);
+	if (!object) return hasToolCallMarkup(field, value) ? [field] : undefined;
+	const marked = own.some((name) => {
+		const inner = object[name];
+		return typeof inner === "string" && hasToolCallMarkup(name, inner);
+	});
+	return marked ? [] : undefined;
+}
+
+const isNumeric = (value: string) =>
+	value.trim() !== "" && Number.isFinite(Number(value));
+
+type Declared = {
+	vocabularies?: Readonly<Record<string, readonly string[]>>;
+	numbers?: readonly string[];
+	// Fields sent as an object's JSON, with that object's own string fields.
+	objects?: Readonly<Record<string, readonly string[]>>;
+};
+
 // The old input gate in its order: reserved names, then each field's declared
-// vocabulary, then names outside the documented input.
+// vocabulary, then names outside the documented input, then field by field in
+// the documented order its markup, then its number. A repeated field stands
+// for the old input's list, which only a vocabulary or a number refused.
 export function checkFields(
 	params: URLSearchParams,
 	fields: readonly string[],
-	vocabularies: Readonly<Record<string, readonly string[]>> = {},
+	{ vocabularies = {}, numbers = [], objects = {} }: Declared = {},
 ) {
 	const names = [...new Set(params.keys())].sort();
 	const reserved = names.filter((name) => RESERVED_FIELDS.has(name));
@@ -107,29 +173,28 @@ export function checkFields(
 			fields: reserved.slice(0, 20),
 		});
 	for (const [field, allowed] of Object.entries(vocabularies)) {
-		const value = params.get(field);
-		if (value !== null && !allowed.includes(value))
+		const [value, ...more] = params.getAll(field);
+		if (value !== undefined && (more.length > 0 || !allowed.includes(value)))
 			return new Refusal(400, "value_not_in_declared_vocabulary", {
 				allowed_values: allowed,
 				fields: [field],
 			});
 	}
 	const extra = names.filter((name) => !fields.includes(name));
-	return extra.length === 0
-		? undefined
-		: new Refusal(400, "unregistered_operation_fields", {
-				fields: extra.filter((name) => ECHOED_FIELD.test(name)).slice(0, 20),
-			});
-}
-
-// The old system turned a numeric string into a number before the read's own
-// checks: absent gives the fallback, blank or non-finite gives undefined.
-export function asNumber(given: string | null, fallback: number) {
-	if (given === null) return fallback;
-	const trimmed = given.trim();
-	return trimmed !== "" && Number.isFinite(Number(trimmed))
-		? Number(trimmed)
-		: undefined;
+	if (extra.length > 0)
+		return new Refusal(400, "unregistered_operation_fields", {
+			fields: extra.filter((name) => ECHOED_FIELD.test(name)).slice(0, 20),
+		});
+	for (const field of fields) {
+		const [value, ...more] = params.getAll(field);
+		if (value === undefined) continue;
+		const marked =
+			more.length === 0 && markedFields(field, value, objects[field]);
+		if (marked)
+			return new Refusal(400, "tool_call_markup_in_value", { fields: marked });
+		if (numbers.includes(field) && (more.length > 0 || !isNumeric(value)))
+			return new Refusal(400, "invalid_number", { fields: [field] });
+	}
 }
 
 // The old answer printed these driver Dates with JavaScript's toISOString.
