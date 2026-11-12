@@ -140,6 +140,21 @@ test("business rows use the copied constraints and touch triggers", () =>
 		);
 	}));
 
+test("the check names the server to start when none answers", () => {
+	const result = spawnSync(process.execPath, ["scripts/database-check.ts"], {
+		env: {
+			...process.env,
+			TEST_DATABASE_URL: "postgres://postgres@127.0.0.1:1/postgres",
+		},
+		encoding: "utf8",
+	});
+	assert.equal(result.status, 1);
+	assert.equal(
+		result.stderr,
+		"No PostgreSQL server answered at 127.0.0.1:1. Start one with: docker run --rm -p 127.0.0.1:1:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18\n",
+	);
+});
+
 test("drift compares catalogs read-only and prints object names", () =>
 	withSnapshot(async (url) => {
 		const run = () =>

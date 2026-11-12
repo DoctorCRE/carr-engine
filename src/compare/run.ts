@@ -1,6 +1,6 @@
 import { WORKSPACES, type Workspace } from "../deals/board.ts";
 import { UUID } from "../uuid.ts";
-import { compareAnswers, isRecord } from "./answers.ts";
+import { compareAnswers, isRecord, type ReadShape } from "./answers.ts";
 import {
 	boardShape,
 	captureQueueShape,
@@ -74,26 +74,28 @@ function dealsOn(board: unknown) {
 	});
 }
 
-const SHAPES = {
-	board: boardShape,
-	deal: detailShape,
-	"client fit": clientFitShape,
-	"capture queue": captureQueueShape,
-	feed: feedShape,
-	find: findShape,
-	"lead board": leadBoardShape,
-	lead: leadShape,
-	"quiet follow-ups": quietShape,
-	territory: territoryShape,
-	"reasons to reach out": reasonsShape,
-	invoices: invoicesShape,
-	"client list": clientListShape,
-	client: clientShape,
-	"vendor list": vendorListShape,
-	vendor: vendorShape,
-	"vendor markets": marketsShape,
-	relationships: networkShape,
-	"recent activity": activityShape,
+type Read = { shape: ReadShape; prefix: string; label?: string };
+// The report prints a read as its label, or as its name when it has none.
+export const READS: Record<Ask["read"], Read> = {
+	board: { shape: boardShape, prefix: "board" },
+	deal: { shape: detailShape, prefix: "detail", label: "deal detail" },
+	"client fit": { shape: clientFitShape, prefix: "fit" },
+	"capture queue": { shape: captureQueueShape, prefix: "queue" },
+	feed: { shape: feedShape, prefix: "feed", label: "change feed" },
+	find: { shape: findShape, prefix: "find", label: "search find" },
+	"lead board": { shape: leadBoardShape, prefix: "leads" },
+	lead: { shape: leadShape, prefix: "lead", label: "lead detail" },
+	"quiet follow-ups": { shape: quietShape, prefix: "quiet" },
+	territory: { shape: territoryShape, prefix: "territory" },
+	"reasons to reach out": { shape: reasonsShape, prefix: "reasons" },
+	invoices: { shape: invoicesShape, prefix: "invoices" },
+	"client list": { shape: clientListShape, prefix: "clients" },
+	client: { shape: clientShape, prefix: "client", label: "client detail" },
+	"vendor list": { shape: vendorListShape, prefix: "vendors" },
+	vendor: { shape: vendorShape, prefix: "vendor", label: "vendor detail" },
+	"vendor markets": { shape: marketsShape, prefix: "markets" },
+	relationships: { shape: networkShape, prefix: "network" },
+	"recent activity": { shape: activityShape, prefix: "activity" },
 };
 
 // Each opened lead re-sends the whole board, so a fixed number spread over the
@@ -196,7 +198,7 @@ export async function compareDeals(
 	};
 	for (const [index, ask] of queue.entries()) {
 		if (index > 0) await pause();
-		const shape = SHAPES[ask.read];
+		const { shape } = READS[ask.read];
 		let answers: unknown[];
 		try {
 			run.engineReads++;
