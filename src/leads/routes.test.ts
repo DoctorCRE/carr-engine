@@ -116,6 +116,10 @@ test("quiet follow-ups answer with the old cadence, date text and refusals", () 
 					hint: "The operation could not be completed. Quote the correlation_id when reporting it.",
 				},
 			]);
+			assert.deepEqual(
+				await refusal(await quiet("?lead_days=99999999999", url)),
+				[500, { ...generic, verb: "quiet-follow-ups" }],
+			);
 			await leads(2, 1001);
 			assert.deepEqual(await refusal(await quiet("", url)), [422, generic]);
 		} finally {

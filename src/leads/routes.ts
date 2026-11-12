@@ -1,7 +1,7 @@
-import { type Context, Hono } from "hono";
+import { Hono } from "hono";
 import { answer, Refusal, refuse } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
-import { type Cadence, readQuietFollowUps } from "./quiet-follow-ups.ts";
+import { readQuietFollowUps } from "./quiet-follow-ups.ts";
 
 const FIELDS = ["lead_days", "vendor_days", "owner_slug"];
 // The old system echoed back only identifier-shaped field names, at most 20.
@@ -16,17 +16,6 @@ function asNumber(given: string | null, fallback: number) {
 		? Number(trimmed)
 		: undefined;
 }
-
-const invalidNumber = (c: Context<DatabaseEnv>, field: keyof Cadence) =>
-	c.json(
-		{
-			error: "invalid_number",
-			correlation_id: crypto.randomUUID(),
-			hint: "Supply a numeric value for the named fields.",
-			fields: [field],
-		},
-		400,
-	);
 
 export const leads = new Hono<DatabaseEnv>();
 
@@ -44,14 +33,22 @@ leads.get("/quiet-follow-ups", async (c) => {
 			}),
 		);
 	const lead_days = asNumber(params.get("lead_days"), 45);
-	if (lead_days === undefined) return invalidNumber(c, "lead_days");
+	if (lead_days === undefined)
+		return refuse(
+			c,
+			new Refusal(400, "invalid_number", { fields: ["lead_days"] }),
+		);
 	const vendor_days = asNumber(params.get("vendor_days"), 90);
-	if (vendor_days === undefined) return invalidNumber(c, "vendor_days");
+	if (vendor_days === undefined)
+		return refuse(
+			c,
+			new Refusal(400, "invalid_number", { fields: ["vendor_days"] }),
+		);
 	const ownerSlug = params.get("owner_slug");
 	// Its own error code was not public, so the old system answered generically.
 	if (ownerSlug !== null && (!ownerSlug.trim() || ownerSlug.length > 100))
 		return refuse(c, new Refusal(422, "unhandled_verb_failure"));
-	return answer(c, async (db) => {
+	return answer(c, "quiet-follow-ups", async (db) => {
 		const quiet = await readQuietFollowUps(
 			db,
 			{ lead_days, vendor_days },
