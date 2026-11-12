@@ -131,7 +131,7 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" }>): Request {
 			);
 		case "vendor list":
 			return business(`/vendors?${DIRECTORY}`);
-		// Only a vendor's details carry its people.
+		// The app asks for people only on a vendor's details.
 		case "vendor":
 			return business(
 				`/vendors/${encodeURIComponent(ask.vendor)}?contract=vendor-directory.v2`,

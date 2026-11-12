@@ -5,10 +5,10 @@ import { UUID } from "../uuid.ts";
 // ties, so which rows made it, and what `decides` derives from them, may differ.
 type Cap = { size: number; decides: readonly string[] };
 // `key` names the fields that pair rows without an ID; otherwise the whole row does.
-// A `serial` ID is bigint text, which prints as a record ID.
+// An ID matching `printable` prints as a record ID, as a UUID always does.
 type Rows = {
 	id?: string;
-	serial?: true;
+	printable?: RegExp;
 	key?: readonly string[];
 	ref?: string;
 	cap?: Cap;
@@ -33,7 +33,6 @@ type Row = { key: string; step: Step; value: unknown; ties: unknown[] | null };
 
 const REF = /^[A-Z]{1,3}(?:-[A-Z0-9]+)*-[0-9]+$/;
 const FIELD = /^[a-z][a-z0-9_]*$/;
-const SERIAL = /^[0-9]+$/;
 
 function kindOf(value: unknown) {
 	if (value === null) return "null";
@@ -81,7 +80,7 @@ function stepOf(value: unknown, index: number, rows: Rows): Step {
 	const id = fieldOf(value, rows.id);
 	const printed =
 		typeof id === "string"
-			? UUID.test(id) || (rows.serial === true && SERIAL.test(id))
+			? UUID.test(id) || rows.printable?.test(id) === true
 			: Number.isSafeInteger(id);
 	if (printed) return { id: String(id) };
 	const ref = fieldOf(value, rows.ref);

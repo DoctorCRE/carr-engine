@@ -559,7 +559,16 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 		invoices: invoices([{ deal_id: d1, name: m(s), commission_id: m(s) }]),
 		directory: {
 			"client list": directory([{ id: c1, ref: m(s), name: m(s) }]),
-			client: { record: { id: c1, [upper(s)]: m(s), notes: m(s) }, source },
+			client: {
+				record: {
+					id: c1,
+					ref: "C-1",
+					name: m(s),
+					[upper(s)]: m(s),
+					notes: m(s),
+				},
+				source,
+			},
 			"vendor list": directory([{ id: v1, ref: m(s), name: m(s) }]),
 			vendor: {
 				record: {
@@ -570,7 +579,7 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 				source,
 			},
 			"vendor markets": {
-				markets: [{ slug: m(s), boundary: m(s) }],
+				markets: [{ slug: upper(s), boundary: m(s) }],
 				vendors: [{ id: v1, name: m(s) }],
 			},
 			relationships: {
@@ -630,7 +639,7 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 		run.outcomes.some(
 			(o) => o.ask.read === "recent activity" && markers.includes(o.ask.name),
 		),
-		"a name from the old list was asked",
+		"a name from the old record was asked",
 	);
 	assert.ok(run.outcomes.every((o) => o.result === "different"));
 	const text = report("production", run);
@@ -867,7 +876,7 @@ test("invoice entries match when only the read's clock differs, pair a deal's co
 	assert.doesNotMatch(text, /observed_at|99\.00|Latest/);
 });
 
-test("opens every record on the old lists' first page, and asks recent activity for the first five each with a ref and a name of at most 200 characters", async () => {
+test("opens every record on the old lists' first page, and asks recent activity for the first five read with a ref and a name of at most 200 characters", async () => {
 	const row = (n: number, fields: object = {}) => ({
 		id: uuid(n),
 		ref: `C-${n}`,
@@ -879,19 +888,33 @@ test("opens every record on the old lists' first page, and asks recent activity 
 		row(61, { name: "x".repeat(201) }),
 		row(62, { id: "not-a-uuid" }),
 		row(63, { name: "  " }),
-		...[64, 65, 66, 67, 68, 69].map((n) => row(n)),
+		row(64, { ref: "  " }),
+		...[65, 66, 67, 68, 69, 71, 72].map((n) => row(n)),
 	];
-	const list = (ask: Ask) =>
-		ask.read === "client list"
-			? directory(clients)
-			: ask.read === "vendor list"
-				? directory([row(70)])
-				: answer(ask);
+	const records = new Map(
+		[...clients, row(70)].map((record) => [record.id, { record, source }]),
+	);
+	const list = (ask: Ask) => {
+		switch (ask.read) {
+			case "client list":
+				return directory(clients);
+			case "vendor list":
+				return directory([row(70)]);
+			case "client":
+				return ask.client === uuid(66)
+					? { error: "NOT_FOUND" }
+					: records.get(ask.client);
+			case "vendor":
+				return records.get(ask.vendor);
+			default:
+				return answer(ask);
+		}
+	};
 	const { run } = await runWith(list, list);
 	const asked = run.outcomes.map((o) => o.ask);
 	assert.deepEqual(
 		asked.flatMap((ask) => (ask.read === "client" ? [ask.client] : [])),
-		[60, 61, 63, 64, 65, 66, 67, 68, 69].map(uuid),
+		[60, 61, 63, 64, 65, 66, 67, 68, 69, 71, 72].map(uuid),
 	);
 	assert.deepEqual(
 		asked.flatMap((ask) => (ask.read === "vendor" ? [ask.vendor] : [])),
@@ -901,7 +924,7 @@ test("opens every record on the old lists' first page, and asks recent activity 
 		asked.flatMap((ask) =>
 			ask.read === "recent activity" ? [[ask.name, ask.record]] : [],
 		),
-		[64, 65, 66, 67, 68, 70].map((n) => [`Made-up ${n}`, uuid(n)]),
+		[65, 67, 68, 69, 71, 70].map((n) => [`Made-up ${n}`, uuid(n)]),
 	);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 });
@@ -931,7 +954,10 @@ test("directory reads match when only their clocks and correlation ids differ, a
 					source: stamp,
 				};
 			case "client":
-				return { record: { id: ask.client, phone: value }, source: stamp };
+				return {
+					record: { id: ask.client, ref: "C-1", name: "Made-up", phone: value },
+					source: stamp,
+				};
 			case "vendor list":
 				return {
 					rows: [
@@ -950,6 +976,8 @@ test("directory reads match when only their clocks and correlation ids differ, a
 				return {
 					record: {
 						id: v1,
+						ref: "V-1",
+						name: "Made-up",
 						people: [{ contact: { id: contact, email: value } }],
 					},
 					source: stamp,
@@ -958,7 +986,8 @@ test("directory reads match when only their clocks and correlation ids differ, a
 				return {
 					markets: [
 						{
-							slug: "made-up",
+							slug: "north-1",
+							boundary: value,
 							memberships: [{ vendor_id: member, service_coverage: value }],
 						},
 					],
@@ -968,6 +997,11 @@ test("directory reads match when only their clocks and correlation ids differ, a
 					observed_at: at(call),
 					valid_until: at(call),
 					nodes: [{ id: `party:${node}`, record_id: node, name: value }],
+					edges: [{ id: `link:${node}`, summary: value }],
+					referrals: [{ node_id: `party:${node}`, win_rate: value }],
+					suggestions: [
+						{ id: `evidence:${node}:${member}:referred`, reason: value },
+					],
 				};
 			case "recent activity":
 				return {
@@ -1002,10 +1036,10 @@ test("directory reads match when only their clocks and correlation ids differ, a
 			"vendor markets different",
 			"relationships different",
 			`${c1} different`,
-			`activity ${c1} different`,
 			`${c2} different`,
-			`activity ${c2} different`,
 			`${v1} different`,
+			`activity ${c1} different`,
+			`activity ${c2} different`,
 			`activity ${v1} different`,
 		],
 	);
@@ -1017,11 +1051,15 @@ test("directory reads match when only their clocks and correlation ids differ, a
 				"differences: field path, kind, records, first record IDs",
 				`clients\\.rows\\[\\]\\.city  value differs  1  ${c1}`,
 				`vendors\\.rows\\[\\]\\.relationship\\.recent_entries\\[\\]\\.summary  value differs  1  ${entry}`,
+				"markets\\.markets\\[\\]\\.boundary  value differs  1  north-1",
 				`markets\\.markets\\[\\]\\.memberships\\[\\]\\.service_coverage  value differs  1  ${member}`,
 				`network\\.nodes\\[\\]\\.name  value differs  1  ${node}`,
+				`network\\.edges\\[\\]\\.summary  value differs  1  link:${node}`,
+				`network\\.referrals\\[\\]\\.win_rate  value differs  1  party:${node}`,
+				`network\\.suggestions\\[\\]\\.reason  value differs  1  evidence:${node}:${member}:referred`,
 				`client\\.record\\.phone  value differs  2  ${c1}, ${c2}`,
-				`activity\\.catch_up\\.timeline\\[\\]\\.summary  value differs  3  ${c1}, ${c2}, ${v1}`,
 				`vendor\\.record\\.people\\[\\]\\.contact\\.email  value differs  1  ${contact}`,
+				`activity\\.catch_up\\.timeline\\[\\]\\.summary  value differs  3  ${c1}, ${c2}, ${v1}`,
 				"",
 			].join("\n"),
 		),
@@ -1029,20 +1067,29 @@ test("directory reads match when only their clocks and correlation ids differ, a
 	assert.doesNotMatch(text, /zz-|Made-up|2030-/);
 });
 
-test("directory reads that fail are recorded as failed and the run goes on", async () => {
+test("directory reads that fail are recorded as failed, a failed record read asks no recent activity, and the run goes on", async () => {
 	const failing = new Set([
 		"client",
-		"vendor",
 		"vendor markets",
 		"relationships",
 		"recent activity",
 	]);
-	const list = (ask: Ask) =>
-		ask.read === "client list"
-			? directory([{ id: c1, ref: "C-1", name: "Made-up" }])
-			: ask.read === "vendor list"
-				? directory([{ id: v1, ref: "V-1", name: "Made-up" }])
-				: answer(ask);
+	const [client, vendor] = [
+		{ id: c1, ref: "C-1", name: "Made-up" },
+		{ id: v1, ref: "V-1", name: "Made-up" },
+	];
+	const list = (ask: Ask) => {
+		switch (ask.read) {
+			case "client list":
+				return directory([client]);
+			case "vendor list":
+				return directory([vendor]);
+			case "vendor":
+				return { record: vendor, source };
+			default:
+				return answer(ask);
+		}
+	};
 	const records = (ask: Ask) => {
 		if (failing.has(ask.read)) throw new Error("read failed");
 		return list(ask);
@@ -1057,8 +1104,6 @@ test("directory reads that fail are recorded as failed and the run goes on", asy
 				"failed  vendor markets  -",
 				"failed  relationships  -",
 				`failed  client detail  ${c1}`,
-				`failed  recent activity  ${c1}`,
-				`failed  vendor detail  ${v1}`,
 				`failed  recent activity  ${v1}`,
 				"",
 			].join("\\n")}$`,

@@ -48,7 +48,7 @@ export type Ask =
 	| { read: "vendor"; vendor: string }
 	| { read: "vendor markets" }
 	| { read: "relationships" }
-	// `record` is the listed client or vendor whose name is asked.
+	// `record` is the opened client or vendor whose name is asked.
 	| { read: "recent activity"; name: string; record: string };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
@@ -117,19 +117,28 @@ function leadsOn(board: unknown) {
 const FIND_NAMES = 12;
 const PROBES = ["%", "_", " "];
 
-// The app asks recent activity only for a record with a ref and a name of at
-// most 200 characters. Each name runs a search on both systems, so few are asked.
+// The app asks recent activity after a good record read, only for a record
+// with a ref and a name of at most 200 characters, both trimmed. Each name runs
+// a search on both systems, so few are asked.
 const ACTIVITY_NAMES = 5;
 const NAME_MAX = 200;
 
 // A list answers its first page, at most 25 rows, each a record to open.
 function listed(list: unknown) {
 	const rows = isRecord(list) && Array.isArray(list.rows) ? list.rows : [];
-	return rows.filter(isRecord).flatMap(({ id, ref, name }) => {
-		if (typeof id !== "string" || !UUID.test(id)) return [];
-		const query = typeof name === "string" && ref ? name.trim() : "";
-		return [{ id, name: query && query.length <= NAME_MAX ? query : null }];
-	});
+	return rows.flatMap((row) =>
+		isRecord(row) && typeof row.id === "string" && UUID.test(row.id)
+			? [row.id]
+			: [],
+	);
+}
+
+function activityName(answer: unknown) {
+	const record =
+		isRecord(answer) && isRecord(answer.record) ? answer.record : {};
+	const name = typeof record.name === "string" ? record.name.trim() : "";
+	const ref = typeof record.ref === "string" ? record.ref.trim() : "";
+	return name && ref && name.length <= NAME_MAX ? name : null;
 }
 
 const FEED_DAYS = 3;
@@ -177,6 +186,7 @@ export async function compareDeals(
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
+	const asked = { client: 0, vendor: 0 };
 	const enqueue = (ask: Ask) => {
 		const key = JSON.stringify(ask);
 		if (queued.has(key)) return false;
@@ -215,21 +225,19 @@ export async function compareDeals(
 			}
 		if (ask.read === "lead board")
 			for (const lead of leadsOn(old)) enqueue({ read: "lead", lead });
-		if (ask.read === "client list" || ask.read === "vendor list") {
-			let asked = 0;
-			for (const { id, name } of listed(old)) {
-				enqueue(
-					ask.read === "client list"
-						? { read: "client", client: id }
-						: { read: "vendor", vendor: id },
-				);
-				if (
-					name !== null &&
-					asked < ACTIVITY_NAMES &&
-					enqueue({ read: "recent activity", name, record: id })
-				)
-					asked++;
-			}
+		if (ask.read === "client list")
+			for (const client of listed(old)) enqueue({ read: "client", client });
+		if (ask.read === "vendor list")
+			for (const vendor of listed(old)) enqueue({ read: "vendor", vendor });
+		if (ask.read === "client" || ask.read === "vendor") {
+			const name = activityName(old);
+			const record = ask.read === "client" ? ask.client : ask.vendor;
+			if (
+				name !== null &&
+				asked[ask.read] < ACTIVITY_NAMES &&
+				enqueue({ read: "recent activity", name, record })
+			)
+				asked[ask.read]++;
 		}
 		const settled = compareAnswers(first, second, shape);
 		if (settled.differences.length + settled.capAmbiguous.length > 0) {

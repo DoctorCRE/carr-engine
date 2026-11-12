@@ -14,6 +14,16 @@ const trackRecord = (row: string) => ({
 	[`${row}.relationship.introductions[]`]: { id: "id", unordered: true },
 });
 const people = strict("contact.id");
+// A market's ID is its slug; a map ID is a kind and record UUIDs, such as
+// `link:<uuid>` or `evidence:<uuid>:<uuid>:<role>`.
+const bySlug = (id: string) => ({
+	...strict(id),
+	printable: /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+});
+const byMapId = (id: string) => ({
+	...strict(id),
+	printable: /^[a-z-]+:[0-9a-f-]{36}(?::[0-9a-f-]{36}:[a-z_]+)?$/,
+});
 
 export const clientListShape: ReadShape = {
 	rows: { "rows[]": strict("id"), ...slugs("statuses", "types") },
@@ -39,9 +49,9 @@ export const vendorShape: ReadShape = {
 
 export const marketsShape: ReadShape = {
 	rows: {
-		"markets[]": strict("slug"),
+		"markets[]": bySlug("slug"),
 		"markets[].memberships[]": strict("vendor_id"),
-		"markets[].regional_references[]": strict("regional_slug"),
+		"markets[].regional_references[]": bySlug("regional_slug"),
 		"vendors[]": strict("id"),
 		"vendors[].people[]": people,
 	},
@@ -50,9 +60,9 @@ export const marketsShape: ReadShape = {
 export const networkShape: ReadShape = {
 	rows: {
 		"nodes[]": strict("record_id"),
-		"edges[]": strict("id"),
-		"referrals[]": strict("node_id"),
-		"suggestions[]": strict("id"),
+		"edges[]": byMapId("id"),
+		"referrals[]": byMapId("node_id"),
+		"suggestions[]": byMapId("id"),
 	},
 	clocks: ["observed_at", "valid_until"],
 };
