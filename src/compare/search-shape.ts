@@ -23,7 +23,7 @@ export const findShape = {
 			cap: { size: 5, decides: viaLink },
 		},
 		"connections[]": {
-			key: ["from_ref", "to_ref", "kind"],
+			key: ["from_ref", "from_name", "to_ref", "to_name", "kind"],
 			ref: "from_ref",
 			unordered: true,
 			cap: { size: 12, decides: [] },
@@ -32,7 +32,6 @@ export const findShape = {
 			id: "lead_ref",
 			ref: "lead_ref",
 			sortedBy: ["link_basis", "lead_ref"],
-			cap: { size: 20, decides: viaLink },
 		},
 		"deals_via_link[]": {
 			key: ["name", "client_ref"],

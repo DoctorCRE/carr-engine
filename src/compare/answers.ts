@@ -52,38 +52,60 @@ function canonical(value: unknown): string {
 	return `{${keys.map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
 }
 
-function rowsOf(items: unknown[], rows: Rows): Row[] {
+const fieldOf = (value: unknown, name?: string) =>
+	isRecord(value) && name ? value[name] : undefined;
+
+function baseOf(value: unknown, rows: Rows): string {
+	const id = fieldOf(value, rows.id);
+	if (typeof id === "string" || typeof id === "number") return `id:${id}`;
+	const key =
+		rows.key && isRecord(value) ? rows.key.map((k) => value[k]) : value;
+	return `row:${canonical(key)}`;
+}
+
+function stepOf(value: unknown, index: number, rows: Rows): Step {
+	const id = fieldOf(value, rows.id);
+	if ((typeof id === "string" && UUID.test(id)) || Number.isSafeInteger(id))
+		return { id: String(id) };
+	const ref = fieldOf(value, rows.ref);
+	return typeof ref === "string" && REF.test(ref) ? { id: ref } : { index };
+}
+
+function tiesOf(value: unknown, rows: Rows): unknown[] | null {
+	if ("unordered" in rows) return [];
+	const sortable =
+		rows.sortedBy.length > 0 &&
+		isRecord(value) &&
+		rows.sortedBy.every((key) => Object.hasOwn(value, key));
+	return sortable ? rows.sortedBy.map((key) => value[key]) : null;
+}
+
+function repeatedBases(a: unknown[], b: unknown[], rows: Rows) {
+	const repeated = new Set<string>();
+	for (const items of [a, b]) {
+		const seen = new Set<string>();
+		for (const value of items) {
+			const base = baseOf(value, rows);
+			(seen.has(base) ? repeated : seen).add(base);
+		}
+	}
+	return repeated;
+}
+
+// Rows whose key repeats on either side pair by their whole content, since
+// their order between the two answers is arbitrary.
+function rowsOf(items: unknown[], rows: Rows, repeated: Set<string>): Row[] {
 	const seen = new Map<string, number>();
 	return items.map((value, index) => {
-		const id = isRecord(value) && rows.id ? value[rows.id] : undefined;
-		const named = typeof id === "string" || typeof id === "number";
-		const key =
-			rows.key && isRecord(value) ? rows.key.map((k) => value[k]) : value;
-		const base = named ? `id:${id}` : `row:${canonical(key)}`;
-		const count = seen.get(base) ?? 0;
-		seen.set(base, count + 1);
-		const ref = isRecord(value) && rows.ref ? value[rows.ref] : undefined;
-		const printable =
-			(typeof id === "string" && UUID.test(id)) || Number.isSafeInteger(id);
-		const sortedBy = "sortedBy" in rows ? rows.sortedBy : [];
-		const sortable =
-			sortedBy.length > 0 &&
-			isRecord(value) &&
-			sortedBy.every((key) => Object.hasOwn(value, key));
+		const base = baseOf(value, rows);
+		const key = repeated.has(base) ? `${base}#${canonical(value)}` : base;
+		const count = seen.get(key) ?? 0;
+		seen.set(key, count + 1);
 		return {
-			key: `${base}#${count}`,
-			step: printable
-				? { id: String(id) }
-				: typeof ref === "string" && REF.test(ref)
-					? { id: ref }
-					: { index },
+			key: `${key}#${count}`,
+			step: stepOf(value, index, rows),
 			value,
-			ties:
-				"unordered" in rows
-					? []
-					: sortable
-						? sortedBy.map((key) => value[key])
-						: null,
+			ties: tiesOf(value, rows),
 		};
 	});
 }
@@ -159,9 +181,12 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 		records: Step[],
 		rows: Rows,
 	): void {
-		if (rows.cap && a.length >= rows.cap.size) full.push({ ...rows.cap, path });
-		const left = rowsOf(a, rows);
-		const right = rowsOf(b, rows);
+		// Both sides run the same limit, so a full old list needs an equally full new one.
+		if (rows.cap && a.length >= rows.cap.size && b.length === a.length)
+			full.push({ ...rows.cap, path });
+		const repeated = repeatedBases(a, b, rows);
+		const left = rowsOf(a, rows, repeated);
+		const right = rowsOf(b, rows, repeated);
 		const inLeft = new Map(left.map((row) => [row.key, row]));
 		const inRight = new Map(right.map((row) => [row.key, row]));
 		for (const row of left) {
@@ -198,12 +223,14 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	}
 
 	walk(old, next, "", []);
+	// A cap decides which rows lists hold and the note, never a held row's fields.
 	const allowed = (d: Difference) =>
 		full.some(
 			(cap) =>
-				(d.path === cap.path &&
-					(d.kind === "missing in new" || d.kind === "missing in old")) ||
-				cap.decides.some((p) => d.path === p || d.path.startsWith(`${p}.`)),
+				[cap.path, ...cap.decides].includes(d.path) &&
+				(!d.path.endsWith("[]") ||
+					d.kind === "missing in new" ||
+					d.kind === "missing in old"),
 		);
 	return {
 		differences: differences.filter((d) => !allowed(d)),

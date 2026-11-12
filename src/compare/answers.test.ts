@@ -437,3 +437,146 @@ test("a field that differs on a deal in both answers is a difference even when t
 	]);
 	assert.deepEqual(result.capAmbiguous, []);
 });
+
+test("a full old list hides nothing when the engine returns a different number of rows", () => {
+	const ten = Array.from({ length: 10 }, (_, i) => party(`C-${i + 1}`));
+	for (const parties of [ten.slice(0, 3), [...ten, party("C-11")]]) {
+		const result = find(found({ parties: ten }), found({ parties }));
+		assert.ok(result.differences.length > 0, `${parties.length} rows differ`);
+		assert.deepEqual(result.capAmbiguous, []);
+	}
+});
+
+test("a full upstream list leaves only which linked rows appear ambiguous", () => {
+	const ten = Array.from({ length: 10 }, (_, i) => party(`C-${i + 1}`));
+	const link = (lead_ref: string, link_basis: string) => ({
+		lead_ref,
+		client_ref: "C-1",
+		link_basis,
+	});
+	const result = find(
+		found({
+			parties: ten,
+			lead_client_links: [link("L-5", "conversion"), link("L-6", "same_org")],
+			deals_via_link: [named(7)],
+		}),
+		found({
+			parties: ten,
+			lead_client_links: [link("L-5", "same_party")],
+			deals_via_link: [{ ...named(7), phase: "legal" }],
+			note: "Another made-up note.",
+		}),
+	);
+	assert.deepEqual(result.differences, [
+		{
+			path: "lead_client_links[].link_basis",
+			records: [{ id: "L-5" }],
+			kind: "value differs",
+		},
+		{
+			path: "deals_via_link[].phase",
+			records: [{ id: "C-7" }],
+			kind: "value differs",
+		},
+	]);
+	assert.deepEqual(
+		result.capAmbiguous.map((d) => [d.path, d.kind]),
+		[
+			["lead_client_links[]", "missing in new"],
+			["note", "value differs"],
+		],
+	);
+});
+
+test("rows sharing a key pair by their content, not their position", () => {
+	const twin = (phase: string) => ({ ...named(1), phase });
+	const bare = (to_name: string) => ({
+		from_ref: "C-1",
+		from_name: "Made-up Client",
+		kind: "org",
+		to_ref: null,
+		to_name,
+	});
+	const old = found({
+		deals: [twin("research"), twin("legal")],
+		connections: [bare("Made-up Org A"), bare("Made-up Org B")],
+		deals_via_link: [twin("research"), twin("legal")],
+	});
+	const reordered = find(
+		old,
+		found({
+			deals: [twin("legal"), twin("research")],
+			connections: [bare("Made-up Org B"), bare("Made-up Org A")],
+			deals_via_link: [twin("legal"), twin("research")],
+		}),
+	);
+	assert.deepEqual(reordered.differences, []);
+	const changed = find(
+		old,
+		found({
+			deals: [twin("research"), twin("closed")],
+			connections: old.connections,
+			deals_via_link: old.deals_via_link,
+		}),
+	);
+	assert.deepEqual(
+		changed.differences.map((d) => [d.path, d.kind, d.records]),
+		[
+			["deals[]", "missing in new", [{ id: "C-1" }]],
+			["deals[]", "missing in old", [{ id: "C-1" }]],
+		],
+	);
+	assert.ok(!JSON.stringify([reordered, changed]).includes("Made-up"));
+});
+
+test("a changed field on an edge to a party without a ref names that field", () => {
+	const edge = (note: string) => ({
+		from_ref: "C-1",
+		from_name: "Made-up Client",
+		kind: "org",
+		to_ref: null,
+		to_name: "Made-up Org",
+		note,
+	});
+	const result = find(
+		found({
+			connections: [
+				edge("Made-up note."),
+				{ ...edge(""), to_name: "Made-up Org B" },
+			],
+		}),
+		found({
+			connections: [
+				edge("Changed note."),
+				{ ...edge(""), to_name: "Made-up Org B" },
+			],
+		}),
+	);
+	assert.deepEqual(result.differences, [
+		{
+			path: "connections[].note",
+			records: [{ id: "C-1" }],
+			kind: "value differs",
+		},
+	]);
+});
+
+test("twenty lead links are a full answer, so a different twenty is a difference", () => {
+	const links = (from: number) =>
+		Array.from({ length: 20 }, (_, i) => ({
+			lead_ref: `L-${from + i}`,
+			client_ref: "C-1",
+			link_basis: "conversion",
+		}));
+	const result = find(
+		found({ lead_client_links: links(1) }),
+		found({ lead_client_links: links(2) }),
+	);
+	assert.deepEqual(
+		result.differences.map((d) => [d.path, d.kind, d.records]),
+		[
+			["lead_client_links[]", "missing in new", [{ id: "L-1" }]],
+			["lead_client_links[]", "missing in old", [{ id: "L-21" }]],
+		],
+	);
+});
