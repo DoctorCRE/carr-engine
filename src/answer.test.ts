@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
+import { checkFields, hasToolCallMarkup } from "./answer.ts";
 import worker from "./worker.ts";
 
 const signedIn = {
@@ -130,4 +131,39 @@ test("every read refuses tool-call markup and repeated fields as the old gate di
 	} finally {
 		warnings.mock.restore();
 	}
+});
+
+// Expected answers are the old looksLikeToolCallMarkup's on the same input.
+test("a close_ field's own closing tag drops the prefix once, as the old door's did", () => {
+	for (const [field, value, refused] of [
+		["close_outcome", "</outcome>", true],
+		["close_outcome", "done </outcome> next", true],
+		["close_outcome", "</close_outcome>", false],
+		["close_", "</>", true],
+		["close_", "</close_>", false],
+		["close_close_x", "</close_x>", true],
+		["close_close_x", "</x>", false],
+		["close_close_x", "</close_close_x>", false],
+		["CLOSE_outcome", "</outcome>", false],
+		["CLOSE_outcome", "</CLOSE_outcome>", true],
+		["Close_outcome", "</outcome>", false],
+		["note_close_x", "</x>", false],
+		["note_close_x", "</note_close_x>", true],
+		["close_outcome", "", false],
+		["close_outcome", "`<parameter` quoted", false],
+		["close_outcome", "<parameter name", true],
+	] as const)
+		assert.equal(hasToolCallMarkup(field, value), refused, `${field} ${value}`);
+
+	const marked = (params: Record<string, string>, own?: string[]) =>
+		checkFields(new URLSearchParams(params), Object.keys(params), {
+			objects: own && { filter: own },
+		})?.extra.fields;
+	assert.deepEqual(marked({ close_outcome: "</outcome>" }), ["close_outcome"]);
+	assert.deepEqual(
+		marked({ filter: JSON.stringify({ close_outcome: "</outcome>" }) }, [
+			"close_outcome",
+		]),
+		[],
+	);
 });
