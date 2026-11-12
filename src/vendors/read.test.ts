@@ -296,8 +296,8 @@ const PEOPLE = `
 insert into party (id, kind, name, org_id, created_by, updated_by)
 	select n::uuid, kind, name, org::uuid, '${id(901)}', '${id(901)}' from (values
 		('${id(105)}', 'org', 'Example Firm', null),
-		('${id(107)}', 'person', 'Example Zed', '${id(105)}'),
-		('${id(106)}', 'person', 'Example Ann', '${id(105)}'),
+		('${id(107)}', 'person', 'Example Ann', '${id(105)}'),
+		('${id(106)}', 'person', 'Example Zed', '${id(105)}'),
 		('${id(108)}', 'person', '  ', '${id(105)}')) v(n, kind, name, org);
 insert into vendor (id, party_id, category, created_by, updated_by) values
 	('${id(5)}', '${id(105)}', 'lender', '${id(901)}', '${id(901)}');
@@ -412,7 +412,7 @@ test("a vendor's details answer the old JSON, and v2 adds its people in jsonb's 
 
 		const company = { id: id(105), name: "Example Firm" };
 		const people = [
-			person(106, "Example Ann", company, finding("office_verified", 301), {
+			person(106, "Example Zed", company, finding("office_verified", 301), {
 				city: "Springfield",
 				state: "TX",
 				source: "Example source",
@@ -421,7 +421,7 @@ test("a vendor's details answer the old JSON, and v2 adds its people in jsonb's 
 				observed_at: "2026-01-01T00:00:00+00:00",
 				street_address: "1 Example St",
 			}),
-			person(107, "Example Zed", company, finding("needs_review", 303)),
+			person(107, "Example Ann", company, finding("needs_review", 303)),
 		];
 		const firm = await ask(`/${id(5)}?contract=vendor-directory.v2`);
 		assert.equal(JSON.stringify(firm.record.people), JSON.stringify(people));
