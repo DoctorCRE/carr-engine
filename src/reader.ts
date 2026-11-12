@@ -1,4 +1,10 @@
-import { Kysely, PostgresDialect, sql, type Transaction } from "kysely";
+import {
+	type Expression,
+	Kysely,
+	PostgresDialect,
+	sql,
+	type Transaction,
+} from "kysely";
 import pg from "pg";
 import type { DB } from "./database.d.ts";
 import type { SessionEnv } from "./session.ts";
@@ -36,6 +42,11 @@ const types = {
 		textParsers.get(oid) ??
 		pg.types.getTypeParser(oid, format)) as typeof pg.types.getTypeParser,
 };
+
+// The old system's JSON text for dates and timestamps, such as
+// "2026-01-05T00:00:00+00:00", not PostgreSQL's own text form.
+export const asText = (value: Expression<unknown>) =>
+	sql<string | null>`to_jsonb(${value})#>>'{}'`;
 
 export async function readSnapshot<T>(
 	connectionString: string,

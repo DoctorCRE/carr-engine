@@ -1,97 +1,12 @@
-import { type Context, Hono } from "hono";
-import { failureKind, sqlState } from "../failure.ts";
-import {
-	DATABASE_UNAVAILABLE,
-	type DatabaseEnv,
-	type Reader,
-	readSnapshot,
-} from "../reader.ts";
+import { Hono } from "hono";
+import { answer, Refusal, refuse } from "../answer.ts";
+import type { DatabaseEnv } from "../reader.ts";
 import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 
-// The hints are the old system's public ones, so a refusal body is exactly
-// the error payload it returned.
-const HINTS = {
-	unauthenticated: "The authenticated actor could not be resolved.",
-	not_a_deal: "Choose a deal record, not a client or lead.",
-	not_found: "The requested record was not found.",
-	needs_disambiguation:
-		"Choose an exact record reference from the candidates before retrying.",
-	value_not_in_declared_vocabulary:
-		"Use a value from the field's documented vocabulary.",
-	unhandled_verb_failure:
-		"The operation failed. Quote the correlation_id when reporting it.",
-	database_refused_the_statement:
-		"The operation could not be completed. Quote the correlation_id when reporting it.",
-	missing_required:
-		"Supply the named required fields from the tool's documented input.",
-};
-
-class Refusal {
-	readonly status: 400 | 404 | 409 | 422;
-	readonly error: keyof typeof HINTS;
-	readonly extra: Record<string, unknown>;
-	constructor(
-		status: Refusal["status"],
-		error: Refusal["error"],
-		extra: Record<string, unknown> = {},
-	) {
-		this.status = status;
-		this.error = error;
-		this.extra = extra;
-	}
-}
-
 const isWorkspace = (value: string): value is Workspace =>
 	(WORKSPACES as readonly string[]).includes(value);
-
-const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
-	c.json(
-		{
-			error: refusal.error,
-			correlation_id: crypto.randomUUID(),
-			hint: HINTS[refusal.error],
-			...refusal.extra,
-		},
-		refusal.status,
-	);
-
-const isKnownPartner = async (db: Reader, slug: string) =>
-	(await db
-		.selectFrom("actor")
-		.select("id")
-		.where("slug", "=", slug)
-		.executeTakeFirst()) !== undefined;
-
-async function answer(
-	c: Context<DatabaseEnv>,
-	read: (db: Reader) => Promise<unknown>,
-) {
-	const database = c.env.DATABASE;
-	if (!database) return c.json(DATABASE_UNAVAILABLE, 503);
-	const started = performance.now();
-	let result: unknown;
-	try {
-		result = await readSnapshot(database.connectionString, async (db) =>
-			(await isKnownPartner(db, c.get("partner").slug))
-				? read(db)
-				: new Refusal(422, "unauthenticated"),
-		);
-	} catch (error) {
-		// The old system turned PostgreSQL's refusal of a malformed id into this
-		// public error.
-		if (sqlState(error) === "22P02")
-			result = new Refusal(400, "database_refused_the_statement");
-		else {
-			console.warn("deals read failed:", failureKind(error));
-			return c.json({ error: "read_failed" }, 500);
-		}
-	} finally {
-		c.header("Server-Timing", `db;dur=${performance.now() - started}`);
-	}
-	return result instanceof Refusal ? refuse(c, result) : c.json(result);
-}
 
 export const deals = new Hono<DatabaseEnv>();
 
