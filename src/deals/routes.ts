@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { answer, Refusal, refuse } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
+import { readCaptureQueue } from "./capture-queue.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 
@@ -64,3 +65,5 @@ deals.get("/client-fit", (c) =>
 		return "error" in fit ? new Refusal(422, "unhandled_verb_failure") : fit;
 	}),
 );
+
+deals.get("/capture-queue", (c) => answer(c, readCaptureQueue));
