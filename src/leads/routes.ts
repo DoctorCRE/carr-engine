@@ -1,5 +1,11 @@
 import { Hono } from "hono";
-import { answer, Refusal, refuse, unregisteredFields } from "../answer.ts";
+import {
+	answer,
+	asNumber,
+	Refusal,
+	refuse,
+	unregisteredFields,
+} from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard } from "./board.ts";
 import { historyCursors, readLeadDetail } from "./detail.ts";
@@ -17,16 +23,6 @@ const QUIET_FIELDS = ["lead_days", "vendor_days", "owner_slug"];
 const REASON_FIELDS = ["limit", "before_id"];
 const BEFORE_ID = /^[1-9][0-9]{0,18}$/u;
 const TERRITORY_FIELDS = ["vertical", "city", "state"];
-
-// The old system turned a numeric string into a number before the read's own
-// checks. Quiet follow-ups checked neither whole numbers nor their 1 to 365 range.
-function asNumber(given: string | null, fallback: number) {
-	if (given === null) return fallback;
-	const trimmed = given.trim();
-	return trimmed !== "" && Number.isFinite(Number(trimmed))
-		? Number(trimmed)
-		: undefined;
-}
 
 export const leads = new Hono<DatabaseEnv>();
 
@@ -61,6 +57,7 @@ leads.get("/quiet-follow-ups", async (c) => {
 	const params = new URL(c.req.url).searchParams;
 	const unregistered = unregisteredFields(params, QUIET_FIELDS);
 	if (unregistered) return refuse(c, unregistered);
+	// The old read checked neither whole numbers nor their 1 to 365 range.
 	const lead_days = asNumber(params.get("lead_days"), 45);
 	if (lead_days === undefined)
 		return refuse(

@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { type Expression, sql } from "kysely";
 import { failureKind, sqlState } from "./failure.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 
@@ -70,6 +71,20 @@ export function unregisteredFields(
 					.slice(0, 20),
 			});
 }
+
+// The old system turned a numeric string into a number before the read's own
+// checks: absent gives the fallback, blank or non-finite gives undefined.
+export function asNumber(given: string | null, fallback: number) {
+	if (given === null) return fallback;
+	const trimmed = given.trim();
+	return trimmed !== "" && Number.isFinite(Number(trimmed))
+		? Number(trimmed)
+		: undefined;
+}
+
+// The old answer printed these driver Dates with JavaScript's toISOString.
+export const isoMillis = (stamp: Expression<unknown>) =>
+	sql<string>`to_char(${stamp} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 
 const isKnownPartner = async (db: Reader, slug: string) =>
 	(await db

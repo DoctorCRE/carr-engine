@@ -1,5 +1,11 @@
 import { Hono } from "hono";
-import { answer, Refusal, refuse, unregisteredFields } from "../answer.ts";
+import {
+	answer,
+	asNumber,
+	Refusal,
+	refuse,
+	unregisteredFields,
+} from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { hasToolCallMarkup, readRecentActivity } from "./read.ts";
 
@@ -26,10 +32,8 @@ activity.get("/recent-activity", async (c) => {
 				new Refusal(400, "tool_call_markup_in_value", { fields: [field] }),
 			);
 	}
-	const given = params.get("limit")?.trim();
-	const limit =
-		given === undefined ? 20 : given === "" ? Number.NaN : Number(given);
-	if (!Number.isFinite(limit))
+	const limit = asNumber(params.get("limit"), 20);
+	if (limit === undefined)
 		return refuse(c, new Refusal(400, "invalid_number", { fields: ["limit"] }));
 	const query = params.get("query");
 	if (!query)

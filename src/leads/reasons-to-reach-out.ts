@@ -1,4 +1,5 @@
 import { type RawBuilder, sql } from "kysely";
+import { isoMillis } from "../answer.ts";
 import type { Reader } from "../reader.ts";
 import { ORIGINATION_SOURCES } from "./origination-sources.ts";
 
@@ -40,10 +41,6 @@ const WHY: Record<Kind, string> = {
 	pecos_correction: "Public PECOS evidence corrected",
 	pecos_observation: "Public PECOS enrollment observed",
 };
-
-// The old answer printed these driver Dates with JavaScript's toISOString.
-const isoMillis = (stamp: RawBuilder<unknown>) =>
-	sql<string>`to_char(${stamp} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 
 const addressKey = (address: RawBuilder<unknown>) =>
 	sql`practice_address_key(${address})`;

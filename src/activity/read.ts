@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { isoMillis } from "../answer.ts";
 import { resolveSubject } from "../deals/resolve.ts";
 import type { Reader } from "../reader.ts";
 import { readFind } from "../search/find.ts";
@@ -112,10 +113,7 @@ const timeline = (db: Reader, type: string, id: string, limit: number) =>
 		.selectFrom("v_subject_timeline")
 		.select([
 			"entry_kind",
-			// The old answer printed these driver Dates with JavaScript's toISOString.
-			sql<string>`to_char(occurred_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`.as(
-				"occurred_at",
-			),
+			isoMillis(sql.ref("occurred_at")).as("occurred_at"),
 			"actor",
 			"verb",
 			"summary",
