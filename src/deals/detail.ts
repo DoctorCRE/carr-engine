@@ -1,7 +1,7 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
 import { readChecklist } from "./checklist.ts";
-import { resolveSubject } from "./detail/resolve.ts";
+import { resolveSubject } from "./resolve.ts";
 import {
 	asText,
 	clientPortalUrlOf,
@@ -31,11 +31,10 @@ export async function readDealDetail(
 	if (!signedIn) return { error: "unauthenticated" as const };
 	const subject = await resolveSubject(db, deal);
 	if ("error" in subject) return subject;
-	if (subject.type !== "deal")
-		return { error: "not_a_deal" as const, resolved: subject };
+	if (subject.type !== "deal") return { error: "not_a_deal" as const };
 	const id = subject.id;
 	const record = (await liveDeal(db, id)) ?? (await archivedDeal(db, id));
-	if (!record) return { error: "not_found" as const, table: "deal", id };
+	if (!record) return { error: "not_found" as const };
 
 	const vendors = await vendorsOf(db, id).execute();
 	const phaseChange = await phaseChangeOf(db, id).executeTakeFirst();

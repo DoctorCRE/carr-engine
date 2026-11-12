@@ -11,6 +11,7 @@ const db = new Kysely<DB>({
 	dialect: new PostgresDialect({
 		pool: new pg.Pool({
 			connectionString: url,
+			// A non-UTC default makes a missing `set local time zone 'UTC'` fail tests.
 			options: "-c TimeZone=America/Chicago",
 		}),
 	}),
