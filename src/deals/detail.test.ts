@@ -59,12 +59,25 @@ async function seed(tx: Transaction<DB>, deal: { invoiced_on?: string } = {}) {
 		})
 		.returning("id")
 		.executeTakeFirstOrThrow();
-	return { actor: actor.id, audit, party, client: client.id, deal: row.id };
+	const portal = (slug: string, disabledAt: string | null = null) =>
+		sql`insert into ops.client_portal (slug, client_id, deal_id, password_hash, disabled_at)
+			values (${slug}, ${client.id}, ${row.id}, ${`$2b$12$${"a".repeat(53)}`}, ${disabledAt})`.execute(
+			tx,
+		);
+	return {
+		actor: actor.id,
+		audit,
+		party,
+		portal,
+		client: client.id,
+		deal: row.id,
+	};
 }
 
 test("an open deal reads with text dates, decimal strings and capped history", async () => {
 	await withRollback(async (tx) => {
-		const { actor, audit, party, deal } = await seed(tx);
+		const { actor, audit, party, portal, deal } = await seed(tx);
+		await portal("example-detail");
 		await tx
 			.insertInto("deal_note")
 			.values(
@@ -197,6 +210,10 @@ test("an open deal reads with text dates, decimal strings and capped history", a
 		assert.equal(detail.next_step_required, false);
 		assert.equal(detail.workspace_kind, "team");
 		assert.equal(detail.short_name, "Dr. Example's Exampleton Deal");
+		assert.equal(
+			detail.client_portal_url,
+			"https://share.example.com/example-detail",
+		);
 		assert.equal(detail.base_version, 1);
 		assert.equal(detail.thread.length, 500);
 		assert.equal(detail.thread_truncated, true);
@@ -621,13 +638,17 @@ test("activities and documents sort by time across a clock change", async () => 
 
 test("an invoiced deal reads through the archived shape", async () => {
 	await withRollback(async (tx) => {
-		const { deal, client } = await seed(tx, { invoiced_on: "2030-04-30" });
+		const { deal, client, portal } = await seed(tx, {
+			invoiced_on: "2030-04-30",
+		});
+		await portal("example-disabled", "2030-05-01T00:00:00Z");
 		const detail = await readDealDetail(tx, deal, "detail-agent");
 		assert.ok(!("error" in detail));
 		assert.equal(detail.invoiced_on, "2030-04-30");
 		assert.equal(detail.client_id, client);
 		assert.equal(detail.workspace_kind, "team");
 		assert.equal(detail.short_name, "Example Detail Deal");
+		assert.equal(detail.client_portal_url, null);
 		assert.equal("next_step" in detail, false);
 		assert.equal("phase_change" in detail, false);
 		assert.deepEqual(detail.vendors, []);

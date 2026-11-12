@@ -3,6 +3,7 @@ import type { DB } from "../database.d.ts";
 import { resolveSubject } from "./detail/resolve.ts";
 import {
 	asText,
+	clientPortalUrlOf,
 	phaseChangeOf,
 	phaseStartedOn,
 	phaseStartsOf,
@@ -302,6 +303,7 @@ function liveDeal(db: Kysely<DB>, id: string) {
 			asText(eb.ref("b.closed_on")).as("closed_on"),
 			"b.lane",
 			"b.outcome",
+			clientPortalUrlOf(db, eb.ref("b.id")).as("client_portal_url"),
 			asText(eb.ref("b.parked_at")).as("parked_at"),
 			"b.parked_by",
 			"r.salesforce_id",
@@ -345,6 +347,7 @@ function archivedDeal(db: Kysely<DB>, id: string) {
 			asText(eb.ref("b.invoiced_on")).as("invoiced_on"),
 			"b.outcome",
 			"b.lane",
+			clientPortalUrlOf(db, eb.ref("b.id")).as("client_portal_url"),
 			"r.salesforce_id",
 			"r.base_version",
 			"ce.client_status",
