@@ -43,6 +43,14 @@ function readOf(ask: Ask) {
 			return "client list";
 		case "client":
 			return "client detail";
+		case "vendor list":
+			return "vendor list";
+		case "vendor":
+			return "vendor detail";
+		case "vendor markets":
+			return "vendor markets";
+		case "relationships":
+			return "relationships";
 		case "recent activity":
 			return "recent activity";
 	}
@@ -55,6 +63,8 @@ function recordOf(ask: Ask) {
 			return ask.lead;
 		case "client":
 			return ask.client;
+		case "vendor":
+			return ask.vendor;
 		case "recent activity":
 			return ask.record;
 		default:
@@ -76,6 +86,10 @@ const PREFIXES = {
 	invoices: "invoices",
 	"client list": "clients",
 	client: "client",
+	"vendor list": "vendors",
+	vendor: "vendor",
+	"vendor markets": "markets",
+	relationships: "network",
 	"recent activity": "activity",
 };
 const table = (rows: (string | number)[][]) =>

@@ -13,6 +13,8 @@ const queue: Ask = { read: "capture queue" };
 const find: Ask = { read: "find", query: "Made-up & 50%" };
 const invoices: Ask = { read: "invoices" };
 const client = "00000000-0000-4000-8000-000000000051";
+const vendor = "00000000-0000-4000-8000-000000000052";
+const markets: Ask = { read: "vendor markets" };
 const activity: Ask = {
 	read: "recent activity",
 	name: "Made-up & Co",
@@ -59,7 +61,7 @@ const failedRead = (verb: string) => ({
 const header = (sent: Sent, name: string) =>
 	new Headers(sent.init.headers).get(name);
 
-test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue, a find, the invoices and recent activity, on the app's host with the session", async () => {
+test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue, a find, the invoices, vendor markets and recent activity, on the app's host with the session", async () => {
 	const { askEngine, sent } = fake(() => json({ made_up: true }));
 	assert.deepEqual(await askEngine(board), { made_up: true });
 	await askEngine(detail);
@@ -67,6 +69,7 @@ test("asks the engine's board by workspace, a deal by its reference, the client 
 	await askEngine(queue);
 	await askEngine(find);
 	await askEngine(invoices);
+	await askEngine(markets);
 	await askEngine(activity);
 	assert.deepEqual(
 		sent.map((s) => s.url.href),
@@ -77,6 +80,7 @@ test("asks the engine's board by workspace, a deal by its reference, the client 
 			"https://app.example.test/api/engine/capture-queue",
 			"https://app.example.test/api/engine/find?query=Made-up+%26+50%25",
 			"https://app.example.test/api/engine/invoices",
+			"https://app.example.test/api/engine/vendor-markets",
 			"https://app.example.test/api/engine/recent-activity?query=Made-up+%26+Co&limit=10",
 		],
 	);
@@ -95,10 +99,11 @@ test("asks the old system through the same host with the session and the app's o
 	await askOld(queue);
 	await askOld(find);
 	await askOld(invoices);
+	await askOld(markets);
 	await askOld(activity);
 	assert.deepEqual(
 		sent.map((s) => [s.url.href, s.init.method]),
-		Array(7).fill(["https://app.example.test/mcp", "POST"]),
+		Array(8).fill(["https://app.example.test/mcp", "POST"]),
 	);
 	assert.deepEqual(
 		sent.map((s) => JSON.parse(String(s.init.body)).params),
@@ -109,6 +114,7 @@ test("asks the old system through the same host with the session and the app's o
 			{ name: "capture-queue", arguments: {} },
 			{ name: "find", arguments: { query: "Made-up & 50%" } },
 			{ name: "read-invoice-tracker", arguments: {} },
+			{ name: "read-vendor-markets-v1", arguments: {} },
 			{
 				name: "find-and-catch-up",
 				arguments: { query: "Made-up & Co", limit: 10 },
@@ -178,8 +184,8 @@ test("a refused board or invoices read fails instead of comparing as an empty an
 			);
 });
 
-test("an engine find, Leads or recent activity read that fails with a server error fails that read without stopping the run", async () => {
-	for (const ask of [find, ...leadReads, opened, reasons, activity])
+test("an engine find, Leads, vendor markets or recent activity read that fails with a server error fails that read without stopping the run", async () => {
+	for (const ask of [find, ...leadReads, opened, reasons, markets, activity])
 		await assert.rejects(
 			fake(() => json(failedRead("made-up"), 500)).askEngine(ask),
 			(error: Error) => !(error instanceof StopRun),
@@ -475,12 +481,20 @@ test("pages that never end fail their read without stopping the run", async () =
 	assert.equal(stuck.sent.length, 26);
 });
 
-const directory: Ask[] = [{ read: "client list" }, { read: "client", client }];
+const lists: Ask[] = [{ read: "client list" }, { read: "vendor list" }];
+const records: Ask[] = [
+	{ read: "client", client },
+	{ read: "vendor", vendor },
+];
+const directory = [...lists, ...records, { read: "relationships" } as const];
 
-test("asks the client list and a client as the app does, the old ones over HTTP at the old door's paths", async () => {
+test("asks the directory and the Relationships map as the app does, the old ones over HTTP at the old door's paths", async () => {
 	const paths = [
 		"/clients?contract=vendor-directory.v1",
+		"/vendors?contract=vendor-directory.v1",
 		`/clients/${client}?contract=vendor-directory.v1`,
+		`/vendors/${vendor}?contract=vendor-directory.v2`,
+		"/relationships?contract=relationship-network.v1",
 	];
 	for (const [ask, prefix] of [
 		["askEngine", "/api/engine"],
@@ -498,20 +512,21 @@ test("asks the client list and a client as the app does, the old ones over HTTP 
 	}
 });
 
-test("a refused client compares as its refusal without the correlation ID, a refused list fails, and an unavailable read fails, on either side", async () => {
+test("a refused client or vendor compares as its refusal without the correlation ID, a refused list fails, and an unavailable read fails, on either side", async () => {
 	const refused = {
 		error: "RECORD_NOT_FOUND",
 		correlation_id: "00000000-0000-4000-8000-000000000900",
 	};
 	for (const ask of ["askEngine", "askOld"] as const) {
-		assert.deepEqual(
-			await fake(() => json(refused, 404))[ask]({ read: "client", client }),
-			{ error: "RECORD_NOT_FOUND" },
-		);
-		await assert.rejects(
-			fake(() => json(refused, 404))[ask]({ read: "client list" }),
-			(error: Error) => !(error instanceof StopRun),
-		);
+		for (const read of records)
+			assert.deepEqual(await fake(() => json(refused, 404))[ask](read), {
+				error: "RECORD_NOT_FOUND",
+			});
+		for (const read of lists)
+			await assert.rejects(
+				fake(() => json(refused, 404))[ask](read),
+				(error: Error) => !(error instanceof StopRun),
+			);
 		const unprovisioned = {
 			error: "DEPENDENCY_NOT_PROVISIONED",
 			dependency: "read_access",

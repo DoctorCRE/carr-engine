@@ -53,7 +53,8 @@ export const territoryShape = {
 	},
 };
 
+// A card's ID is bigint text.
 export const reasonsShape: ReadShape = {
-	rows: { "pages[].cards[]": { ...strict("id"), serial: true } },
+	rows: { "pages[].cards[]": { ...strict("id"), printable: /^[0-9]+$/ } },
 	opaque: ["pages[].cards[].facts"],
 };
