@@ -100,6 +100,25 @@ const RESERVED_FIELDS = new Set([
 	"call_models",
 ]);
 
+export function reservedFields(names: readonly string[]) {
+	const reserved = names.filter((name) => RESERVED_FIELDS.has(name)).sort();
+	if (reserved.length > 0)
+		return new Refusal(403, "caller_authority_field_forbidden", {
+			fields: reserved.slice(0, 20),
+		});
+}
+
+export function unregisteredFields(
+	names: readonly string[],
+	fields: readonly string[],
+) {
+	const extra = names.filter((name) => !fields.includes(name)).sort();
+	if (extra.length > 0)
+		return new Refusal(400, "unregistered_operation_fields", {
+			fields: extra.filter((name) => ECHOED_FIELD.test(name)).slice(0, 20),
+		});
+}
+
 const TOOL_CALL_MARKERS = ["<parameter", "</parameter", "<invoke", "</invoke"];
 
 // The old door refused a value carrying its own closing tag, or a marker
@@ -167,12 +186,9 @@ export function checkFields(
 	fields: readonly string[],
 	{ vocabularies = {}, numbers = [], objects = {} }: Declared = {},
 ) {
-	const names = [...new Set(params.keys())].sort();
-	const reserved = names.filter((name) => RESERVED_FIELDS.has(name));
-	if (reserved.length > 0)
-		return new Refusal(403, "caller_authority_field_forbidden", {
-			fields: reserved.slice(0, 20),
-		});
+	const names = [...new Set(params.keys())];
+	const reserved = reservedFields(names);
+	if (reserved) return reserved;
 	for (const [field, allowed] of Object.entries(vocabularies)) {
 		const [value, ...more] = params.getAll(field);
 		if (value !== undefined && (more.length > 0 || !allowed.includes(value)))
@@ -181,11 +197,8 @@ export function checkFields(
 				fields: [field],
 			});
 	}
-	const extra = names.filter((name) => !fields.includes(name));
-	if (extra.length > 0)
-		return new Refusal(400, "unregistered_operation_fields", {
-			fields: extra.filter((name) => ECHOED_FIELD.test(name)).slice(0, 20),
-		});
+	const extra = unregisteredFields(names, fields);
+	if (extra) return extra;
 	for (const field of fields) {
 		const [value, ...more] = params.getAll(field);
 		if (value === undefined) continue;

@@ -1,28 +1,43 @@
-import { checkFields, hasToolCallMarkup, Refusal } from "./answer.ts";
+import {
+	hasToolCallMarkup,
+	Refusal,
+	reservedFields,
+	unregisteredFields,
+} from "./answer.ts";
 import type { JsonObject, JsonValue } from "./database.d.ts";
 
 // A field as the old schema declared it. The old door converted only a plain
-// boolean, number or object, so a string, an untyped field and a union, the
-// nullable ones included, are all declared as `{}`.
+// boolean, number or object, so a string, an untyped field and a union are
+// all declared as `{}`, or `{ nullable: true }` when null counts as given. An
+// array field has no declaration yet: the first save with one ports the old
+// array rules first (decision 18).
 type Field =
 	| { type?: never; allowed?: readonly string[]; nullable?: true }
+	| Typed;
+
+// The old door checked allowed values and null only at the top level.
+type Nested = { type?: never } | Typed;
+
+type Typed =
 	| { type: "boolean" | "number" }
-	| { type: "object"; fields: Fields };
+	| { type: "object"; fields: Readonly<Record<string, Nested>> };
 
 // The old schema's order picks the refusal, so never sort these.
-type Fields = Readonly<Record<string, Field>>;
+export type Fields = Readonly<Record<string, Field>>;
 
-export type Door = {
+export type Door<F extends Fields> = {
 	verb: string;
-	fields: Fields;
-	required: readonly string[];
+	fields: F;
+	required: readonly (keyof F & string)[];
 };
 
 export const isArguments = (value: unknown): value is JsonObject =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 // Every declared name, nested ones included, as the old refusals named them.
-export const declaredNames = (fields: Fields): string[] =>
+export const declaredNames = (
+	fields: Readonly<Record<string, Nested>>,
+): string[] =>
 	Object.entries(fields).flatMap(([name, field]) => [
 		name,
 		...(field.type === "object" ? declaredNames(field.fields) : []),
@@ -31,17 +46,15 @@ export const declaredNames = (fields: Fields): string[] =>
 // The old door's checks in its order: reserved names, allowed values, unknown
 // names, each field's markup and type, then the required fields. It answers
 // the arguments as the change and the request hash see them.
-export function checkDoor(
+export function checkDoor<F extends Fields>(
 	given: JsonObject,
-	{ fields, required }: Door,
+	{ fields, required }: Door<F>,
 ): Refusal | JsonObject {
-	// The read gate holds the reserved names and reads only names here.
-	const named = checkFields(
-		new URLSearchParams(Object.keys(given).map((name) => [name, ""])),
-		Object.keys(fields),
-	);
-	if (named?.error === "caller_authority_field_forbidden") return named;
-	const refused = strayValue(given, fields) ?? named;
+	const names = Object.keys(given);
+	const refused =
+		reservedFields(names) ??
+		strayValue(given, fields) ??
+		unregisteredFields(names, Object.keys(fields));
 	if (refused) return refused;
 	const args = converted(fields, given, true);
 	if (args instanceof Refusal) return args;
@@ -72,7 +85,7 @@ function strayValue(given: JsonObject, fields: Fields) {
 // A nested field is never named, because the old refusal named only
 // documented names and printed a nested one as its path.
 function converted(
-	fields: Fields,
+	fields: Readonly<Record<string, Nested>>,
 	given: JsonObject,
 	top: boolean,
 ): Refusal | JsonObject {
@@ -91,7 +104,7 @@ function converted(
 }
 
 function typedValue(
-	field: Field,
+	field: Nested,
 	value: JsonValue,
 	named: string[],
 ): Refusal | JsonValue {

@@ -10,6 +10,7 @@ import {
 	checkDoor,
 	type Door,
 	declaredNames,
+	type Fields,
 	isArguments,
 } from "./save-door.ts";
 import { UUID } from "./uuid.ts";
@@ -142,9 +143,9 @@ export async function runSave(
 // A save's answer to the signed-in partner: its JSON answer, or the old
 // system's public refusal body. The answer, its receipt and the failure log
 // share one correlation id, as the old Worker's did.
-export async function answerSave(
+export async function answerSave<F extends Fields>(
 	c: Context<WriterEnv>,
-	door: Door,
+	door: Door<F>,
 	change: Change,
 ): Promise<Response> {
 	const given = c.req.header("x-correlation-id");

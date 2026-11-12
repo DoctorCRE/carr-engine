@@ -16,7 +16,6 @@ import {
 	type Saving,
 	type WriterEnv,
 } from "./save.ts";
-import type { Door } from "./save-door.ts";
 import { UUID } from "./uuid.ts";
 
 const save = (args: JsonObject, partner = "partner_one"): Save => ({
@@ -305,7 +304,7 @@ test("saves", (t) =>
 		});
 	}));
 
-const DOOR: Door = {
+const DOOR = {
 	verb: "example-save",
 	fields: {
 		idempotency_key: {},
@@ -317,7 +316,7 @@ const DOOR: Door = {
 		detail: { type: "object", fields: { label: {}, size: { type: "number" } } },
 	},
 	required: ["idempotency_key", "slug"],
-};
+} as const;
 
 test("a save checks its door and keeps one correlation id", (t) =>
 	withSnapshot(async (database) => {
@@ -379,6 +378,11 @@ test("a save checks its door and keeps one correlation id", (t) =>
 				[{ detail: { label: "</label>" } }, "tool_call_markup_in_value", []],
 				[{ detail: { size: "x" } }, "invalid_number", []],
 				[{ note: "x" }, "missing_required", ["idempotency_key", "slug"]],
+				[
+					{ idempotency_key: null, slug: "x" },
+					"missing_required",
+					["idempotency_key"],
+				],
 				[
 					{ idempotency_key: randomUUID(), slug: "" },
 					"missing_required",
