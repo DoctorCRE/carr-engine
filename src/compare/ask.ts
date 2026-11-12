@@ -1,6 +1,12 @@
 import { type Ask, StopRun } from "./run.ts";
 
 type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
+type ToolAsk = Exclude<Ask, { read: "feed" }>;
+type FeedPage = { events: unknown[]; cursor: string };
+
+const FEED_PAGE = 200;
+// A cursor that never advances would otherwise page forever.
+const FEED_PAGES = 25;
 
 const REFUSALS = new Set([400, 404, 409, 422]);
 
@@ -8,7 +14,7 @@ const REFUSALS = new Set([400, 404, 409, 422]);
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
-function refusal(ask: Ask, body: unknown) {
+function refusal(ask: ToolAsk, body: unknown) {
 	// A board for a listed workspace has no refusal to compare. Comparing one
 	// would match two empty boards and ask no deals.
 	if (ask.read === "board") throw new Error("board refused");
@@ -24,7 +30,15 @@ function lastData(stream: string) {
 	return line.slice(5);
 }
 
-function enginePath(ask: Ask) {
+const isFeedPage = (body: unknown): body is FeedPage =>
+	typeof body === "object" &&
+	body !== null &&
+	"events" in body &&
+	Array.isArray(body.events) &&
+	"cursor" in body &&
+	typeof body.cursor === "string";
+
+function enginePath(ask: ToolAsk) {
 	switch (ask.read) {
 		case "board":
 			return `/api/engine/deals?${new URLSearchParams({ workspace: ask.workspace })}`;
@@ -35,7 +49,7 @@ function enginePath(ask: Ask) {
 	}
 }
 
-function oldCall(ask: Ask) {
+function oldCall(ask: ToolAsk) {
 	switch (ask.read) {
 		case "board":
 			return {
@@ -71,7 +85,32 @@ export function askers(app: URL, session: string, fetch: Fetch) {
 		return response;
 	}
 
+	// Presence and capture sessions change between any two requests, so only events and cursors are kept.
+	async function readFeed(path: string, start: string) {
+		const events: unknown[] = [];
+		const cursors: string[] = [];
+		let cursor = start;
+		for (let page = 0; page < FEED_PAGES; page++) {
+			const response = await send(
+				`${path}?${new URLSearchParams({ cursor })}`,
+				{
+					headers: { accept: "application/json" },
+				},
+			);
+			if (response.status !== 200) throw new Error("feed read failed");
+			const body: unknown = await response.json();
+			if (!isFeedPage(body)) throw new Error("feed page without events");
+			events.push(...body.events);
+			cursors.push(body.cursor);
+			if (body.events.length < FEED_PAGE) return { events, cursors };
+			cursor = body.cursor;
+		}
+		throw new Error("feed did not end");
+	}
+
 	async function askEngine(ask: Ask): Promise<unknown> {
+		if (ask.read === "feed")
+			return readFeed("/api/engine/pipeline/changes", ask.start);
 		const response = await send(enginePath(ask), {
 			headers: { accept: "application/json" },
 		});
@@ -83,6 +122,7 @@ export function askers(app: URL, session: string, fetch: Fetch) {
 
 	let rpcId = 0;
 	async function askOld(ask: Ask): Promise<unknown> {
+		if (ask.read === "feed") return readFeed("/pipeline/changes", ask.start);
 		const response = await send("/mcp", {
 			method: "POST",
 			headers: {

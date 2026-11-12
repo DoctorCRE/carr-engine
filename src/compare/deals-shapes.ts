@@ -60,3 +60,8 @@ export const clientFitShape = {
 	rows: { "profiles[].evidence[]": strict("deal_id") },
 	ignore,
 };
+
+export const feedShape = {
+	rows: { "events[]": strict("id") },
+	opaque: ["events[].old_value", "events[].new_value"],
+};
