@@ -19,6 +19,7 @@ const request = (path: string) => (search: string, connectionString: string) =>
 	);
 const board = request("leads");
 const quiet = request("quiet-follow-ups");
+const territory = request("territory-state-board");
 
 async function refusal(response: Response) {
 	const { correlation_id, ...body } = (await response.json()) as {
@@ -195,6 +196,65 @@ test("the board answers, and refuses whole on bad timing or past the finding lim
 			await db.query("delete from practice_origination_event");
 			await db.query(flood);
 			assert.deepEqual(await refusal(await board("", url)), [422, generic]);
+		} finally {
+			await db.end();
+		}
+	}));
+
+test("territory refuses unknown fields before any read", async () => {
+	const unread = "postgres://made-up@127.0.0.1:1/none";
+	const unknown = {
+		error: "unregistered_operation_fields",
+		hint: "Remove fields outside the documented input.",
+	};
+	assert.deepEqual(
+		await refusal(await territory("?city=A&b=1&a=2&a=3&%24bad=4", unread)),
+		[400, { ...unknown, fields: ["a", "b"] }],
+	);
+	assert.deepEqual(await refusal(await territory("?%24bad=1", unread)), [
+		400,
+		{ ...unknown, fields: [] },
+	]);
+});
+
+test("territory filters as the old system did and refuses past 1000 markets", () =>
+	withSnapshot(async (url) => {
+		const db = new pg.Client({ connectionString: url });
+		await db.connect();
+		const places = (count: number) =>
+			db.query(
+				`insert into party (kind, name, city, state, specialty, created_by, updated_by)
+				select 'person', 'Example Person', 'City ' || i, 'ZZ', 'Dental', id, id
+				from actor, generate_series(1, $1::int) i`,
+				[count],
+			);
+		const markets = async (search: string) => {
+			const response = await territory(search, url);
+			assert.equal(response.status, 200);
+			const answered = (await response.json()) as {
+				submarkets: { city: string }[];
+			};
+			return answered.submarkets.map((m) => m.city);
+		};
+		try {
+			await db.query(`insert into actor (slug, kind, display_name)
+				values ('leads-route-partner', 'human', 'Example');
+				insert into contact_state (slug, label, contactable, sort)
+				values ('active', 'Example', true, 1)`);
+			await places(2);
+			assert.deepEqual(await markets(""), ["City 1", "City 2"]);
+			assert.deepEqual(await markets("?city=&state=&vertical="), [
+				"City 1",
+				"City 2",
+			]);
+			assert.deepEqual(await markets("?city=City%202&state=ZZ"), ["City 2"]);
+			assert.deepEqual(await markets("?vertical=Dental"), ["City 1", "City 2"]);
+			// The declared state pattern and lengths were never checked.
+			assert.deepEqual(await markets("?state=zz"), []);
+			assert.deepEqual(await markets(`?city=${"x".repeat(201)}`), []);
+			await db.query("delete from party");
+			await places(1001);
+			assert.deepEqual(await refusal(await territory("", url)), [422, generic]);
 		} finally {
 			await db.end();
 		}
