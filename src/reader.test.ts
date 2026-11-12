@@ -12,6 +12,7 @@ import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { readLeadBoard } from "./leads/board.ts";
+import { readQuietFollowUps } from "./leads/quiet-follow-ups.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
@@ -24,6 +25,8 @@ const readable = [
 	"commission",
 	"deal",
 	"doctrine_section",
+	"lead",
+	"next_action",
 	"party",
 	"v_capture_candidate_queue",
 	"v_capture_session_status",
@@ -49,6 +52,7 @@ const readable = [
 	"v_deal_room_presence",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
+	"v_last_touch",
 	"v_lead_client_best",
 	"v_lead_prospect_engagement",
 	"v_lead_workspace",
@@ -58,6 +62,7 @@ const readable = [
 	"v_record_flag_subject",
 	"v_ref_index",
 	"v_requirement_request",
+	"vendor",
 ];
 
 async function withAdmin<T>(
@@ -179,7 +184,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search and the lead board and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board and quiet follow-ups and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -234,6 +239,10 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			);
 			const leads = await readSnapshot(login, readLeadBoard);
 			assert.deepEqual(leads.leads, []);
+			const quiet = await readSnapshot(login, (db) =>
+				readQuietFollowUps(db, { lead_days: 45, vendor_days: 90 }, null),
+			);
+			assert.deepEqual("proposals" in quiet && quiet.proposals, []);
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(

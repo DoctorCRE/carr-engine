@@ -190,8 +190,14 @@ test("the change feed refuses like the old system", async () => {
 			400,
 			"invalid_cursor",
 		);
-	await refused(await feed("", env, {}), 401, "unauthorized");
-	await refused(await feed("", env, { method: "POST" }), 401, "unauthorized");
+	for (const init of [{}, { method: "POST" }]) {
+		const response = await feed("", env, init);
+		assert.equal(response.status, 401);
+		assert.equal(
+			await response.text(),
+			'{"error":"unauthorized","state":"sign_in_required"}',
+		);
+	}
 	const write = {
 		Cookie: cookie,
 		Origin: "https://app.example.test",
