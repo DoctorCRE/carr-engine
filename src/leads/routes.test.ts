@@ -7,16 +7,19 @@ import worker from "../worker.ts";
 const signedIn = {
 	fetch: async () =>
 		Response.json({
-			actor: { slug: "territory-route-partner", display: "Example Partner" },
+			actor: { slug: "leads-route-partner", display: "Example Partner" },
 			csrf_token: "made-up-csrf",
 		}),
 };
-const territory = (search: string, connectionString: string) =>
+const request = (path: string) => (search: string, connectionString: string) =>
 	worker.request(
-		`https://app.example.test/api/engine/territory-state-board${search}`,
+		`https://app.example.test/api/engine/${path}${search}`,
 		{ headers: { Cookie: "__Host-dealroom_session=made-up-session" } },
 		{ CARR: signedIn, DATABASE: { connectionString } },
 	);
+const board = request("leads");
+const quiet = request("quiet-follow-ups");
+const territory = request("territory-state-board");
 
 async function refusal(response: Response) {
 	const { correlation_id, ...body } = (await response.json()) as {
@@ -25,6 +28,166 @@ async function refusal(response: Response) {
 	assert.match(correlation_id, /^[0-9a-f-]{36}$/);
 	return [response.status, body];
 }
+
+const generic = {
+	error: "unhandled_verb_failure",
+	hint: "The operation failed. Quote the correlation_id when reporting it.",
+};
+
+test("quiet follow-ups refuse unknown fields, then bad numbers, then a bad owner, before any read", async () => {
+	const unread = "postgres://made-up@127.0.0.1:1/none";
+	const refused = async (search: string) =>
+		refusal(await quiet(search, unread));
+	const unknown = {
+		error: "unregistered_operation_fields",
+		hint: "Remove fields outside the documented input.",
+	};
+	assert.deepEqual(await refused("?lead_days=x&b=1&a=2&a=3&%24bad=4"), [
+		400,
+		{ ...unknown, fields: ["a", "b"] },
+	]);
+	const number = (field: string) => [
+		400,
+		{
+			error: "invalid_number",
+			hint: "Supply a numeric value for the named fields.",
+			fields: [field],
+		},
+	];
+	assert.deepEqual(
+		await refused("?vendor_days=x&lead_days=x"),
+		number("lead_days"),
+	);
+	assert.deepEqual(await refused("?lead_days="), number("lead_days"));
+	assert.deepEqual(await refused("?lead_days=Infinity"), number("lead_days"));
+	assert.deepEqual(await refused("?vendor_days=%20"), number("vendor_days"));
+	assert.deepEqual(await refused("?vendor_days=1&owner_slug=%20"), [
+		422,
+		generic,
+	]);
+	assert.deepEqual(await refused(`?owner_slug=${"a".repeat(101)}`), [
+		422,
+		generic,
+	]);
+});
+
+test("quiet follow-ups answer with the old cadence, date text and refusals", () =>
+	withSnapshot(async (url) => {
+		const db = new pg.Client({ connectionString: url });
+		await db.connect();
+		const leads = (from: number, to: number) =>
+			db.query(
+				`with g as (select ('00000000-0000-4000-9000-' || lpad(n::text, 12, '0'))::uuid as id
+					from generate_series($1::int, $2::int) n),
+				p as (insert into party (id, kind, name, created_by, updated_by)
+					select g.id, 'person', 'Example', a.id, a.id from g, actor a)
+				insert into lead (party_id, stage, next_action_date, created_by, updated_by)
+				select g.id, 'new', '2026-01-05', a.id, a.id from g, actor a`,
+				[from, to],
+			);
+		try {
+			await db.query(`insert into actor (slug, kind, display_name)
+				values ('leads-route-partner', 'human', 'Example');
+				insert into contact_state (slug, label, contactable, sort)
+				values ('active', 'Example', true, 1);
+				insert into lead_stage (slug, label) values ('new', 'Example')`);
+			await leads(1, 1);
+			const answered = async (search: string) => {
+				const response = await quiet(search, url);
+				assert.equal(response.status, 200);
+				return (await response.json()) as {
+					cadence: unknown;
+					proposals: { next_action_date: string; due_on: string }[];
+				};
+			};
+			const plain = await answered("");
+			assert.deepEqual(plain.cadence, { lead_days: 45, vendor_days: 90 });
+			assert.deepEqual(
+				plain.proposals.map((p) => [p.next_action_date, p.due_on]),
+				[["2026-01-05", "2026-01-05"]],
+			);
+			// The old system checked neither whole numbers nor the 1 to 365 range.
+			assert.deepEqual(
+				(await answered("?lead_days=%2030%20&vendor_days=0&owner_slug=nobody"))
+					.cadence,
+				{ lead_days: 30, vendor_days: 0 },
+			);
+			assert.deepEqual(await refusal(await quiet("?lead_days=2.5", url)), [
+				400,
+				{
+					error: "database_refused_the_statement",
+					hint: "The operation could not be completed. Quote the correlation_id when reporting it.",
+				},
+			]);
+			assert.deepEqual(
+				await refusal(await quiet("?lead_days=99999999999", url)),
+				[500, { ...generic, verb: "quiet-follow-ups" }],
+			);
+			await leads(2, 1001);
+			assert.deepEqual(await refusal(await quiet("", url)), [422, generic]);
+		} finally {
+			await db.end();
+		}
+	}));
+
+test("the board refuses a bad workspace, then unknown fields, then a cursor, before any read", async () => {
+	const unread = "postgres://made-up@127.0.0.1:1/none";
+	const refused = async (search: string) =>
+		refusal(await board(search, unread));
+	assert.deepEqual(await refused("?workspace=deals&b=1"), [
+		400,
+		{
+			error: "value_not_in_declared_vocabulary",
+			hint: "Use a value from the field's documented vocabulary.",
+			allowed_values: ["leads"],
+			fields: ["workspace"],
+		},
+	]);
+	assert.deepEqual(await refused("?workspace=leads&b=1&a=2&%24bad=3"), [
+		400,
+		{
+			error: "unregistered_operation_fields",
+			hint: "Remove fields outside the documented input.",
+			fields: ["a", "b"],
+		},
+	]);
+	assert.deepEqual(await refused("?stage_history_cursor=12"), [400, generic]);
+	assert.deepEqual(await refused("?correspondence_cursor="), [400, generic]);
+});
+
+test("the board answers, and refuses whole past the finding limit", () =>
+	withSnapshot(async (url) => {
+		const db = new pg.Client({ connectionString: url });
+		await db.connect();
+		const seed = `with a as (insert into actor (slug, kind, display_name)
+				values ('leads-route-partner', 'human', 'Example') returning id),
+			k as (insert into contact_state (slug, label, contactable, sort)
+				values ('active', 'Example', true, 1)),
+			s as (insert into lead_stage (slug, label, sort) values ('new', 'New', 1)),
+			p as (insert into party (kind, name, created_by, updated_by)
+				select 'org', 'Example Route Lead', id, id from a returning id, created_by)
+			insert into lead (party_id, stage, created_by, updated_by)
+			select id, 'new', created_by, created_by from p`;
+		const flood = `insert into record_flag (subject_type, subject_id, kind, value, source, created_by)
+			select 'party', party_id, 'note', '{}', 'Example', created_by
+			from lead, generate_series(1, 501)`;
+		try {
+			await db.query(seed);
+			const response = await board("?workspace=leads", url);
+			assert.equal(response.status, 200);
+			const answered = (await response.json()) as {
+				leads: { name: string; reachability: { classification: string } }[];
+			};
+			assert.deepEqual(
+				answered.leads.map((l) => [l.name, l.reachability.classification]),
+				[["Example Route Lead", "research"]],
+			);
+			await db.query(flood);
+			assert.deepEqual(await refusal(await board("", url)), [422, generic]);
+		} finally {
+			await db.end();
+		}
+	}));
 
 test("territory refuses unknown fields before any read", async () => {
 	const unread = "postgres://made-up@127.0.0.1:1/none";
@@ -56,14 +219,14 @@ test("territory filters as the old system did and refuses past 1000 markets", ()
 		const markets = async (search: string) => {
 			const response = await territory(search, url);
 			assert.equal(response.status, 200);
-			const board = (await response.json()) as {
+			const answered = (await response.json()) as {
 				submarkets: { city: string }[];
 			};
-			return board.submarkets.map((m) => m.city);
+			return answered.submarkets.map((m) => m.city);
 		};
 		try {
 			await db.query(`insert into actor (slug, kind, display_name)
-				values ('territory-route-partner', 'human', 'Example');
+				values ('leads-route-partner', 'human', 'Example');
 				insert into contact_state (slug, label, contactable, sort)
 				values ('active', 'Example', true, 1)`);
 			await places(2);
@@ -79,13 +242,7 @@ test("territory filters as the old system did and refuses past 1000 markets", ()
 			assert.deepEqual(await markets(`?city=${"x".repeat(201)}`), []);
 			await db.query("delete from party");
 			await places(1001);
-			assert.deepEqual(await refusal(await territory("", url)), [
-				422,
-				{
-					error: "unhandled_verb_failure",
-					hint: "The operation failed. Quote the correlation_id when reporting it.",
-				},
-			]);
+			assert.deepEqual(await refusal(await territory("", url)), [422, generic]);
 		} finally {
 			await db.end();
 		}

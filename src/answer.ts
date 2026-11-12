@@ -19,6 +19,7 @@ const HINTS = {
 	missing_required:
 		"Supply the named required fields from the tool's documented input.",
 	unregistered_operation_fields: "Remove fields outside the documented input.",
+	invalid_number: "Supply a numeric value for the named fields.",
 	database_unavailable:
 		"The operation failed. Quote the correlation_id when reporting it.",
 };
@@ -48,6 +49,26 @@ export const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
 		},
 		refusal.status,
 	);
+
+// The old system echoed back only identifier-shaped field names, at most 20.
+const ECHOED_FIELD = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
+
+export function unregisteredFields(
+	params: URLSearchParams,
+	known: readonly string[],
+) {
+	const extra = [...new Set(params.keys())].filter(
+		(key) => !known.includes(key),
+	);
+	return extra.length === 0
+		? undefined
+		: new Refusal(400, "unregistered_operation_fields", {
+				fields: extra
+					.sort()
+					.filter((key) => ECHOED_FIELD.test(key))
+					.slice(0, 20),
+			});
+}
 
 const isKnownPartner = async (db: Reader, slug: string) =>
 	(await db

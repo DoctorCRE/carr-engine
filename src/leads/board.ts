@@ -1,9 +1,18 @@
 import { sql } from "kysely";
 import type { Reader } from "../reader.ts";
+import {
+	type ContactInputs,
+	EVIDENCE_LIMIT,
+	type Finding,
+	reachability,
+} from "./reachability.ts";
 
 // One `v_lead_workspace` row with its prospect fields, as the old system
 // serialized it. Only the fields the advice reads are named.
-type WorkspaceLead = Record<string, unknown> & {
+type WorkspaceLead = {
+	[key: string]: unknown;
+	id: string;
+	base_version: number;
 	stage: string;
 	contact_state: string;
 	est_lease_event: string | null;
@@ -57,6 +66,24 @@ const DISCOVERY = [
 	"What would success look like in 90 days?",
 ];
 
+// Each list fetches one row past the limit so an overflow can refuse the board.
+const partyFindings = sql<Finding[]>`coalesce((select jsonb_agg(to_jsonb(f)
+		order by f.observed_at desc, f.flag_id)
+	from (select flag_id, kind, found, expired, proposes_correction, source, observed_at,
+		expires_on, value from v_record_flag_subject f
+		where (f.subject_type = 'party' and f.subject_id = b.party_id)
+			or exists (select from v_ref_index r where r.party_id = b.party_id
+				and r.subject_type = f.subject_type and r.subject_id = f.subject_id)
+		order by observed_at desc, flag_id limit ${EVIDENCE_LIMIT + 1}) f), '[]')`;
+const contactInputs = sql<ContactInputs>`jsonb_build_object('party_id', b.party_id,
+	'created_at', b.created_at, 'email', party.email, 'cell', null, 'phone', party.phone,
+	'activities', coalesce((select jsonb_agg(to_jsonb(a) order by a.occurred_at desc, a.id)
+	from (select id, lead_id, kind, connected, occurred_at, source, detail
+		from v_lead_workspace_correspondence where lead_id = b.id
+			and occurred_at >= b.created_at and occurred_at >= now() - interval '90 days'
+			and occurred_at <= now()
+		order by occurred_at desc, id limit ${EVIDENCE_LIMIT + 1}) a), '[]'))`;
+
 // to_jsonb keeps the old key order (PostgreSQL's, by key length) and its
 // number and timestamp text.
 const leadsInBoardOrder = (db: Reader) =>
@@ -73,18 +100,19 @@ const leadsInBoardOrder = (db: Reader) =>
 				])
 				.as("b"),
 		)
+		.innerJoin("party", "party.id", "b.party_id")
 		.select(sql<WorkspaceLead>`to_jsonb(b)`.as("lead"))
+		.select([partyFindings.as("findings"), contactInputs.as("contact")])
 		.orderBy("b.stage_sort")
 		.orderBy("b.score", (ob) => ob.desc().nullsLast())
 		.orderBy("b.name")
 		.orderBy("b.id")
 		.execute();
 
-// The view drops suppressed leads, so the old suppressed hold never shows here.
-function advise<T extends WorkspaceLead>(lead: T) {
-	const contact_eligible =
-		lead.stage !== "do_not_contact" &&
-		CONTACTABLE_STATES.has(lead.contact_state);
+// The view drops suppressed leads, and a do-not-contact stage is always
+// suppressed, so neither old check can fail here.
+function advise(lead: WorkspaceLead) {
+	const contact_eligible = CONTACTABLE_STATES.has(lead.contact_state);
 	const open = OPEN_OBJECTIVES.get(lead.stage);
 	const closed = CLOSED_OBJECTIVES.get(lead.stage);
 	const hold: Hold | null = !contact_eligible
@@ -121,13 +149,35 @@ function advise<T extends WorkspaceLead>(lead: T) {
 	};
 }
 
-// Each lead still lacks the old `opportunity_timing` and `reachability` keys.
+// The first lead past either limit, in board order, refuses the whole board.
+function overflow(rows: { findings: Finding[]; contact: ContactInputs }[]) {
+	for (const { findings, contact } of rows) {
+		if (findings.length > EVIDENCE_LIMIT)
+			return "research_evidence_limit_exceeded";
+		if (contact.activities.length > EVIDENCE_LIMIT)
+			return "contact_evidence_limit_exceeded";
+	}
+	return null;
+}
+
+// Each lead still lacks the old `opportunity_timing` key.
 export async function readLeadBoard(db: Reader) {
 	const rows = await leadsInBoardOrder(db);
+	const error = overflow(rows);
+	if (error) return { error } as const;
+	const now = Date.now();
 	return {
 		schema_version: "lead-workspace.v1",
-		generated_at: new Date().toISOString(),
-		leads: rows.map(({ lead }) => advise(lead)),
+		generated_at: new Date(now).toISOString(),
+		leads: await Promise.all(
+			rows.map(async ({ lead, findings, contact }) => {
+				const advised = advise(lead);
+				return {
+					...advised,
+					reachability: await reachability(advised, findings, contact, now),
+				};
+			}),
+		),
 		last_search_at: null,
 		search_run_coverage: "unavailable",
 	};

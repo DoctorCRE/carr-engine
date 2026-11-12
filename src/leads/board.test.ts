@@ -85,10 +85,20 @@ const stageEvent = (
 const uuid = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
+// Drops the clock fields after checking their format.
 const board = async (tx: Reader) => {
-	const { generated_at, ...rest } = await readLeadBoard(tx);
+	const answer = await readLeadBoard(tx);
+	assert.ok(!("error" in answer));
+	const { generated_at, ...rest } = answer;
 	assert.match(generated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-	return rest;
+	return {
+		...rest,
+		leads: rest.leads.map((lead) => {
+			const { evaluated_at, ...reachability } = lead.reachability;
+			assert.equal(evaluated_at, generated_at);
+			return { ...lead, reachability };
+		}),
+	};
 };
 
 test("a lead answers in the old keys, key order, nulls and formats", () =>
@@ -134,9 +144,10 @@ test("a lead answers in the old keys, key order, nulls and formats", () =>
 			},
 		};
 		const row = `{"id":"${uuid(5)}","city":"Springfield","lane":null,"name":"Dr. Example","owner":null,"score":85,"stage":"qualified","state":null,"county":null,"is_deal":false,"segment":null,"party_id":"${uuid(2)}","client_id":"${uuid(4)}","is_client":true,"specialty":null,"created_at":"2026-01-05T09:30:00.12+00:00","last_touch":null,"stage_sort":2,"suppressed":false,"updated_at":"2026-01-06T10:00:00+00:00","doctor_name":"Dr. Example","entity_name":"Dr. Example","owner_label":null,"stage_label":"Qualified","base_version":1,"registry_ref":"L-5","score_reason":null,"contact_state":"active","linked_client":true,"practice_name":"Example Practice","do_not_contact":false,"est_lease_event":null,"last_stage_move":{"to":"qualified","from":"new","reason":"Example reason","undone":null,"event_id":"${uuid(9)}","automatic":true,"occurred_at":"2026-02-03T14:05:06.5+00:00","evidence_date":"2026-02-01","idempotency_key":"key-9"},"contact_eligible":true,"event_confidence":"medium","next_action_date":"2026-03-01","possible_clients":[{"name":" dr. EXAMPLE ","client_id":"${uuid(3)}"}],"prospect_client_id":"${uuid(4)}","prospect_client_version":1,"prospect_engagement_status":"inactive",${JSON.stringify(advice).slice(1, -1)}}`;
+		const label = `{"schema_version":"lead-reachability.v2","classification":"research","basis":"successful_contact_and_current_route","evidence_state":"unknown","contact_eligible":true,"research_state":"needs_research","missing_reasons":["verified_usable_route_not_established","recent_successful_contact_not_established"],"source_revision":"sha256:17012c7a3a1f943fdc74bf39143b625b5238d589eb451050f2b78620fff9fe5a","evidence":[],"successful_contact":null,"usable_route":null,"contact_freshness_days":90,"source_inputs":{"cell":null,"email":null,"phone":null,"party_id":"${uuid(2)}","activities":[],"created_at":"2026-01-05T09:30:00.12+00:00"}}`;
 		assert.equal(
 			JSON.stringify(await board(tx)),
-			`{"schema_version":"lead-workspace.v1","leads":[${row}],"last_search_at":null,"search_run_coverage":"unavailable"}`,
+			`{"schema_version":"lead-workspace.v1","leads":[${row.slice(0, -1)},"reachability":${label}}],"last_search_at":null,"search_run_coverage":"unavailable"}`,
 		);
 	}));
 
@@ -198,7 +209,7 @@ test("possible clients match the trimmed lower-case name of other live clients",
 		await party(tx, 7, "Example Other");
 		await client(tx, 7, 7);
 		await lead(tx, 31, 1);
-		const [only] = (await board(tx)).leads;
+		const [only]: Record<string, unknown>[] = (await board(tx)).leads;
 		assert.deepEqual(only?.possible_clients, [
 			{ name: "EXAMPLE CLINIC", client_id: uuid(3) },
 			{ name: "example clinic ", client_id: uuid(4) },
@@ -216,7 +227,9 @@ test("the last stage move is the newest stage event, with undo and no review", (
 		});
 		await party(tx, 2, "Example Unmoved");
 		await lead(tx, 44, 2);
-		const moves = (await board(tx)).leads.map((l) => l.last_stage_move);
+		const moves = (await board(tx)).leads.map(
+			(l: Record<string, unknown>) => l.last_stage_move,
+		);
 		assert.deepEqual(moves, [
 			null,
 			{
@@ -239,7 +252,7 @@ test("a lead linked to a client that is not a prospect has no prospect fields", 
 		await party(tx, 1, "Example Client");
 		await client(tx, 1, 1);
 		await lead(tx, 51, 1, { client: 1 });
-		const [only] = (await board(tx)).leads;
+		const [only]: Record<string, unknown>[] = (await board(tx)).leads;
 		assert.deepEqual(
 			[
 				only?.prospect_client_id,
@@ -312,4 +325,242 @@ test("the advice text follows the hold, the stage and the next action date", () 
 				hold: { reason: "unsupported_stage" },
 			},
 		]);
+	}));
+
+const finding = (
+	tx: Reader,
+	n: number,
+	[subjectType, subjectN]: ["party" | "lead", number],
+	kind: string,
+	value: Record<string, unknown>,
+	observedAt: string,
+	expiresOn: string | null = null,
+	source = "Example registry",
+) =>
+	sql`insert into record_flag (id, subject_type, subject_id, kind, value, source,
+		observed_at, expires_on, created_by)
+		select ${uuid(n)}::uuid, ${subjectType}, ${uuid(subjectN)}::uuid, ${kind},
+		${JSON.stringify(value)}::jsonb, ${source}, ${observedAt}::timestamptz,
+		${expiresOn}::date, actor from fixture`.execute(tx);
+
+type Activity = { kind?: string; source?: string; detail?: string };
+const activity = (
+	tx: Reader,
+	n: number,
+	leadN: number,
+	ago: string,
+	a: Activity = {},
+) =>
+	sql`insert into activity (id, occurred_at, actor_id, kind, summary, detail, lead_id,
+		source, connected)
+		select ${uuid(n)}::uuid, now() - ${ago}::interval, actor, ${a.kind ?? "call"},
+		'Example', ${a.detail ?? null}, ${uuid(leadN)}::uuid, ${a.source ?? "stated"},
+		true from fixture`.execute(tx);
+
+const activityKinds = (tx: Reader) =>
+	sql`insert into activity_kind (slug, label, is_contact)
+		values ('call', 'Call', true), ('email_in', 'Email in', true)
+		on conflict do nothing`.execute(tx);
+
+const labels = async (tx: Reader) =>
+	(await board(tx)).leads.map((l) => l.reachability);
+
+test("the label keeps the old fingerprint, findings and route", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await party(tx, 1, "Example Reach");
+		await sql`update party set email = 'reach@example.test', phone = '(555) 010-0000'
+			where id = ${uuid(1)}::uuid`.execute(tx);
+		await lead(tx, 71, 1);
+		await finding(
+			tx,
+			81,
+			["party", 1],
+			"email",
+			{ email: "reach@example.test" },
+			"2026-03-04 05:06:07.123456+00",
+			"2099-01-01",
+		);
+		await finding(
+			tx,
+			82,
+			["lead", 71],
+			"verified",
+			{ found: true, note: "Example" },
+			"2026-03-01 00:00:00+00",
+			null,
+			"Example site",
+		);
+		await finding(
+			tx,
+			83,
+			["party", 1],
+			"office_phone",
+			{ phone: "(555) 010-0000" },
+			"2026-02-01 00:00:00+00",
+			"2020-01-01",
+		);
+		const evidence = `[{"kind":"email","found":true,"value":{"email":"reach@example.test"},"source":"Example registry","expired":false,"flag_id":"${uuid(81)}","expires_on":"2099-01-01","observed_at":"2026-03-04T05:06:07.123456+00:00","proposes_correction":false},{"kind":"verified","found":true,"value":{"note":"Example","found":true},"source":"Example site","expired":false,"flag_id":"${uuid(82)}","expires_on":null,"observed_at":"2026-03-01T00:00:00+00:00","proposes_correction":false},{"kind":"office_phone","found":true,"value":{"phone":"(555) 010-0000"},"source":"Example registry","expired":true,"flag_id":"${uuid(83)}","expires_on":"2020-01-01","observed_at":"2026-02-01T00:00:00+00:00","proposes_correction":false}]`;
+		assert.equal(
+			JSON.stringify(await labels(tx)),
+			`[{"schema_version":"lead-reachability.v2","classification":"research","basis":"successful_contact_and_current_route","evidence_state":"current","contact_eligible":true,"research_state":"verified","missing_reasons":["recent_successful_contact_not_established"],"source_revision":"sha256:787a16ceaa8a32ce92a03a1cdec6a96386d26c1f01115b2a9021cd0324185abe","evidence":${evidence},"successful_contact":null,"usable_route":{"flag_id":"${uuid(81)}","kind":"email"},"contact_freshness_days":90,"source_inputs":{"cell":null,"email":"reach@example.test","phone":"(555) 010-0000","party_id":"${uuid(1)}","activities":[],"created_at":"2026-01-05T09:30:00.12+00:00"}}]`,
+		);
+	}));
+
+test("a successful contact is the newest connected or bound mail in the last 90 days", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await activityKinds(tx);
+		await party(tx, 2, "Example Contact");
+		await lead(tx, 72, 2);
+		const mail = { match: "exact", party_id: uuid(2), evidence_ref: "m-1" };
+		await activity(tx, 91, 72, "1 day", {
+			kind: "email_in",
+			source: "mail_ingest",
+			detail: JSON.stringify({ ...mail, automated: true }),
+		});
+		await activity(tx, 92, 72, "2 days", {
+			detail: JSON.stringify({ party_id: uuid(3) }),
+		});
+		await activity(tx, 94, 72, "3 days", { detail: "Free text" });
+		await activity(tx, 93, 72, "3 days");
+		await activity(tx, 95, 72, "91 days");
+		await activity(tx, 96, 72, "-1 day");
+		const [label] = await labels(tx);
+		assert.deepEqual(
+			label?.source_inputs.activities.map((a) => a.id),
+			[91, 92, 93, 94].map(uuid),
+		);
+		assert.equal(label?.successful_contact?.activity_id, uuid(93));
+		await activity(tx, 97, 72, "1 hour", {
+			kind: "email_in",
+			source: "local_mail",
+			detail: JSON.stringify({ ...mail, automated: false }),
+		});
+		const [bound] = await labels(tx);
+		assert.equal(bound?.successful_contact?.activity_id, uuid(97));
+	}));
+
+test("findings tied on time are ordered by id", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await party(tx, 1, "Example Tie");
+		await lead(tx, 78, 1);
+		for (const n of [87, 86])
+			await finding(tx, n, ["party", 1], "note", {}, "2026-03-01 00:00:00+00");
+		const [label] = await labels(tx);
+		assert.deepEqual(
+			label?.evidence.map((f) => f.flag_id),
+			[86, 87].map(uuid),
+		);
+	}));
+
+test("activity from before the lead was created is left out", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await activityKinds(tx);
+		await party(tx, 1, "Example New");
+		await lead(tx, 79, 1);
+		await sql`update lead set created_at = now() - interval '2 days'
+			where id = ${uuid(79)}::uuid`.execute(tx);
+		await activity(tx, 98, 79, "1 day");
+		await activity(tx, 99, 79, "3 days");
+		const [label] = await labels(tx);
+		assert.deepEqual(
+			label?.source_inputs.activities.map((a) => a.id),
+			[uuid(98)],
+		);
+	}));
+
+test("conflicting, expired and restricted leads stay in research", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await party(tx, 1, "Example A");
+		await party(tx, 2, "Example B");
+		await party(tx, 3, "Example C", { contact_state: "paused" });
+		await lead(tx, 73, 1, { score: 30 });
+		await lead(tx, 74, 2, { score: 20 });
+		await lead(tx, 75, 3, { score: 10 });
+		await finding(
+			tx,
+			84,
+			["party", 1],
+			"discrepancy",
+			{ note: "Example" },
+			"2026-03-01 00:00:00+00",
+		);
+		await finding(
+			tx,
+			85,
+			["party", 2],
+			"verified",
+			{},
+			"2026-03-01 00:00:00+00",
+			"2020-01-01",
+		);
+		assert.deepEqual(
+			(await labels(tx)).map((l) => [
+				l.evidence_state,
+				l.research_state,
+				l.missing_reasons,
+			]),
+			[
+				[
+					"conflicting",
+					"needs_review",
+					[
+						"conflicting_evidence",
+						"verified_usable_route_not_established",
+						"recent_successful_contact_not_established",
+					],
+				],
+				[
+					"expired",
+					"needs_research",
+					[
+						"expired_evidence",
+						"verified_usable_route_not_established",
+						"recent_successful_contact_not_established",
+					],
+				],
+				[
+					"unknown",
+					"needs_research",
+					[
+						"contact_restricted",
+						"verified_usable_route_not_established",
+						"recent_successful_contact_not_established",
+					],
+				],
+			],
+		);
+	}));
+
+test("the first lead past 500 findings or 500 activities refuses the board", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await activityKinds(tx);
+		await party(tx, 1, "Example First");
+		await party(tx, 2, "Example Second");
+		await lead(tx, 76, 1, { score: 90 });
+		await lead(tx, 77, 2, { score: 10 });
+		const many = (subject: number, kind: string, count: number) =>
+			sql`insert into record_flag (subject_type, subject_id, kind, value, source, created_by)
+				select 'party', ${uuid(subject)}::uuid, ${kind}, '{}', 'Example', actor
+				from fixture, generate_series(1, ${count})`.execute(tx);
+		const calls = (count: number) =>
+			sql`insert into activity (occurred_at, actor_id, kind, summary, lead_id)
+				select now() - interval '1 hour', actor, 'call', 'Example', ${uuid(76)}::uuid
+				from fixture, generate_series(1, ${count})`.execute(tx);
+		await many(1, "note", 500);
+		await calls(500);
+		assert.equal((await board(tx)).leads.length, 2);
+		await many(2, "note", 501);
+		assert.deepEqual(await readLeadBoard(tx), {
+			error: "research_evidence_limit_exceeded",
+		});
+		await calls(1);
+		assert.deepEqual(await readLeadBoard(tx), {
+			error: "contact_evidence_limit_exceeded",
+		});
 	}));
