@@ -2160,6 +2160,15 @@ UNION ALL
            FROM public.vendor v
           WHERE (v.party_id = p.id)))));
 
+CREATE VIEW public.v_capture_session_status AS
+ SELECT id AS session_id,
+    device_id,
+    state,
+    started_at,
+    state_at
+   FROM public.capture_session s
+  WHERE (expires_at > now());
+
 CREATE VIEW public.v_client_account AS
  SELECT c.id AS client_id,
     c.roster_ref AS client_ref,

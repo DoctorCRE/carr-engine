@@ -7,6 +7,7 @@ import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
+import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
@@ -21,6 +22,7 @@ const readable = [
 	"deal",
 	"doctrine_section",
 	"party",
+	"v_capture_session_status",
 	"v_client_account",
 	"v_client_engagement_status",
 	"v_deal_board",
@@ -40,6 +42,7 @@ const readable = [
 	"v_deal_room_phase_change",
 	"v_deal_room_phase_start",
 	"v_deal_room_premises",
+	"v_deal_room_presence",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
 	"v_open_deal_room_board",
@@ -156,7 +159,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal and the client fit and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit and the change feed and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -184,6 +187,10 @@ test("the reader login reads the board, a deal and the client fit and changes no
 				coverage: "recorded_closed_won_only",
 				profiles: [],
 			});
+			assert.deepEqual(
+				await readSnapshot(login, (db) => readChanges(db, null, "")),
+				{ events: [], presence: [], capture_sessions: [], cursor: "" },
+			);
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(
