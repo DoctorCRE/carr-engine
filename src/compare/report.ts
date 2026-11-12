@@ -39,10 +39,28 @@ function readOf(ask: Ask) {
 			return "reasons to reach out";
 		case "invoices":
 			return "invoices";
+		case "client list":
+			return "client list";
+		case "client":
+			return "client detail";
+		case "recent activity":
+			return "recent activity";
 	}
 }
-const recordOf = (ask: Ask) =>
-	ask.read === "deal" ? ask.deal : ask.read === "lead" ? ask.lead : undefined;
+function recordOf(ask: Ask) {
+	switch (ask.read) {
+		case "deal":
+			return ask.deal;
+		case "lead":
+			return ask.lead;
+		case "client":
+			return ask.client;
+		case "recent activity":
+			return ask.record;
+		default:
+			return undefined;
+	}
+}
 const PREFIXES = {
 	board: "board",
 	deal: "detail",
@@ -56,6 +74,9 @@ const PREFIXES = {
 	territory: "territory",
 	"reasons to reach out": "reasons",
 	invoices: "invoices",
+	"client list": "clients",
+	client: "client",
+	"recent activity": "activity",
 };
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>

@@ -16,7 +16,8 @@ type Rows = {
 export type ReadShape = {
 	rows: Record<string, Rows>;
 	opaque?: readonly string[];
-	// The time the answer was made: its value may differ, its format may not.
+	// The time the answer was made, or a random id: its value may differ, its
+	// format may not.
 	clocks?: readonly string[];
 };
 type Kind =
@@ -58,7 +59,7 @@ function canonical(value: unknown): string {
 const sameFormat = (a: unknown, b: unknown) =>
 	typeof a === "string" &&
 	typeof b === "string" &&
-	a.replace(/[0-9]/g, "0") === b.replace(/[0-9]/g, "0");
+	a.replace(/[0-9a-f]/g, "0") === b.replace(/[0-9a-f]/g, "0");
 
 export const strict = (id: string) => ({ id, sortedBy: [] });
 

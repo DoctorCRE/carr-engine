@@ -4,10 +4,11 @@ import { type Ask, StopRun } from "./run.ts";
 type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
 type ToolAsk = Exclude<Ask, { read: "feed" }>;
 type FeedPage = { events: unknown[]; cursor: string };
-type Request = {
-	path: string;
-	call: { name: string; arguments: Record<string, unknown> };
-};
+// The old system serves each read as a tool `call`, or over HTTP at `oldPath`.
+type Request = { path: string } & (
+	| { call: { name: string; arguments: Record<string, unknown> } }
+	| { oldPath: string }
+);
 
 const FEED_PAGE = 200;
 // A cursor that never advances would otherwise page forever.
@@ -20,12 +21,13 @@ const REFUSALS = new Set([400, 404, 409, 422]);
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
+// A board for a listed workspace, the invoices and the client list have no
+// refusal to compare. Comparing one would match two empty answers, and an
+// empty board or list samples no records.
+const UNREFUSED = new Set<Ask["read"]>(["board", "invoices", "client list"]);
+
 function refusal(ask: ToolAsk, body: unknown) {
-	// A board for a listed workspace and the invoices have no refusal to
-	// compare. Comparing one would match two empty answers, and an empty board
-	// asks no deals.
-	if (ask.read === "board" || ask.read === "invoices")
-		throw new Error("read refused");
+	if (UNREFUSED.has(ask.read)) throw new Error("read refused");
 	if (typeof body !== "object" || body === null || !("error" in body))
 		throw new Error("refusal without an error");
 	const { correlation_id: _, ...rest } = body as Record<string, unknown>;
@@ -63,6 +65,13 @@ function mirrored(
 		call: { name, arguments: args },
 	};
 }
+
+// The old door served the directory over HTTP.
+const business = (path: string): Request => ({
+	path: `/api/engine${path}`,
+	oldPath: `/api/v1/business${path}`,
+});
+const DIRECTORY = "contract=vendor-directory.v1";
 
 const leadPage = (cursor: Record<string, unknown> = {}) =>
 	mirrored("/api/engine/leads", "lead-board", {
@@ -109,6 +118,17 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" }>): Request {
 			return reasonsPage();
 		case "invoices":
 			return mirrored("/api/engine/invoices", "read-invoice-tracker");
+		case "client list":
+			return business(`/clients?${DIRECTORY}`);
+		case "client":
+			return business(
+				`/clients/${encodeURIComponent(ask.client)}?${DIRECTORY}`,
+			);
+		case "recent activity":
+			return mirrored("/api/engine/recent-activity", "find-and-catch-up", {
+				query: ask.name,
+				limit: 10,
+			});
 	}
 }
 
@@ -228,20 +248,22 @@ export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 		throw new Error("feed did not end");
 	}
 
+	async function readHttp(ask: ToolAsk, path: string) {
+		const response = await send(path, {
+			headers: { accept: "application/json" },
+		});
+		if (response.status === 200) return response.json();
+		if (REFUSALS.has(response.status))
+			return refusal(ask, await response.json());
+		throw new Error("read failed");
+	}
+
 	async function askEngine(ask: Ask): Promise<unknown> {
 		if (ask.read === "feed")
 			return readFeed("/api/engine/pipeline/changes", ask.start);
 		return answerOf(
 			ask,
-			async ({ path }) => {
-				const response = await send(path, {
-					headers: { accept: "application/json" },
-				});
-				if (response.status === 200) return response.json();
-				if (REFUSALS.has(response.status))
-					return refusal(ask, await response.json());
-				throw new Error("engine read failed");
-			},
+			({ path }) => readHttp(ask, path),
 			async () => {},
 		);
 	}
@@ -251,7 +273,8 @@ export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 		if (ask.read === "feed") return readFeed("/pipeline/changes", ask.start);
 		return answerOf(
 			ask,
-			async ({ call }) => {
+			async (request) => {
+				if ("oldPath" in request) return readHttp(ask, request.oldPath);
 				const response = await send("/mcp", {
 					method: "POST",
 					headers: {
@@ -263,7 +286,7 @@ export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 						jsonrpc: "2.0",
 						id: ++rpcId,
 						method: "tools/call",
-						params: call,
+						params: request.call,
 					}),
 				});
 				if (response.status !== 200) throw new Error("old read failed");
