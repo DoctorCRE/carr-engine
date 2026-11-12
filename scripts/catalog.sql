@@ -14,8 +14,11 @@ SELECT name, jsonb_build_object(
     FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
     LEFT JOIN pg_collation co ON co.oid=a.attcollation
     WHERE a.attrelid=r.oid AND a.attnum>0 AND NOT a.attisdropped),
-  'constraints', (SELECT jsonb_agg(jsonb_build_array(conname,pg_get_constraintdef(oid)) ORDER BY conname)
-    FROM pg_constraint WHERE conrelid=r.oid),
+  -- Constraint triggers live in pg_constraint; keep only those on public functions, as for triggers.
+  'constraints', (SELECT jsonb_agg(jsonb_build_array(conname,pg_get_constraintdef(c.oid)) ORDER BY conname)
+    FROM pg_constraint c WHERE conrelid=r.oid AND (contype<>'t' OR EXISTS (SELECT 1
+      FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE t.tgconstraint=c.oid AND n.nspname='public'))),
   'indexes', (SELECT jsonb_agg(pg_get_indexdef(indexrelid) ORDER BY indexrelid::regclass::text)
     FROM pg_index WHERE indrelid=r.oid),
   'triggers', (SELECT jsonb_agg(jsonb_build_array(pg_get_triggerdef(t.oid),tgenabled) ORDER BY tgname)
