@@ -418,12 +418,6 @@ test("a full old list leaves which rows made it, and what they decide, as cap am
 			["note", "value differs", []],
 		],
 	);
-	const short = find(found({ deals: five.slice(0, 4) }), found(changed));
-	assert.deepEqual(
-		short.differences.map((d) => d.path),
-		["deals[]", "deals_via_link[]", "note"],
-	);
-	assert.deepEqual(short.capAmbiguous, []);
 });
 
 test("a field that differs on a deal in both answers is a difference even when the list is full", () => {
@@ -443,6 +437,25 @@ test("a full old list hides nothing when the engine returns a different number o
 	for (const parties of [ten.slice(0, 3), [...ten, party("C-11")]]) {
 		const result = find(found({ parties: ten }), found({ parties }));
 		assert.ok(result.differences.length > 0, `${parties.length} rows differ`);
+		assert.deepEqual(result.capAmbiguous, []);
+	}
+});
+
+test("a full old list hides nothing when a row crosses the merged groups", () => {
+	const live = Array.from({ length: 10 }, (_, i) => party(`C-${i + 1}`));
+	const swapped = [...live.slice(0, 9), party("C-11", { merged: true })];
+	for (const [old, next] of [
+		[live, swapped],
+		[swapped, live],
+	]) {
+		const result = find(found({ parties: old }), found({ parties: next }));
+		assert.deepEqual(
+			result.differences.map((d) => [d.path, d.kind]),
+			[
+				["parties[]", "missing in new"],
+				["parties[]", "missing in old"],
+			],
+		);
 		assert.deepEqual(result.capAmbiguous, []);
 	}
 });

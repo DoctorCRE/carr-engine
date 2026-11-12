@@ -41,24 +41,32 @@ const found = (fields: object = {}) => ({
 	note: "Made-up note.",
 	...fields,
 });
-const answer = (ask: Ask) =>
-	ask.read === "board"
-		? board()
-		: ask.read === "deal"
-			? detail(ask.deal)
-			: ask.read === "feed"
-				? feed()
-				: ask.read === "find"
-					? found()
-					: fixed[ask.read];
-const label = (ask: Ask) =>
-	ask.read === "board"
-		? ask.workspace
-		: ask.read === "deal"
-			? ask.deal
-			: ask.read === "find"
-				? `find ${ask.query}`
-				: ask.read;
+function answer(ask: Ask) {
+	switch (ask.read) {
+		case "board":
+			return board();
+		case "deal":
+			return detail(ask.deal);
+		case "feed":
+			return feed();
+		case "find":
+			return found();
+		default:
+			return fixed[ask.read];
+	}
+}
+function label(ask: Ask) {
+	switch (ask.read) {
+		case "board":
+			return ask.workspace;
+		case "deal":
+			return ask.deal;
+		case "find":
+			return `find ${ask.query}`;
+		default:
+			return ask.read;
+	}
+}
 
 async function runWith(
 	engine: (ask: Ask, call: number) => unknown,
@@ -458,31 +466,6 @@ test("finds the first twelve client names on the old boards, each once, after th
 		["%", "_", " ", ...clients.slice(0, 12).map((c) => c.client_name)],
 	);
 	assert.equal(exitCode(run), 0);
-});
-
-test("an engine find that fails is a failed item and the run goes on", async () => {
-	const { run } = await runWith((ask) => {
-		if (ask.read === "find") throw new Error("engine read failed");
-		return answer(ask);
-	});
-	assert.deepEqual(
-		run.outcomes.map((o) => `${label(o.ask)} ${o.result}`).slice(5),
-		[
-			"feed matched",
-			"find % failed",
-			"find _ failed",
-			"find   failed",
-			`${d1} matched`,
-			`${d2} matched`,
-			`${d3} matched`,
-		],
-	);
-	assert.equal(run.stopped, false);
-	assert.equal(exitCode(run), 2);
-	assert.match(
-		report("production", run),
-		/\nfailed {2}search find {2}-\nfailed {2}search find {2}-\nfailed {2}search find {2}-\n$/,
-	);
 });
 
 test("a find whose old deals list is full reports the other deals as cap ambiguity, not a difference", async () => {

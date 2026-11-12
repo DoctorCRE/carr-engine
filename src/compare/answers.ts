@@ -181,14 +181,24 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 		records: Step[],
 		rows: Rows,
 	): void {
-		// Both sides run the same limit, so a full old list needs an equally full new one.
-		if (rows.cap && a.length >= rows.cap.size && b.length === a.length)
-			full.push({ ...rows.cap, path });
 		const repeated = repeatedBases(a, b, rows);
 		const left = rowsOf(a, rows, repeated);
 		const right = rowsOf(b, rows, repeated);
 		const inLeft = new Map(left.map((row) => [row.key, row]));
 		const inRight = new Map(right.map((row) => [row.key, row]));
+		const oneSided = [
+			...left.filter((row) => !inRight.has(row.key)),
+			...right.filter((row) => !inLeft.has(row.key)),
+		];
+		// Both sides run the same limit, so a full old list needs an equally full
+		// new one, and only rows tied with its last row can fall either side of it.
+		if (
+			rows.cap &&
+			a.length >= rows.cap.size &&
+			b.length === a.length &&
+			oneSided.every((row) => isDeepStrictEqual(row.ties, left.at(-1)?.ties))
+		)
+			full.push({ ...rows.cap, path });
 		for (const row of left) {
 			const match = inRight.get(row.key);
 			if (match) walk(row.value, match.value, path, [...records, row.step]);
