@@ -15,6 +15,8 @@ import { url } from "./test-rollback.ts";
 // reads name. The views read their tables with their owner's rights.
 const readable = [
 	"actor",
+	"commission",
+	"doctrine_section",
 	"v_client_account",
 	"v_client_engagement_status",
 	"v_deal_board",
@@ -38,6 +40,7 @@ const readable = [
 	"v_deal_room_vendor",
 	"v_open_deal_room_board",
 	"v_ref_index",
+	"v_requirement_request",
 ];
 
 async function withAdmin<T>(
