@@ -7,9 +7,6 @@ import { readFind } from "../search/find.ts";
 const CANDIDATE_CAP = 25;
 const CALENDAR_CAP = 5000;
 
-// presence.ts imports it from here.
-export { hasToolCallMarkup };
-
 type Found = Awaited<ReturnType<typeof readFind>>;
 type Candidate = { kind: string; name: string; target: string };
 

@@ -60,7 +60,7 @@ test("find refuses reserved fields, then unknown fields, then a missing query, b
 	await refused("?query=", missing);
 });
 
-test("find reads the query untrimmed", () =>
+test("find reads the query untrimmed, and the first of a repeated query", () =>
 	withSnapshot(async (url) => {
 		const db = new pg.Client({ connectionString: url });
 		await db.connect();
@@ -89,4 +89,5 @@ test("find reads the query untrimmed", () =>
 		assert.deepEqual(await deals("?query=Lease"), ["Example Route Lease"]);
 		assert.deepEqual(await deals("?query=Lease%20"), []);
 		assert.deepEqual(await deals("?query=+Route+"), ["Example Route Lease"]);
+		assert.deepEqual(await deals("?query=&query="), ["Example Route Lease"]);
 	}));

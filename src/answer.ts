@@ -124,13 +124,11 @@ export function hasToolCallMarkup(field: string, value: string) {
 	});
 }
 
-function objectIn(text: string): Map<string, unknown> | undefined {
+function objectIn(text: string): Record<string, unknown> | undefined {
 	try {
 		const parsed: unknown = JSON.parse(text);
-		return typeof parsed === "object" &&
-			parsed !== null &&
-			!Array.isArray(parsed)
-			? new Map(Object.entries(parsed))
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
 			: undefined;
 	} catch {
 		return undefined;
@@ -143,7 +141,7 @@ function markedFields(field: string, value: string, own?: readonly string[]) {
 	const object = own && objectIn(value);
 	if (!object) return hasToolCallMarkup(field, value) ? [field] : undefined;
 	const marked = own.some((name) => {
-		const inner = object.get(name);
+		const inner = object[name];
 		return typeof inner === "string" && hasToolCallMarkup(name, inner);
 	});
 	return marked ? [] : undefined;
