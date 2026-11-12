@@ -5,11 +5,12 @@ Engine for the DoctorCRE app. See `AGENTS.md` for how work happens here.
 Run `npm ci` once, then `npm run check` before every push. CI runs the same command.
 
 Database checks need a local, disposable PostgreSQL 18 server with `pgcrypto` and
-`pg_trgm`. The test user needs permission to create databases and extensions. For example, start `docker run --rm -p 5432:5432 -e
+`pg_trgm`. The test user needs permission to create databases and extensions. For example, start `docker run --rm -p 127.0.0.1:5432:5432 -e
 POSTGRES_HOST_AUTH_METHOD=trust postgres:18`, then run `npm run check`.
 `TEST_DATABASE_URL` defaults to `postgres://postgres@127.0.0.1:5432/postgres`.
 The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a shared server.
+One server serves every worktree, because each check makes and drops its own database.
 
 Each check restores `schema/business.sql`, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
