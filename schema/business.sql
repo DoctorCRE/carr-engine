@@ -731,6 +731,22 @@ END) STORED,
     CONSTRAINT availability_status_check CHECK ((status = ANY (ARRAY['available'::text, 'pending'::text, 'leased'::text, 'off_market'::text])))
 );
 
+CREATE TABLE public.board_snapshot (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_tenant_id text NOT NULL,
+    sponsoring_human_slug text NOT NULL,
+    board_id text NOT NULL,
+    version bigint DEFAULT 1 NOT NULL,
+    snapshot_json jsonb NOT NULL,
+    updated_by_actor_id uuid NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT board_snapshot_board_id_check CHECK ((board_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$'::text)),
+    CONSTRAINT board_snapshot_organization_tenant_id_check CHECK ((length(btrim(organization_tenant_id)) > 0)),
+    CONSTRAINT board_snapshot_snapshot_json_check CHECK ((jsonb_typeof(snapshot_json) = 'object'::text)),
+    CONSTRAINT board_snapshot_sponsoring_human_slug_check CHECK ((sponsoring_human_slug = ANY (ARRAY['partner_one'::text, 'partner_two'::text]))),
+    CONSTRAINT board_snapshot_version_check CHECK ((version > 0))
+);
+
 CREATE TABLE public.building (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     parcel_id uuid,
@@ -3851,6 +3867,12 @@ ALTER TABLE ONLY public.attachment
 ALTER TABLE ONLY public.availability
     ADD CONSTRAINT availability_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.board_snapshot
+    ADD CONSTRAINT board_snapshot_organization_tenant_id_sponsoring_human_slug_key UNIQUE (organization_tenant_id, sponsoring_human_slug, board_id);
+
+ALTER TABLE ONLY public.board_snapshot
+    ADD CONSTRAINT board_snapshot_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY public.building_ownership
     ADD CONSTRAINT building_ownership_pkey PRIMARY KEY (id);
 
@@ -4655,6 +4677,9 @@ ALTER TABLE ONLY public.attachment
 
 ALTER TABLE ONLY public.availability
     ADD CONSTRAINT availability_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.space(id);
+
+ALTER TABLE ONLY public.board_snapshot
+    ADD CONSTRAINT board_snapshot_updated_by_actor_id_fkey FOREIGN KEY (updated_by_actor_id) REFERENCES public.actor(id);
 
 ALTER TABLE ONLY public.building
     ADD CONSTRAINT building_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);
