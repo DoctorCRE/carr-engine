@@ -201,9 +201,11 @@ clients.get("/clients", (c) =>
 );
 
 // The old door answered any id that is not a UUID before anything else.
+// It tested the raw path, where a percent-encoded id is not a UUID.
 clients.get("/clients/:id{.*}", async (c) => {
 	const id = c.req.param("id");
-	if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
+	if (!UUID.test(id) || new URL(c.req.url).pathname !== c.req.path)
+		return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
 		const contract = oneOf(params, "contract", CONTRACTS, null);
