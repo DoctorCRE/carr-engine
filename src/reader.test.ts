@@ -8,6 +8,7 @@ import { withSnapshot } from "../scripts/test-database.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
 import { readCaptureQueue } from "./deals/capture-queue.ts";
+import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
@@ -23,6 +24,7 @@ const readable = [
 	"doctrine_section",
 	"party",
 	"v_capture_candidate_queue",
+	"v_capture_session_status",
 	"v_client_account",
 	"v_client_engagement_status",
 	"v_deal_board",
@@ -42,6 +44,7 @@ const readable = [
 	"v_deal_room_phase_change",
 	"v_deal_room_phase_start",
 	"v_deal_room_premises",
+	"v_deal_room_presence",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
 	"v_open_deal_room_board",
@@ -168,7 +171,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit and the capture queue and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed and the capture queue and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -200,6 +203,21 @@ test("the reader login reads the board, a deal, the client fit and the capture q
 			assert.deepEqual(
 				queue.candidates.map((c) => [c.deal_name, c.confidence]),
 				[["Example Reader Deal", 1]],
+			);
+			const changes = await readSnapshot(login, (db) =>
+				readChanges(db, null, ""),
+			);
+			assert.deepEqual(
+				{
+					...changes,
+					capture_sessions: changes.capture_sessions.map((s) => s.device_id),
+				},
+				{
+					events: [],
+					presence: [],
+					capture_sessions: ["example-device"],
+					cursor: "",
+				},
 			);
 			const visible = await withAdmin(
 				(admin) =>

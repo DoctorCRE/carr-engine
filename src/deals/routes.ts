@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { answer, Refusal, refuse } from "../answer.ts";
-import type { DatabaseEnv } from "../reader.ts";
+import { failureKind } from "../failure.ts";
+import { type DatabaseEnv, readSnapshot } from "../reader.ts";
 import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
 import { readCaptureQueue } from "./capture-queue.ts";
+import { decodeCursor, readChanges } from "./changes.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 
@@ -67,3 +69,26 @@ deals.get("/client-fit", (c) =>
 );
 
 deals.get("/capture-queue", (c) => answer(c, readCaptureQueue));
+
+// The old feed checked the partner, then the method, then the cursor, and
+// answered with bare error bodies.
+deals.all("/pipeline/changes", async (c) => {
+	if (c.req.method !== "GET")
+		return c.json({ error: "method_not_allowed" }, 405);
+	const given = new URL(c.req.url).searchParams.get("cursor") || "";
+	const after = given ? decodeCursor(given) : null;
+	if (after === undefined) return c.json({ error: "invalid_cursor" }, 400);
+	const database = c.env.DATABASE;
+	try {
+		if (database)
+			return c.json(
+				await readSnapshot(database.connectionString, (db) =>
+					readChanges(db, after, given),
+				),
+			);
+	} catch (error) {
+		console.warn("read failed:", failureKind(error));
+	}
+	// The old feed answered any failure this way, a missing database included.
+	return refuse(c, new Refusal(503, "database_unavailable"));
+});
