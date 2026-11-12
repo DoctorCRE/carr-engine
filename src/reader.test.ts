@@ -6,7 +6,7 @@ import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
 import { readRecentActivity } from "./activity/read.ts";
-import { readClientList } from "./clients/read.ts";
+import { readClient, readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
 import { readCaptureQueue } from "./deals/capture-queue.ts";
@@ -21,6 +21,7 @@ import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
+import { trackRecordFacts } from "./vendors/track-record.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
 // name, and `carr_business_date()`. The views read their tables with their
@@ -37,6 +38,8 @@ const readable = [
 	"lead",
 	"next_action",
 	"party",
+	"party_link",
+	"party_link_deal",
 	"practice_origination_event",
 	"practice_origination_feed",
 	"tool_call",
@@ -213,7 +216,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list and recent activity and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, a vendor's track record and recent activity and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -307,9 +310,43 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 					{ observedAt: new Date(), correlationId: "example" },
 				),
 			);
+			const [listed] = clients.rows;
 			assert.deepEqual(
-				clients.rows.map((r) => [r.name, r.owned_by_viewer]),
-				[["Example Clinic", false]],
+				[listed?.name, listed?.owned_by_viewer, clients.rows.length],
+				["Example Clinic", false, 1],
+			);
+			assert.ok(listed);
+			const client = await readSnapshot(login, (db) =>
+				readClient(db, seeded.actor, listed.id, "vendor-directory.v1", {
+					observedAt: new Date(),
+					correlationId: "example",
+				}),
+			);
+			assert.equal(client.record.name, "Example Clinic");
+			await withAdmin(async (admin) => {
+				await admin.query(
+					"insert into vendor_disposition values ('active', 'Example', true, 1)",
+				);
+				await admin.query(
+					`insert into vendor (party_id, category, created_by, updated_by,
+						deal_history_verified_at, deal_evidence)
+					select party.id, 'lender', actor.id, actor.id, '2026-01-01', jsonb_build_array(
+						jsonb_build_object('deal_id', $1::uuid, 'role', 'worked', 'occurred_at', '2026-01-02'))
+					from party, actor`,
+					[seeded.deal],
+				);
+			}, database);
+			const track = await readSnapshot(login, (db) =>
+				db
+					.selectFrom("vendor as v")
+					.innerJoin("party as p", "p.id", "v.party_id")
+					.innerJoinLateral(trackRecordFacts.as("vr"), (join) => join.onTrue())
+					.select("vr.facts")
+					.executeTakeFirstOrThrow(),
+			);
+			assert.deepEqual(
+				[track.facts.deals_worked, track.facts.first_worked_at],
+				[1, "2026-01-02T00:00:00+00:00"],
 			);
 			await withAdmin(
 				(admin) =>

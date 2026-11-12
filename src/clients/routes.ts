@@ -1,6 +1,6 @@
 import { type Context, Hono } from "hono";
 import { failureKind } from "../failure.ts";
-import { type DatabaseEnv, readSnapshot } from "../reader.ts";
+import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import {
 	BusinessRefusal,
@@ -11,6 +11,7 @@ import {
 	PAGE_SIZE,
 	PARTNERS,
 	PIPELINES,
+	readClient,
 	readClientList,
 	SORTS,
 	type Stamp,
@@ -28,6 +29,7 @@ const LIST_FIELDS = [
 	"page",
 	"owner",
 ];
+const RECORD_FIELDS = ["viewer", "contract"];
 const SCOPES = ["team", "mine"] as const;
 const OWNERS = ["all", ...PARTNERS] as const;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
@@ -163,26 +165,50 @@ function stampOf(c: Context<DatabaseEnv>): Stamp {
 	};
 }
 
-export const clients = new Hono<DatabaseEnv>();
-
-// The old read parsed the query before checking the partner.
-clients.get("/clients", async (c) => {
+// The old door checked its database, then the query, then the partner.
+async function answer(
+	c: Context<DatabaseEnv>,
+	parse: (
+		params: URLSearchParams,
+		viewer: string,
+	) => (db: Reader, stamp: Stamp) => Promise<object>,
+) {
 	const viewer = c.get("partner").slug;
 	const database = c.env.DATABASE;
 	try {
 		if (!database)
 			throw new BusinessRefusal({ error: "DEPENDENCY_UNAVAILABLE" });
-		const query = listQuery(new URL(c.req.url).searchParams, viewer);
+		const read = parse(new URL(c.req.url).searchParams, viewer);
 		if (!isOneOf(PARTNERS, viewer))
 			throw new BusinessRefusal({ error: "AUTHORIZATION_REFUSED" });
 		const stamp = stampOf(c);
 		return c.json(
-			await readSnapshot(database.connectionString, (db) =>
-				readClientList(db, viewer, query, stamp),
-			),
+			await readSnapshot(database.connectionString, (db) => read(db, stamp)),
 		);
 	} catch (error) {
 		const refusal = refusalOf(error);
 		return c.json(refusal.body, refusal.status);
 	}
+}
+
+export const clients = new Hono<DatabaseEnv>();
+
+clients.get("/clients", (c) =>
+	answer(c, (params, viewer) => {
+		const query = listQuery(params, viewer);
+		return (db, stamp) => readClientList(db, viewer, query, stamp);
+	}),
+);
+
+// The old door answered any id that is not a UUID before anything else.
+// It tested the raw path, where a percent-encoded id is not a UUID.
+clients.get("/clients/:id{.*}", async (c) => {
+	const id = c.req.param("id");
+	if (!UUID.test(id) || new URL(c.req.url).pathname !== c.req.path)
+		return c.json({ error: "not_found" }, 404);
+	return answer(c, (params, viewer) => {
+		checkFields(params, RECORD_FIELDS, viewer);
+		const contract = oneOf(params, "contract", CONTRACTS, null);
+		return (db, stamp) => readClient(db, viewer, id, contract, stamp);
+	});
 });

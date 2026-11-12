@@ -39,6 +39,7 @@ export type Stamp = { observedAt: Date; correlationId: string };
 const STATUS = {
 	QUERY_INVALID: 400,
 	AUTHORIZATION_REFUSED: 403,
+	RECORD_NOT_FOUND: 404,
 	VIEWER_OWNER_UNKNOWN: 409,
 	INTERNAL_ERROR: 500,
 	DEPENDENCY_UNAVAILABLE: 503,
@@ -66,6 +67,14 @@ export const invalid = (detail: NonNullable<RefusalBody["detail"]>) =>
 const NOTE =
 	"Status and ETL are what someone entered on this record. They are shown as entered, and they are not proof that an agreement was signed or that anyone was put on the work.";
 const FRESH_FOR_MS = 60_000;
+const NOT_IN_THIS_READ = [
+	"assignments",
+	"negotiations",
+	"deals",
+	"email",
+	"documents",
+	"history",
+];
 
 const lastDealAt = sql<
 	string | null
@@ -113,6 +122,19 @@ const ownedByViewer = (viewerId: string | null) =>
 // The searcher's %, _ and \ match themselves.
 const likeTerm = (q: string) => `%${q.replace(/([\\%_])/g, "\\$1")}%`;
 
+// The legacy shape, for a caller that names no contract.
+const shaped = <Row extends { last_deal_at: unknown; deal_type: unknown }>(
+	row: Row,
+	contract: Contract | null | undefined,
+) => {
+	if (contract) return row;
+	const { last_deal_at: _, deal_type: __, ...legacy } = row;
+	return legacy;
+};
+
+const viewerIdOf = async (db: Kysely<DB>, viewer: string) =>
+	(await partnerId(db, viewer).executeTakeFirst())?.id ?? null;
+
 function matchingClients(db: Kysely<DB>, query: ClientQuery, viewer: string) {
 	const { q, owner, status, type, pipeline } = query;
 	let clients = liveClients(db);
@@ -139,7 +161,7 @@ export async function readClientList(
 	query: ClientQuery,
 	stamp: Stamp,
 ) {
-	const ownerId = (await partnerId(db, viewer).executeTakeFirst())?.id ?? null;
+	const ownerId = await viewerIdOf(db, viewer);
 	const matching = matchingClients(db, query, viewer);
 	const { total } = await matching
 		.select(sql<number>`count(*)::int`.as("total"))
@@ -193,14 +215,76 @@ export async function readClientList(
 		page_size: PAGE_SIZE,
 		page_count,
 		out_of_range: query.page > page_count,
-		// The legacy shape, for a caller that names no contract.
-		rows: query.contract
-			? rows
-			: rows.map(({ last_deal_at: _, deal_type: __, ...legacy }) => legacy),
+		rows: rows.map((row) => shaped(row, query.contract)),
 		facets: { statuses, types },
 		// The status and type foreign keys always find a label, so the old
 		// signal for an unlabelled code is always null.
 		partial: null,
+		recorded_field_note: NOTE,
+		source: source(stamp),
+	};
+}
+
+export async function readClient(
+	db: Kysely<DB>,
+	viewer: string,
+	id: string,
+	contract: Contract | null,
+	stamp: Stamp,
+) {
+	const ownerId = await viewerIdOf(db, viewer);
+	const record = await liveClients(db)
+		.where("c.id", "=", id)
+		.select((eb) => [
+			"c.id",
+			"c.roster_ref as ref",
+			"p.name",
+			"p.kind as party_kind",
+			"p.city",
+			"p.state",
+			"p.county",
+			"p.title",
+			"p.specialty",
+			"p.npi",
+			"p.phone",
+			"p.cell",
+			"p.email",
+			"p.contact_state",
+			"p.contact_state_reason",
+			"p.contact_state_until",
+			"p.contact_state_cadence",
+			"c.status as recorded_status",
+			"cs.label as recorded_status_label",
+			"cs.is_active_pipeline as recorded_status_active_pipeline",
+			"cs.note as recorded_status_note",
+			"c.etl_status as recorded_etl_status",
+			"c.client_type as recorded_client_type",
+			"ct.label as recorded_client_type_label",
+			"c.vertical",
+			lastDealAt.as("last_deal_at"),
+			"c.deal_type_label as deal_type",
+			"c.subtype",
+			"c.acquisition_source",
+			"c.acquisition_detail",
+			"c.contact_label",
+			"c.deal_type_label",
+			"c.specialty_type_label",
+			"c.possible_duplicate_label",
+			"c.notes",
+			"c.owner_label",
+			ownedByViewer(ownerId).as("owned_by_viewer"),
+			"c.version as record_version",
+			asText(eb.ref("c.created_at")).as("created_at"),
+			asText(eb.ref("c.updated_at")).as("updated_at"),
+		])
+		.executeTakeFirst();
+	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
+	return {
+		viewer,
+		dataset: "clients",
+		record: shaped(record, contract),
+		partial: null,
+		not_in_this_read: NOT_IN_THIS_READ,
 		recorded_field_note: NOTE,
 		source: source(stamp),
 	};
