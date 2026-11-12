@@ -107,7 +107,7 @@ const ambiguous = (query: string, candidates: Candidate[]) => ({
 	hint: "Choose one exact target and call catch-me-up; this verb never guesses.",
 });
 
-// The old timeline had no tie-break; the engine's is decision 16.
+// The old timeline had no tie-break; the engine's is decision 17.
 const timeline = (db: Reader, type: string, id: string, limit: number) =>
 	db
 		.selectFrom("v_subject_timeline")
