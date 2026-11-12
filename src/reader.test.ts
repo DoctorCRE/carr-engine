@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
+import { readRecentActivity } from "./activity/read.ts";
 import { readClient, readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
@@ -20,6 +21,7 @@ import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
+import { readVendorMarkets } from "./vendors/markets.ts";
 import { readVendor, readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
@@ -41,6 +43,7 @@ const readable = [
 	"party_link_deal",
 	"practice_origination_event",
 	"practice_origination_feed",
+	"v_calendar_capture_receipt",
 	"v_capture_candidate_queue",
 	"v_capture_session_status",
 	"v_client_account",
@@ -77,10 +80,15 @@ const readable = [
 	"v_record_flag_subject",
 	"v_ref_index",
 	"v_requirement_request",
+	"v_subject_timeline",
 	"v_vendor_assignment_context",
 	"vendor",
 	"vendor_category",
 	"vendor_disposition",
+	"vendor_market",
+	"vendor_market_key",
+	"vendor_market_membership",
+	"vendor_market_regional_reference",
 	"vendor_relationship_level",
 	"vendor_stage",
 ];
@@ -218,7 +226,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list and a vendor's details and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, recent activity and a vendor's details and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -380,6 +388,21 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			assert.equal(vendor.record.people?.length, 1);
 			await withAdmin(
 				(admin) =>
+					admin.query(`insert into vendor_market select 'example', 'Example', 'market',
+							'Example', 'Example', id, now() from actor;
+						insert into vendor_market_membership select 'example', vendor.id, true, null,
+							'Example', actor.id, now() from vendor, actor`),
+				database,
+			);
+			const markets = await readSnapshot(login, (db) =>
+				readVendorMarkets(db, "Example"),
+			);
+			assert.partialDeepStrictEqual(markets, {
+				selected_market: "example",
+				vendors: [{ name: "Example Clinic" }],
+			});
+			await withAdmin(
+				(admin) =>
 					admin.query(`insert into practice_origination_feed (source) values ('nppes');
 						insert into practice_origination_event (source, record_key, fingerprint, npi,
 							name, city, state, kind, evidence_date, date_basis, source_url, facts,
@@ -396,6 +419,31 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			assert.deepEqual(
 				reasons.cards.map((c) => [c.record_key, c.route]),
 				[["1000000009", "research"]],
+			);
+			await withAdmin(async (admin) => {
+				await admin.query(
+					"insert into activity_kind (slug, label, is_contact) values ('reader-call', 'Example', true)",
+				);
+				await admin.query(
+					`with a as (insert into activity (occurred_at, actor_id, kind, summary, deal_id)
+							select '2026-01-02 03:04:05.678901+00', actor.id, 'reader-call', 'Example call', $1
+							from actor returning id, actor_id)
+						insert into tool_call (idempotency_key, verb, actor_id, request_hash, response)
+						select 'calcap-reader', 'log-activity', actor_id, 'example',
+							jsonb_build_object('activity_id', id) from a`,
+					[seeded.deal],
+				);
+			}, database);
+			const recent = await readSnapshot(login, (db) =>
+				readRecentActivity(db, seeded.actor, "Reader Deal", 10),
+			);
+			assert.ok("catch_up" in recent, JSON.stringify(recent));
+			assert.deepEqual(
+				[
+					recent.catch_up.timeline.map((r) => r.occurred_at),
+					recent.catch_up.calendar_history.map((r) => r.key),
+				],
+				[["2026-01-02T03:04:05.678Z"], ["calcap-reader"]],
 			);
 			const visible = await withAdmin(
 				(admin) =>
@@ -415,6 +463,7 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				"capture_candidate",
 				"deal_note",
 				"schema_migrations",
+				"tool_call",
 			] as const) {
 				await assert.rejects(
 					readSnapshot(login, (db) =>
