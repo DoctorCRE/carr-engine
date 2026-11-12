@@ -20,6 +20,7 @@ const HINTS = {
 		"Supply the named required fields from the tool's documented input.",
 	unregistered_operation_fields: "Remove fields outside the documented input.",
 	invalid_number: "Supply a numeric value for the named fields.",
+	tool_call_markup_in_value: "Remove tool-call markup from the named fields.",
 	database_unavailable:
 		"The operation failed. Quote the correlation_id when reporting it.",
 };
@@ -82,6 +83,7 @@ type Verb =
 	| "capture-queue"
 	| "deal-room-board"
 	| "find"
+	| "find-and-catch-up"
 	| "get-deal-room"
 	| "ideal-client-profile"
 	| "lead-board"

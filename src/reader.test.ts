@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
+import { readRecentActivity } from "./activity/read.ts";
 import { readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
@@ -25,6 +26,7 @@ import { url } from "./test-rollback.ts";
 // name, and `carr_business_date()`. The views read their tables with their
 // owner's rights.
 const readable = [
+	"activity",
 	"actor",
 	"client",
 	"client_status",
@@ -37,6 +39,7 @@ const readable = [
 	"party",
 	"practice_origination_event",
 	"practice_origination_feed",
+	"tool_call",
 	"v_capture_candidate_queue",
 	"v_capture_session_status",
 	"v_client_account",
@@ -73,6 +76,7 @@ const readable = [
 	"v_record_flag_subject",
 	"v_ref_index",
 	"v_requirement_request",
+	"v_subject_timeline",
 	"vendor",
 ];
 
@@ -209,7 +213,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out and the client list and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list and recent activity and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -325,6 +329,31 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			assert.deepEqual(
 				reasons.cards.map((c) => [c.record_key, c.route]),
 				[["1000000009", "research"]],
+			);
+			await withAdmin(async (admin) => {
+				await admin.query(
+					"insert into activity_kind (slug, label, is_contact) values ('reader-call', 'Example', true)",
+				);
+				await admin.query(
+					`with a as (insert into activity (occurred_at, actor_id, kind, summary, deal_id)
+							select '2026-01-02 03:04:05.678901+00', actor.id, 'reader-call', 'Example call', $1
+							from actor returning id, actor_id)
+						insert into tool_call (idempotency_key, verb, actor_id, request_hash, response)
+						select 'calcap-reader', 'log-activity', actor_id, 'example',
+							jsonb_build_object('activity_id', id) from a`,
+					[seeded.deal],
+				);
+			}, database);
+			const recent = await readSnapshot(login, (db) =>
+				readRecentActivity(db, seeded.actor, "Reader Deal", 10),
+			);
+			assert.ok("catch_up" in recent, JSON.stringify(recent));
+			assert.deepEqual(
+				[
+					recent.catch_up.timeline.map((r) => r.occurred_at),
+					recent.catch_up.calendar_history.map((r) => r.key),
+				],
+				[["2026-01-02T03:04:05.678Z"], ["calcap-reader"]],
 			);
 			const visible = await withAdmin(
 				(admin) =>
