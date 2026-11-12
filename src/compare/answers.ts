@@ -5,16 +5,19 @@ import { UUID } from "../uuid.ts";
 // ties, so which rows made it, and what `decides` derives from them, may differ.
 type Cap = { size: number; decides: readonly string[] };
 // `key` names the fields that pair rows without an ID; otherwise the whole row does.
+// A `serial` ID is bigint text, which prints as a record ID.
 type Rows = {
 	id?: string;
+	serial?: true;
 	key?: readonly string[];
 	ref?: string;
 	cap?: Cap;
 } & ({ sortedBy: readonly string[] } | { unordered: true });
-type ReadShape = {
+export type ReadShape = {
 	rows: Record<string, Rows>;
 	opaque?: readonly string[];
-	ignore?: readonly string[];
+	// The time the answer was made: its value may differ, its format may not.
+	clocks?: readonly string[];
 };
 type Kind =
 	| "value differs"
@@ -29,6 +32,7 @@ type Row = { key: string; step: Step; value: unknown; ties: unknown[] | null };
 
 const REF = /^[A-Z]{1,3}(?:-[A-Z0-9]+)*-[0-9]+$/;
 const FIELD = /^[a-z][a-z0-9_]*$/;
+const SERIAL = /^[0-9]+$/;
 
 function kindOf(value: unknown) {
 	if (value === null) return "null";
@@ -51,6 +55,13 @@ function canonical(value: unknown): string {
 	return `{${keys.map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
 }
 
+const sameFormat = (a: unknown, b: unknown) =>
+	typeof a === "string" &&
+	typeof b === "string" &&
+	a.replace(/[0-9]/g, "0") === b.replace(/[0-9]/g, "0");
+
+export const strict = (id: string) => ({ id, sortedBy: [] });
+
 const fieldOf = (value: unknown, name?: string) =>
 	isRecord(value) && name ? value[name] : undefined;
 
@@ -64,8 +75,11 @@ function baseOf(value: unknown, rows: Rows): string {
 
 function stepOf(value: unknown, index: number, rows: Rows): Step {
 	const id = fieldOf(value, rows.id);
-	if ((typeof id === "string" && UUID.test(id)) || Number.isSafeInteger(id))
-		return { id: String(id) };
+	const printed =
+		typeof id === "string"
+			? UUID.test(id) || (rows.serial === true && SERIAL.test(id))
+			: Number.isSafeInteger(id);
+	if (printed) return { id: String(id) };
 	const ref = fieldOf(value, rows.ref);
 	return typeof ref === "string" && REF.test(ref) ? { id: ref } : { index };
 }
@@ -129,7 +143,7 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	const tiedRowsReordered: Place[] = [];
 	const full: (Cap & { path: string })[] = [];
 	const opaque = new Set(shape.opaque);
-	const ignored = new Set(shape.ignore);
+	const clocks = new Set(shape.clocks);
 
 	function walk(a: unknown, b: unknown, path: string, records: Step[]): void {
 		if (kindOf(a) !== kindOf(b)) {
@@ -141,7 +155,7 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 			for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
 				const field = FIELD.test(key) ? key : "*";
 				const child = path ? `${path}.${field}` : field;
-				if (ignored.has(child)) continue;
+				if (clocks.has(child) && sameFormat(a[key], b[key])) continue;
 				if (!Object.hasOwn(b, key))
 					differences.push({ path: child, records, kind: "missing in new" });
 				else if (!Object.hasOwn(a, key))
