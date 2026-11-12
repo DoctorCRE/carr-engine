@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { UUID } from "../uuid.ts";
 
 // A list at its cap holds one of several right answers when its order has
 // ties, so which rows made it, and what `decides` derives from them, may differ.
@@ -26,8 +27,6 @@ type Place = { path: string; records: Step[] };
 export type Difference = Place & { kind: Kind };
 type Row = { key: string; step: Step; value: unknown; ties: unknown[] | null };
 
-export const UUID =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REF = /^[A-Z]{1,3}(?:-[A-Z0-9]+)*-[0-9]+$/;
 const FIELD = /^[a-z][a-z0-9_]*$/;
 

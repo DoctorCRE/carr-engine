@@ -270,6 +270,50 @@ test("one lead opens with the board, pages by the returned cursor, and refuses a
 		}
 	}));
 
+test("a lead that is suppressed, or whose party is merged or deleted, opens as null", () =>
+	withSnapshot(async (url) => {
+		const db = new pg.Client({ connectionString: url });
+		await db.connect();
+		try {
+			const { rows } = await db.query<{
+				id: string;
+				name: string;
+			}>(`with a as (insert into actor (slug, kind, display_name)
+					values ('leads-route-partner', 'human', 'Example') returning id),
+				k as (insert into contact_state (slug, label, contactable, sort)
+					values ('active', 'Example', true, 1)),
+				s as (insert into lead_stage (slug, label, sort) values ('new', 'New', 1)),
+				p as (insert into party (kind, name, created_by, updated_by)
+					select 'org', n, id, id from a,
+					unnest(array['live', 'suppressed', 'merged', 'deleted']) n
+					returning id, name, created_by),
+				l as (insert into lead (party_id, stage, suppressed, created_by, updated_by)
+					select id, 'new', name = 'suppressed', created_by, created_by from p
+					returning id, party_id)
+				select l.id, p.name from l join p on p.id = l.party_id`);
+			const lead = Object.fromEntries(rows.map((r) => [r.name, r.id]));
+			await db.query(`update party set merged_into = (select id from party
+				where name = 'live') where name = 'merged'`);
+			await db.query(
+				"update party set deleted_at = now() where name = 'deleted'",
+			);
+			for (const off of ["suppressed", "merged", "deleted"]) {
+				const response = await board(`?lead_id=${lead[off]}`, url);
+				const opened = (await response.json()) as {
+					leads: { id: string }[];
+					detail: unknown;
+				};
+				assert.deepEqual(
+					[response.status, opened.leads.map((l) => l.id), opened.detail],
+					[200, [lead.live], null],
+					off,
+				);
+			}
+		} finally {
+			await db.end();
+		}
+	}));
+
 test("the board answers, and refuses whole on bad timing or past the finding limit", () =>
 	withSnapshot(async (url) => {
 		const db = new pg.Client({ connectionString: url });
