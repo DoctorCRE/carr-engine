@@ -10,14 +10,16 @@ import {
 	type WriterEnv,
 } from "./save.ts";
 
-const FIELDS = ["idempotency_key", "deal", "field"];
-
 export const presence = new Hono<WriterEnv>();
 
 presence.post("/presence", (c) =>
 	answerSave(
 		c,
-		{ verb: "presence-lease", fields: FIELDS, required: FIELDS },
+		{
+			verb: "presence-lease",
+			fields: { idempotency_key: {}, deal: {}, field: {} },
+			required: ["idempotency_key", "deal", "field"],
+		},
 		lease,
 	),
 );
@@ -53,5 +55,10 @@ async function lease({ tx, actor_id }: Saving, { deal, field }: JsonObject) {
 		)
 		.returning(isoMillis(sql.ref("expires_at")).as("expires_at"))
 		.executeTakeFirstOrThrow();
-	return { ok: true, deal_id: subject.id, field, expires_at };
+	return {
+		ok: true,
+		deal_id: subject.id,
+		field,
+		expires_at: new Date(expires_at),
+	};
 }
