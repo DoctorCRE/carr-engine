@@ -56,7 +56,7 @@ another order are a `key order` difference at the first moved key. A field
 compared whole, such as a card's facts, reports it at its own path. Order is
 read from the parsed answers, where JavaScript puts whole-number keys first, so
 their order is not checked. A refused deal, client or vendor is compared as its
-refusal; a refused board, invoices read or list counts as failed. A network or sign-in failure stops the run. It
-prints counts, field paths and record IDs, never values, bodies or the cookie.
-Exit codes are 0 for a match, 1 for differences or unsettled requests and 2 for
-failure.
+refusal; a refused board, invoices read or list counts as failed. A network or
+sign-in failure stops the run. It prints counts, field paths and record IDs,
+never values, bodies or the cookie. Exit codes are 0 for a match, 1 for
+differences or unsettled requests and 2 for failure.
