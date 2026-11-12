@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { UUID } from "../uuid.ts";
 
 // A list at its cap holds one of several right answers when its order has
@@ -145,7 +144,9 @@ function untie(rows: Row[]): Row[] {
 	let run: Row[] = [];
 	for (const row of rows) {
 		const tied =
-			run[0]?.ties && row.ties && isDeepStrictEqual(run[0].ties, row.ties);
+			run[0]?.ties &&
+			row.ties &&
+			canonical(run[0].ties) === canonical(row.ties);
 		if (run[0] && !tied) {
 			sorted.push(...run.sort(byKey));
 			run = [];
@@ -234,7 +235,9 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 			rows.cap &&
 			a.length >= rows.cap.size &&
 			b.length === a.length &&
-			oneSided.every((row) => isDeepStrictEqual(row.ties, left.at(-1)?.ties))
+			oneSided.every(
+				(row) => canonical(row.ties) === canonical(left.at(-1)?.ties),
+			)
 		)
 			full.push({ ...rows.cap, path });
 		for (const row of left) {

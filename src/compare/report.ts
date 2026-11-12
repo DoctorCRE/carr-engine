@@ -1,5 +1,5 @@
 import type { Difference } from "./answers.ts";
-import type { Ask, Outcome, Run } from "./run.ts";
+import { type Ask, type Outcome, READS, type Run } from "./run.ts";
 
 type Tally = Map<string, { records: number; ids: Set<string> }>;
 
@@ -13,48 +13,10 @@ const RESULTS = [
 	"failed",
 ] as const;
 
-function readOf(ask: Ask) {
-	switch (ask.read) {
-		case "board":
-			return `board ${ask.workspace}`;
-		case "deal":
-			return "deal detail";
-		case "client fit":
-			return "client fit";
-		case "capture queue":
-			return "capture queue";
-		case "feed":
-			return "change feed";
-		case "find":
-			return "search find";
-		case "lead board":
-			return "lead board";
-		case "lead":
-			return "lead detail";
-		case "quiet follow-ups":
-			return "quiet follow-ups";
-		case "territory":
-			return "territory";
-		case "reasons to reach out":
-			return "reasons to reach out";
-		case "invoices":
-			return "invoices";
-		case "client list":
-			return "client list";
-		case "client":
-			return "client detail";
-		case "vendor list":
-			return "vendor list";
-		case "vendor":
-			return "vendor detail";
-		case "vendor markets":
-			return "vendor markets";
-		case "relationships":
-			return "relationships";
-		case "recent activity":
-			return "recent activity";
-	}
-}
+const readOf = (ask: Ask) =>
+	ask.read === "board"
+		? `board ${ask.workspace}`
+		: (READS[ask.read].label ?? ask.read);
 function recordOf(ask: Ask) {
 	switch (ask.read) {
 		case "deal":
@@ -71,27 +33,6 @@ function recordOf(ask: Ask) {
 			return undefined;
 	}
 }
-const PREFIXES = {
-	board: "board",
-	deal: "detail",
-	"client fit": "fit",
-	"capture queue": "queue",
-	feed: "feed",
-	find: "find",
-	"lead board": "leads",
-	lead: "lead",
-	"quiet follow-ups": "quiet",
-	territory: "territory",
-	"reasons to reach out": "reasons",
-	invoices: "invoices",
-	"client list": "clients",
-	client: "client",
-	"vendor list": "vendors",
-	vendor: "vendor",
-	"vendor markets": "markets",
-	relationships: "network",
-	"recent activity": "activity",
-};
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>
 		row
@@ -154,7 +95,7 @@ export function report(target: string, run: Run): string {
 	const ties = new Map<string, number>();
 	for (const outcome of run.outcomes) {
 		if (!("comparison" in outcome)) continue;
-		const prefix = PREFIXES[outcome.ask.read];
+		const { prefix } = READS[outcome.ask.read];
 		for (const difference of outcome.comparison.differences)
 			tally(paths, prefix, outcome.ask, difference);
 		for (const difference of outcome.comparison.capAmbiguous)
