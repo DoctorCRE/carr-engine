@@ -23,6 +23,7 @@ const HINTS = {
 		"Supply the named required fields from the tool's documented input.",
 	unregistered_operation_fields: "Remove fields outside the documented input.",
 	caller_authority_field_forbidden: "Remove caller-supplied authority fields.",
+	invalid_boolean: "Supply a boolean value for the named fields.",
 	invalid_number: "Supply a numeric value for the named fields.",
 	tool_call_markup_in_value: "Remove tool-call markup from the named fields.",
 	database_unavailable:
