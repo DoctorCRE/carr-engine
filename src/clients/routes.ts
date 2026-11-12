@@ -212,11 +212,10 @@ async function record(
 	});
 }
 
-// A route matches the raw path but decodes its values, so only the pattern
-// keeps an encoded id from passing as a UUID.
-const ID = ":id{[0-9A-Fa-f-]+}";
+// Values are decoded, so only the pattern keeps an encoded id from passing as a UUID.
+const ID_PATTERN = ":id{[0-9A-Fa-f-]+}";
 
-directory.get(`/clients/${ID}`, (c) =>
+directory.get(`/clients/${ID_PATTERN}`, (c) =>
 	record(c, c.req.param("id"), readClient),
 );
 directory.get("/vendors", (c) =>
@@ -225,6 +224,6 @@ directory.get("/vendors", (c) =>
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );
-directory.get(`/vendors/${ID}`, (c) =>
+directory.get(`/vendors/${ID_PATTERN}`, (c) =>
 	record(c, c.req.param("id"), readVendor),
 );
