@@ -3,6 +3,7 @@ import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../database.d.ts";
 import {
 	asText,
+	clientPortalUrlOf,
 	phaseChangeOf,
 	phaseStartedOn,
 	phaseStartsOf,
@@ -139,6 +140,7 @@ export async function readBoard(
 			asText(q.ref("b.closed_on")).as("closed_on"),
 			"b.lane",
 			"b.outcome",
+			clientPortalUrlOf(db, q.ref("b.id")).as("client_portal_url"),
 			jsonObjectFrom(phaseChangeOf(db, q.ref("b.id"))).as("phase_change"),
 			jsonArrayFrom(phaseStartsOf(db, q.ref("b.id"))).as("phase_started_on"),
 			asText(q.ref("b.parked_at")).as("parked_at"),

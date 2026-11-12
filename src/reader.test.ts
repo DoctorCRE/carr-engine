@@ -18,6 +18,7 @@ const readable = [
 	"v_client_account",
 	"v_client_engagement_status",
 	"v_deal_board",
+	"v_deal_client_portal",
 	"v_deal_reconciliation_read",
 	"v_deal_room_account",
 	"v_deal_room_action",

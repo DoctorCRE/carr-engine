@@ -16,6 +16,12 @@ export const vendorsOf = (db: Kysely<DB>, deal: DealId) =>
 		.orderBy(sql`v.contact->>'name'`)
 		.orderBy("v.party_id");
 
+export const clientPortalUrlOf = (db: Kysely<DB>, deal: DealId) =>
+	db
+		.selectFrom("v_deal_client_portal as cp")
+		.select("cp.client_portal_url")
+		.where("cp.deal_id", "=", deal);
+
 export const phaseChangeOf = (db: Kysely<DB>, deal: DealId) =>
 	db
 		.selectFrom("v_deal_room_phase_change as pc")

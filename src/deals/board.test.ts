@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import type { Insertable, Kysely } from "kysely";
+import { type Insertable, type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
 import { withRollback } from "../test-rollback.ts";
 import { readBoard, shortName } from "./board.ts";
@@ -90,6 +90,10 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 				city: "Example City",
 				next_date: "2026-05-01",
 			});
+			await sql`insert into ops.client_portal (slug, client_id, deal_id, password_hash)
+				values ('example-board', ${owner.id}, ${id}, ${`$2b$12$${"a".repeat(53)}`})`.execute(
+				tx,
+			);
 			await tx
 				.insertInto("vendor_category")
 				.values({ slug: `bank-${tag}`, label: "Example", sort: 1 })
@@ -322,6 +326,7 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 				closed_on: null,
 				lane: null,
 				outcome: null,
+				client_portal_url: "https://share.example.com/example-board",
 				phase_change: {
 					deal_id: id,
 					event_id: phaseEvent.id,
