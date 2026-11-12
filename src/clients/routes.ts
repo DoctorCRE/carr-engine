@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
+import { UUID } from "../uuid.ts";
 import {
 	BusinessRefusal,
 	type ClientQuery,
@@ -29,7 +30,6 @@ const LIST_FIELDS = [
 ];
 const SCOPES = ["team", "mine"] as const;
 const OWNERS = ["all", ...PARTNERS] as const;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const PAGE = /^[1-9][0-9]{0,3}$/;
 const MAX_PAGE = 200;
