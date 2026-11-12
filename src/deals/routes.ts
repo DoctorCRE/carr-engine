@@ -1,12 +1,13 @@
 import { type Context, Hono } from "hono";
-import { type Reader, readSnapshot } from "../reader.ts";
-import type { SessionEnv } from "../session.ts";
+import { failureKind, sqlState } from "../failure.ts";
+import {
+	DATABASE_UNAVAILABLE,
+	type DatabaseEnv,
+	type Reader,
+	readSnapshot,
+} from "../reader.ts";
 import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
 import { readDealDetail } from "./detail.ts";
-
-export type DealsEnv = SessionEnv & {
-	Bindings: { DATABASE?: { connectionString: string } };
-};
 
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
@@ -44,7 +45,7 @@ class Refusal {
 const isWorkspace = (value: string): value is Workspace =>
 	(WORKSPACES as readonly string[]).includes(value);
 
-const refuse = (c: Context<DealsEnv>, refusal: Refusal) =>
+const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
 	c.json(
 		{
 			error: refusal.error,
@@ -55,29 +56,12 @@ const refuse = (c: Context<DealsEnv>, refusal: Refusal) =>
 		refusal.status,
 	);
 
-const sqlState = (error: unknown) =>
-	typeof error === "object" &&
-	error !== null &&
-	"code" in error &&
-	typeof error.code === "string" &&
-	/^[0-9A-Z]{5}$/.test(error.code)
-		? error.code
-		: undefined;
-
-// Only the SQLSTATE or the error's class name: messages and details can carry
-// the request's input or row values.
-const failureKind = (error: unknown) =>
-	sqlState(error) ??
-	(error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name)
-		? error.name
-		: "unknown");
-
 async function answer(
-	c: Context<DealsEnv>,
+	c: Context<DatabaseEnv>,
 	read: (db: Reader) => Promise<unknown>,
 ) {
 	const database = c.env.DATABASE;
-	if (!database) return c.json({ error: "database_unavailable" }, 503);
+	if (!database) return c.json(DATABASE_UNAVAILABLE, 503);
 	const started = performance.now();
 	let result: unknown;
 	try {
@@ -97,7 +81,7 @@ async function answer(
 	return result instanceof Refusal ? refuse(c, result) : c.json(result);
 }
 
-export const deals = new Hono<DealsEnv>();
+export const deals = new Hono<DatabaseEnv>();
 
 deals.get("/deals", async (c) => {
 	const workspace = c.req.query("workspace");

@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 
 import { connection } from "./connection.ts";
-import { type DealsEnv, deals } from "./deals/routes.ts";
+import { deals } from "./deals/routes.ts";
+import type { DatabaseEnv } from "./reader.ts";
 import { requireSession } from "./session.ts";
 
-type WorkerEnv = DealsEnv & {
+type WorkerEnv = DatabaseEnv & {
 	Bindings: { CF_VERSION_METADATA: { id: string } };
 };
 

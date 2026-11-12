@@ -1,16 +1,15 @@
 import { Hono } from "hono";
 import { sql } from "kysely";
-import { readSnapshot } from "./reader.ts";
-import type { SessionEnv } from "./session.ts";
+import {
+	DATABASE_UNAVAILABLE,
+	type DatabaseEnv,
+	readSnapshot,
+} from "./reader.ts";
 
-type ConnectionEnv = SessionEnv & {
-	Bindings: { DATABASE?: { connectionString: string } };
-};
-
-export const connection = new Hono<ConnectionEnv>();
+export const connection = new Hono<DatabaseEnv>();
 
 connection.get("/database", async (c) => {
-	const unavailable = () => c.json({ error: "database_unavailable" }, 503);
+	const unavailable = () => c.json(DATABASE_UNAVAILABLE, 503);
 	const database = c.env.DATABASE;
 	if (!database) return unavailable();
 	try {

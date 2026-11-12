@@ -12,7 +12,12 @@ import {
 	vendorsOf,
 } from "./shared.ts";
 
+// The old system's caps.
 const HISTORY_CAP = 500;
+const ROUNDS_CAP = 6;
+const DOCUMENTS_CAP = 20;
+// Salesforce placeholder columns on deal, never real figures. Event JSON can
+// nest them below where v_deal_room_event strips them.
 const PLACEHOLDERS = new Set([
 	"sf_commission_placeholder",
 	"sf_close_date_placeholder",
@@ -179,7 +184,7 @@ export async function readDealDetail(
 		.where("deal_id", "=", id)
 		.orderBy("round_no", "desc")
 		.orderBy("proposed_on", "desc")
-		.limit(6)
+		.limit(ROUNDS_CAP)
 		.execute();
 	const documents = await db
 		.selectFrom("v_deal_room_document as d")
@@ -193,7 +198,7 @@ export async function readDealDetail(
 		])
 		.where("d.deal_id", "=", id)
 		.orderBy("d.prepared_at", "desc")
-		.limit(20)
+		.limit(DOCUMENTS_CAP)
 		.execute();
 	const lease = await db
 		.selectFrom("v_deal_room_current_lease")
