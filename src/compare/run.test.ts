@@ -25,6 +25,12 @@ const invoices = (entries: object[] = [], observed_at = clock) => ({
 	entries,
 	observed_at,
 });
+const source = {
+	observed_at: clock,
+	valid_until: clock,
+	correlation_id: uuid(90),
+};
+const directory = (rows: object[] = []) => ({ rows, source });
 const fixed = {
 	"client fit": { schema_version: "ideal-client-profile.v1", profiles: [] },
 	"capture queue": { candidates: [] },
@@ -34,8 +40,10 @@ const fixed = {
 		pages: [{ ok: true, cards: [], next_cursor: null }],
 	},
 	invoices: invoices(),
+	"client list": directory(),
 };
 const [l1, l2] = [uuid(31), uuid(32)];
+const [c1, c2] = [uuid(51), uuid(52)];
 const leadRow = (id: string, fields: object = {}) => ({
 	id,
 	stage: "new",
@@ -89,6 +97,10 @@ function answer(ask: Ask) {
 			return workspace();
 		case "lead":
 			return opened(ask.lead);
+		case "client":
+			return { record: { id: ask.client }, source };
+		case "recent activity":
+			return { state: "completed", catch_up: { timeline: [] } };
 		default:
 			return fixed[ask.read];
 	}
@@ -103,6 +115,10 @@ function label(ask: Ask) {
 			return `find ${ask.query}`;
 		case "lead":
 			return ask.lead;
+		case "client":
+			return ask.client;
+		case "recent activity":
+			return `activity ${ask.record}`;
 		default:
 			return ask.read;
 	}
@@ -150,6 +166,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"territory",
 		"reasons to reach out",
 		"invoices",
+		"client list",
 		d1,
 		d2,
 		d3,
@@ -163,8 +180,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 18);
-	assert.deepEqual([run.oldReads, run.engineReads], [19, 38]);
+	assert.equal(pauses, 19);
+	assert.deepEqual([run.oldReads, run.engineReads], [20, 40]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -242,6 +259,7 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"territory matched",
 			"reasons to reach out matched",
 			"invoices matched",
+			"client list matched",
 			`${d1} matched`,
 			`${d2} matched`,
 			`${d3} matched`,
@@ -314,7 +332,7 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 19, engine reads made: 38
+old reads made: 20, engine reads made: 40
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
@@ -329,6 +347,7 @@ quiet follow-ups                                 1         1         0         0
 territory                                        1         1         0         0         0         0         0
 reasons to reach out                             1         1         0         0         0         0         0
 invoices                                         1         1         0         0         0         0         0
+client list                                      1         1         0         0         0         0         0
 deal detail                                      3         0         0         0         3         0         0
 lead detail                                      2         2         0         0         0         0         0
 
@@ -516,9 +535,28 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 			},
 		},
 		invoices: invoices([{ deal_id: d1, name: m(s), commission_id: m(s) }]),
+		directory: {
+			"client list": directory([{ id: c1, ref: m(s), name: m(s) }]),
+			client: { record: { id: c1, [upper(s)]: m(s), notes: m(s) }, source },
+			"recent activity": {
+				state: "completed",
+				query: m(s),
+				match: { kind: "client", name: m(s), target: m(s) },
+				catch_up: {
+					timeline: [
+						{
+							entry_kind: "note",
+							occurred_at: clock,
+							detail: { [m(s)]: m(s) },
+						},
+					],
+				},
+			},
+		},
 	});
 	const answers = (s: string) => {
-		const { board, detail, fixed, feed, find, leads, invoices } = side(s);
+		const { board, detail, fixed, feed, find, leads, invoices, directory } =
+			side(s);
 		const details = new Map([d1, d2, d3].map((deal) => [deal, detail(deal)]));
 		return (ask: Ask) =>
 			ask.read === "board"
@@ -533,7 +571,11 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 								? invoices
 								: ask.read === "client fit" || ask.read === "capture queue"
 									? fixed[ask.read]
-									: leads[ask.read];
+									: ask.read === "client list" ||
+											ask.read === "client" ||
+											ask.read === "recent activity"
+										? directory[ask.read]
+										: leads[ask.read];
 	};
 	const { run } = await runWith(answers("new"), answers("old"));
 	assert.ok(
@@ -541,6 +583,12 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 			(o) => o.ask.read === "find" && markers.includes(o.ask.query),
 		),
 		"a client name from the old board was asked",
+	);
+	assert.ok(
+		run.outcomes.some(
+			(o) => o.ask.read === "recent activity" && markers.includes(o.ask.name),
+		),
+		"a name from the old list was asked",
 	);
 	assert.ok(run.outcomes.every((o) => o.result === "different"));
 	const text = report("production", run);
@@ -775,4 +823,131 @@ test("invoice entries match when only the read's clock differs, pair a deal's co
 		/tied rows in another order: array path, requests\ninvoices\.entries\[\] {2}1\n/,
 	);
 	assert.doesNotMatch(text, /observed_at|99\.00|Latest/);
+});
+
+test("opens every client on the old list's first page, and asks recent activity for the first five with a ref and a name of at most 200 characters", async () => {
+	const row = (n: number, fields: object = {}) => ({
+		id: uuid(n),
+		ref: `C-${n}`,
+		name: ` Made-up ${n} `,
+		...fields,
+	});
+	const clients = [
+		row(60, { ref: null }),
+		row(61, { name: "x".repeat(201) }),
+		row(62, { id: "not-a-uuid" }),
+		row(63, { name: "  " }),
+		...[64, 65, 66, 67, 68, 69].map((n) => row(n)),
+	];
+	const list = (ask: Ask) =>
+		ask.read === "client list" ? directory(clients) : answer(ask);
+	const { run } = await runWith(list, list);
+	const asked = run.outcomes.map((o) => o.ask);
+	assert.deepEqual(
+		asked.flatMap((ask) => (ask.read === "client" ? [ask.client] : [])),
+		[60, 61, 63, 64, 65, 66, 67, 68, 69].map(uuid),
+	);
+	assert.deepEqual(
+		asked.flatMap((ask) =>
+			ask.read === "recent activity" ? [[ask.name, ask.record]] : [],
+		),
+		[64, 65, 66, 67, 68].map((n) => [`Made-up ${n}`, uuid(n)]),
+	);
+	assert.ok(run.outcomes.every((o) => o.result === "matched"));
+});
+
+test("client reads match when only their clocks and correlation ids differ, and report a changed field by client ID", async () => {
+	const at = (call: number) =>
+		`2030-01-01T00:00:${String(call % 60).padStart(2, "0")}.000Z`;
+	const sides = (value: string, call: number) => (ask: Ask) => {
+		const stamp = {
+			observed_at: at(call),
+			valid_until: at(call),
+			correlation_id: uuid(100 + call),
+		};
+		switch (ask.read) {
+			case "client list":
+				return {
+					rows: [
+						{ id: c1, ref: "C-1", name: "Made-up", city: value },
+						{ id: c2, ref: "C-2", name: "Made-up" },
+					],
+					source: stamp,
+				};
+			case "client":
+				return { record: { id: ask.client, phone: value }, source: stamp };
+			case "recent activity":
+				return {
+					state: "completed",
+					catch_up: {
+						timeline: [
+							{ entry_kind: "note", occurred_at: clock, summary: value },
+						],
+					},
+				};
+			default:
+				return answer(ask);
+		}
+	};
+	const same = await runWith(
+		(ask, call) => sides("same", call)(ask),
+		sides("same", 99),
+	);
+	assert.ok(same.run.outcomes.every((o) => o.result === "matched"));
+
+	const { run } = await runWith(
+		(ask, call) => sides("zz-engine-value", call)(ask),
+		sides("zz-old-value", 99),
+	);
+	assert.deepEqual(
+		run.outcomes.flatMap((o) =>
+			o.result === "matched" ? [] : [`${label(o.ask)} ${o.result}`],
+		),
+		[
+			"client list different",
+			`${c1} different`,
+			`activity ${c1} different`,
+			`${c2} different`,
+			`activity ${c2} different`,
+		],
+	);
+	const text = report("production", run);
+	assert.match(
+		text,
+		new RegExp(
+			[
+				"differences: field path, kind, records, first record IDs",
+				`clients\\.rows\\[\\]\\.city  value differs  1  ${c1}`,
+				`client\\.record\\.phone  value differs  2  ${c1}, ${c2}`,
+				`activity\\.catch_up\\.timeline\\[\\]\\.summary  value differs  2  ${c1}, ${c2}`,
+				"",
+			].join("\n"),
+		),
+	);
+	assert.doesNotMatch(text, /zz-|Made-up|2030-/);
+});
+
+test("client reads that fail are recorded as failed and the run goes on", async () => {
+	const list = (ask: Ask) =>
+		ask.read === "client list"
+			? directory([{ id: c1, ref: "C-1", name: "Made-up" }])
+			: answer(ask);
+	const records = (ask: Ask) => {
+		if (ask.read === "client" || ask.read === "recent activity")
+			throw new Error("read failed");
+		return list(ask);
+	};
+	const { run } = await runWith(records, records);
+	assert.equal(run.stopped, false);
+	assert.equal(exitCode(run), 2);
+	assert.match(
+		report("production", run),
+		new RegExp(
+			`\\nnot compared: result, read, record ID\\n${[
+				`failed  client detail  ${c1}`,
+				`failed  recent activity  ${c1}`,
+				"",
+			].join("\\n")}$`,
+		),
+	);
 });

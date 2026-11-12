@@ -8,6 +8,11 @@ import {
 	detailShape,
 	feedShape,
 } from "./deals-shapes.ts";
+import {
+	activityShape,
+	clientListShape,
+	clientShape,
+} from "./directory-shapes.ts";
 import { invoicesShape } from "./invoices-shape.ts";
 import {
 	leadBoardShape,
@@ -32,7 +37,11 @@ export type Ask =
 	| { read: "quiet follow-ups" }
 	| { read: "territory" }
 	| { read: "reasons to reach out" }
-	| { read: "invoices" };
+	| { read: "invoices" }
+	| { read: "client list" }
+	| { read: "client"; client: string }
+	// `record` is the listed client whose name is asked.
+	| { read: "recent activity"; name: string; record: string };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -70,6 +79,9 @@ const SHAPES = {
 	territory: territoryShape,
 	"reasons to reach out": reasonsShape,
 	invoices: invoicesShape,
+	"client list": clientListShape,
+	client: clientShape,
+	"recent activity": activityShape,
 };
 
 // Each opened lead re-sends the whole board, so a fixed number spread over the
@@ -92,6 +104,21 @@ function leadsOn(board: unknown) {
 // the wildcards the old query passed through unescaped, and a blank.
 const FIND_NAMES = 12;
 const PROBES = ["%", "_", " "];
+
+// The app asks recent activity only for a record with a ref and a name of at
+// most 200 characters. Each name runs a search on both systems, so few are asked.
+const ACTIVITY_NAMES = 5;
+const NAME_MAX = 200;
+
+// A list answers its first page, at most 25 rows, each a record to open.
+function listed(list: unknown) {
+	const rows = isRecord(list) && Array.isArray(list.rows) ? list.rows : [];
+	return rows.filter(isRecord).flatMap(({ id, ref, name }) => {
+		if (typeof id !== "string" || !UUID.test(id)) return [];
+		const query = typeof name === "string" && ref ? name.trim() : "";
+		return [{ id, name: query && query.length <= NAME_MAX ? query : null }];
+	});
+}
 
 const FEED_DAYS = 3;
 
@@ -130,6 +157,7 @@ export async function compareDeals(
 		{ read: "territory" },
 		{ read: "reasons to reach out" },
 		{ read: "invoices" },
+		{ read: "client list" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
@@ -171,6 +199,18 @@ export async function compareDeals(
 			}
 		if (ask.read === "lead board")
 			for (const lead of leadsOn(old)) enqueue({ read: "lead", lead });
+		if (ask.read === "client list") {
+			let asked = 0;
+			for (const { id, name } of listed(old)) {
+				enqueue({ read: "client", client: id });
+				if (
+					name !== null &&
+					asked < ACTIVITY_NAMES &&
+					enqueue({ read: "recent activity", name, record: id })
+				)
+					asked++;
+			}
+		}
 		const settled = compareAnswers(first, second, shape);
 		if (settled.differences.length + settled.capAmbiguous.length > 0) {
 			run.outcomes.push({ ask, result: "unsettled" });

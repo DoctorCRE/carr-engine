@@ -45,8 +45,13 @@ because sign-in works only there. Production also needs
 `COMPARE_CONFIRM_PRODUCTION=read-only`. It only reads and waits 1.5 seconds
 between requests. It asks the engine before and after the old system and sets a
 request aside as unsettled when the engine's two answers differ. Boards are asked
-by workspace only, not by national account. A refused deal is compared as its
-refusal; a refused board or invoices read counts as failed. A network or sign-in
+by workspace only, not by national account. Clients are asked as the app asks
+them: the first page of the client list, every client on it, and recent activity
+for the first five client names. The old system answers the client reads at
+its `/api/v1/business` paths. Their `observed_at`, `valid_until` and
+`correlation_id` may differ in value, not in format. A refused deal or client is
+compared as its refusal; a refused board, invoices read or client list counts as
+failed. A network or sign-in
 failure stops the run. It prints counts, field paths and record IDs, never values, bodies or the
 cookie. Exit codes are 0 for a match, 1 for differences or unsettled requests and
 2 for failure.

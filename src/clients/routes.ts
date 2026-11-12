@@ -193,7 +193,6 @@ directory.get("/clients", (c) =>
 	}),
 );
 // The old door answered any id that is not a UUID before anything else.
-// It tested the raw path, where a percent-encoded id is not a UUID.
 async function record(
 	c: Context<DatabaseEnv>,
 	id: string,
@@ -205,8 +204,7 @@ async function record(
 		stamp: Stamp,
 	) => Promise<object>,
 ) {
-	if (!UUID.test(id) || new URL(c.req.url).pathname !== c.req.path)
-		return c.json({ error: "not_found" }, 404);
+	if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
 		const contract = oneOf(params, "contract", CONTRACTS, null);
@@ -214,7 +212,11 @@ async function record(
 	});
 }
 
-directory.get("/clients/:id{.*}", (c) =>
+// A route matches the raw path but decodes its values, so only the pattern
+// keeps an encoded id from passing as a UUID.
+const ID = ":id{[0-9A-Fa-f-]+}";
+
+directory.get(`/clients/${ID}`, (c) =>
 	record(c, c.req.param("id"), readClient),
 );
 directory.get("/vendors", (c) =>
@@ -223,6 +225,6 @@ directory.get("/vendors", (c) =>
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );
-directory.get("/vendors/:id{.*}", (c) =>
+directory.get(`/vendors/${ID}`, (c) =>
 	record(c, c.req.param("id"), readVendor),
 );
