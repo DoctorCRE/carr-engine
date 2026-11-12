@@ -14,6 +14,7 @@ import { readDealDetail } from "./deals/detail.ts";
 import { readLeadBoard } from "./leads/board.ts";
 import { readLeadDetail } from "./leads/detail.ts";
 import { readQuietFollowUps } from "./leads/quiet-follow-ups.ts";
+import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
@@ -186,7 +187,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board and quiet follow-ups and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, quiet follow-ups and territory and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -252,6 +253,14 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				readQuietFollowUps(db, { lead_days: 45, vendor_days: 90 }, null),
 			);
 			assert.deepEqual("proposals" in quiet && quiet.proposals, []);
+			const territory = await readSnapshot(login, (db) =>
+				readTerritory(db, { vertical: null, city: null, state: null }),
+			);
+			assert.deepEqual(territory, {
+				schema_version: "territory-state-board.v1",
+				coverage: "recorded_geographies_only",
+				submarkets: [],
+			});
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(
