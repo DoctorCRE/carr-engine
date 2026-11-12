@@ -18,9 +18,13 @@ type Field =
 // The old door checked allowed values and null only at the top level.
 type Nested = { type?: never } | Typed;
 
-type Typed =
+type NestedFields = Readonly<Record<string, Nested>>;
+
+// The door skips allowed and nullable on a typed field, so refuse them.
+type Typed = { allowed?: never; nullable?: never } & (
 	| { type: "boolean" | "number" }
-	| { type: "object"; fields: Readonly<Record<string, Nested>> };
+	| { type: "object"; fields: NestedFields }
+);
 
 // The old schema's order picks the refusal, so never sort these.
 export type Fields = Readonly<Record<string, Field>>;
@@ -35,9 +39,7 @@ export const isArguments = (value: unknown): value is JsonObject =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 // Every declared name, nested ones included, as the old refusals named them.
-export const declaredNames = (
-	fields: Readonly<Record<string, Nested>>,
-): string[] =>
+export const declaredNames = (fields: NestedFields): string[] =>
 	Object.entries(fields).flatMap(([name, field]) => [
 		name,
 		...(field.type === "object" ? declaredNames(field.fields) : []),
@@ -85,7 +87,7 @@ function strayValue(given: JsonObject, fields: Fields) {
 // A nested field is never named, because the old refusal named only
 // documented names and printed a nested one as its path.
 function converted(
-	fields: Readonly<Record<string, Nested>>,
+	fields: NestedFields,
 	given: JsonObject,
 	top: boolean,
 ): Refusal | JsonObject {
