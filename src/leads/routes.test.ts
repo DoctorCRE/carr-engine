@@ -29,15 +29,24 @@ async function refusal(response: Response) {
 	return [response.status, body];
 }
 
+const reserved = {
+	error: "caller_authority_field_forbidden",
+	hint: "Remove caller-supplied authority fields.",
+};
+
 const generic = {
 	error: "unhandled_verb_failure",
 	hint: "The operation failed. Quote the correlation_id when reporting it.",
 };
 
-test("quiet follow-ups refuse unknown fields, then bad numbers, then a bad owner, before any read", async () => {
+test("quiet follow-ups refuse reserved fields, then unknown fields, then bad numbers, then a bad owner, before any read", async () => {
 	const unread = "postgres://made-up@127.0.0.1:1/none";
 	const refused = async (search: string) =>
 		refusal(await quiet(search, unread));
+	assert.deepEqual(await refused("?lead_days=x&b=1&tenant=1&actor=2&actor=3"), [
+		403,
+		{ ...reserved, fields: ["actor", "tenant"] },
+	]);
 	const unknown = {
 		error: "unregistered_operation_fields",
 		hint: "Remove fields outside the documented input.",
@@ -130,10 +139,14 @@ test("quiet follow-ups answer with the old cadence, date text and refusals", () 
 		}
 	}));
 
-test("the board refuses a bad workspace, then unknown fields, then a malformed or leadless cursor, before any read", async () => {
+test("the board refuses reserved fields, then a bad workspace, then unknown fields, then a malformed or leadless cursor, before any read", async () => {
 	const unread = "postgres://made-up@127.0.0.1:1/none";
 	const refused = async (search: string) =>
 		refusal(await board(search, unread));
+	assert.deepEqual(await refused("?workspace=deals&b=1&profile=x"), [
+		403,
+		{ ...reserved, fields: ["profile"] },
+	]);
 	assert.deepEqual(await refused("?workspace=deals&b=1"), [
 		400,
 		{

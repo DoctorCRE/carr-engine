@@ -1,0 +1,400 @@
+{
+	"schema": "carr-relationship-network.v1",
+	"observed_at": "2026-03-01T12:00:00.000Z",
+	"valid_until": "2026-03-01T12:02:00.000Z",
+	"edges": [
+		{
+			"id": "client-deal:00000000-0000-4000-8000-000000000501",
+			"to": "deal:00000000-0000-4000-8000-000000000501",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000102",
+			"kind": "client_deal",
+			"when": null,
+			"detail": null,
+			"summary": "example-open"
+		},
+		{
+			"id": "client-deal:00000000-0000-4000-8000-000000000502",
+			"to": "deal:00000000-0000-4000-8000-000000000502",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000102",
+			"kind": "client_deal",
+			"when": null,
+			"detail": null,
+			"summary": "example-open"
+		},
+		{
+			"id": "client-deal:00000000-0000-4000-8000-000000000503",
+			"to": "deal:00000000-0000-4000-8000-000000000503",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000102",
+			"kind": "client_deal",
+			"when": null,
+			"detail": null,
+			"summary": "example-open"
+		},
+		{
+			"id": "client-deal:00000000-0000-4000-8000-000000000504",
+			"to": "deal:00000000-0000-4000-8000-000000000504",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"kind": "client_deal",
+			"when": null,
+			"detail": null,
+			"summary": "example-open"
+		},
+		{
+			"id": "evidence:00000000-0000-4000-8000-000000000101:00000000-0000-4000-8000-000000000501:referred",
+			"to": "deal:00000000-0000-4000-8000-000000000501",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"kind": "referred",
+			"when": "2026-01-05T00:00:00+00:00",
+			"detail": "Ref one",
+			"summary": "referred"
+		},
+		{
+			"id": "evidence:00000000-0000-4000-8000-000000000101:00000000-0000-4000-8000-000000000502:referred",
+			"to": "deal:00000000-0000-4000-8000-000000000502",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"kind": "referred",
+			"when": "2026-01-06T01:02:03.456789+00:00",
+			"detail": "Ref two",
+			"summary": "referred"
+		},
+		{
+			"id": "evidence:00000000-0000-4000-8000-000000000101:00000000-0000-4000-8000-000000000503:referred",
+			"to": "deal:00000000-0000-4000-8000-000000000503",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"kind": "referred",
+			"when": "2026-01-07T00:00:00+00:00",
+			"detail": "Ref one",
+			"summary": "referred"
+		},
+		{
+			"id": "evidence:00000000-0000-4000-8000-000000000102:00000000-0000-4000-8000-000000000504:referred",
+			"to": "deal:00000000-0000-4000-8000-000000000504",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000102",
+			"kind": "referred",
+			"when": "2026-01-08T00:00:00+00:00",
+			"detail": "Ref four",
+			"summary": "referred"
+		},
+		{
+			"id": "evidence:00000000-0000-4000-8000-000000000103:00000000-0000-4000-8000-000000000501:worked",
+			"to": "deal:00000000-0000-4000-8000-000000000501",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000103",
+			"kind": "worked",
+			"when": "2026-01-15T10:00:00+00:00",
+			"detail": "Note A\nNote B",
+			"summary": "worked"
+		},
+		{
+			"id": "evidence:00000000-0000-4000-8000-000000000107:00000000-0000-4000-8000-000000000504:referred",
+			"to": "deal:00000000-0000-4000-8000-000000000504",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000107",
+			"kind": "referred",
+			"when": "2026-01-09T00:00:00+00:00",
+			"detail": "Ref five",
+			"summary": "referred"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000601",
+			"to": "party:00000000-0000-4000-8000-000000000106",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000107",
+			"kind": "can_introduce",
+			"when": "2026-01-02T00:00:00+00:00",
+			"detail": "Knows F well",
+			"summary": "Knows F well"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000602",
+			"to": "party:00000000-0000-4000-8000-000000000102",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000107",
+			"kind": "can_introduce",
+			"when": "2026-01-02T00:00:00.5+00:00",
+			"detail": "Met at an event",
+			"summary": "Met at an event"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000603",
+			"to": "party:00000000-0000-4000-8000-000000000105",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000107",
+			"kind": "can_introduce",
+			"when": "2026-01-03T00:00:00+00:00",
+			"detail": "E is held",
+			"summary": "E is held"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000604",
+			"to": "party:00000000-0000-4000-8000-000000000104",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000107",
+			"kind": "can_introduce",
+			"when": "2026-01-03T00:00:00+00:00",
+			"detail": "D is restricted",
+			"summary": "D is restricted"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000605",
+			"to": "party:00000000-0000-4000-8000-000000000106",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000102",
+			"kind": "can_introduce",
+			"when": "2026-01-03T00:00:00+00:00",
+			"detail": "Asked already",
+			"summary": "Asked already"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000606",
+			"to": "party:00000000-0000-4000-8000-000000000102",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000106",
+			"kind": "intro_requested",
+			"when": "2026-01-03T00:00:00+00:00",
+			"detail": null,
+			"summary": ""
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000607",
+			"to": "party:00000000-0000-4000-8000-000000000107",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"kind": "can_introduce",
+			"when": "2026-01-03T00:00:00+00:00",
+			"detail": "   ",
+			"summary": "   "
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000608",
+			"to": "party:00000000-0000-4000-8000-000000000107",
+			"via": null,
+			"from": "party:00000000-0000-4000-8000-000000000106",
+			"kind": "knows",
+			"when": "2026-01-04T00:00:00+00:00",
+			"detail": null,
+			"summary": ""
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000609",
+			"to": "party:00000000-0000-4000-8000-000000000102",
+			"via": "party:00000000-0000-4000-8000-000000000103",
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"kind": "can_introduce",
+			"when": "2026-01-03T00:00:00+00:00",
+			"detail": "Through C",
+			"summary": "Through C"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000610",
+			"to": "party:00000000-0000-4000-8000-000000000106",
+			"via": "party:00000000-0000-4000-8000-000000000107",
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"kind": "can_introduce",
+			"when": "2026-01-01T00:00:00+00:00",
+			"detail": "Through G",
+			"summary": "Through G"
+		}
+	],
+	"nodes": [
+		{
+			"id": "party:00000000-0000-4000-8000-000000000101",
+			"ref": "C-1",
+			"kind": "vendor",
+			"name": "Example A",
+			"owner": "joe",
+			"summary": "Client note",
+			"record_id": "00000000-0000-4000-8000-000000000201",
+			"territory": "Springfield",
+			"verticals": ["Dental"],
+			"restricted": false,
+			"contact_state": "active",
+			"contact_state_until": null
+		},
+		{
+			"id": "party:00000000-0000-4000-8000-000000000102",
+			"ref": "L-2",
+			"kind": "client",
+			"name": "Example B",
+			"owner": "joe",
+			"summary": "Lead note",
+			"record_id": "00000000-0000-4000-8000-000000000302",
+			"territory": null,
+			"verticals": ["Imaging"],
+			"restricted": false,
+			"contact_state": "active",
+			"contact_state_until": null
+		},
+		{
+			"id": "party:00000000-0000-4000-8000-000000000103",
+			"ref": "V-3",
+			"kind": "vendor",
+			"name": "Example C",
+			"owner": null,
+			"summary": "Offers",
+			"record_id": "00000000-0000-4000-8000-000000000203",
+			"territory": "North",
+			"verticals": [],
+			"restricted": true,
+			"contact_state": "active",
+			"contact_state_until": null
+		},
+		{
+			"id": "party:00000000-0000-4000-8000-000000000104",
+			"ref": "P-4",
+			"kind": "lead",
+			"name": "Example D",
+			"owner": null,
+			"summary": null,
+			"record_id": "00000000-0000-4000-8000-000000000404",
+			"territory": null,
+			"verticals": [],
+			"restricted": true,
+			"contact_state": "active",
+			"contact_state_until": null
+		},
+		{
+			"id": "deal:00000000-0000-4000-8000-000000000501",
+			"kind": "deal",
+			"name": "Example Deal 1",
+			"owner": "joe",
+			"outcome": "won",
+			"summary": "example-open",
+			"record_id": "00000000-0000-4000-8000-000000000501",
+			"territory": "Springfield",
+			"verticals": [],
+			"contact_state": "active"
+		},
+		{
+			"id": "deal:00000000-0000-4000-8000-000000000502",
+			"kind": "deal",
+			"name": "Example Deal 2",
+			"owner": null,
+			"outcome": "lost",
+			"summary": "example-open",
+			"record_id": "00000000-0000-4000-8000-000000000502",
+			"territory": null,
+			"verticals": [],
+			"contact_state": "active"
+		},
+		{
+			"id": "deal:00000000-0000-4000-8000-000000000503",
+			"kind": "deal",
+			"name": "Example Deal 3",
+			"owner": null,
+			"outcome": "won",
+			"summary": "example-open",
+			"record_id": "00000000-0000-4000-8000-000000000503",
+			"territory": null,
+			"verticals": [],
+			"contact_state": "active"
+		},
+		{
+			"id": "deal:00000000-0000-4000-8000-000000000504",
+			"kind": "deal",
+			"name": "Example Deal 4",
+			"owner": null,
+			"outcome": null,
+			"summary": "example-open",
+			"record_id": "00000000-0000-4000-8000-000000000504",
+			"territory": null,
+			"verticals": ["Dental"],
+			"contact_state": "active"
+		},
+		{
+			"id": "party:00000000-0000-4000-8000-000000000105",
+			"ref": null,
+			"kind": "contact",
+			"name": "Example E",
+			"owner": null,
+			"summary": null,
+			"record_id": "00000000-0000-4000-8000-000000000105",
+			"territory": null,
+			"verticals": [],
+			"restricted": false,
+			"contact_state": "paused",
+			"contact_state_until": "2026-03-01"
+		},
+		{
+			"id": "party:00000000-0000-4000-8000-000000000106",
+			"ref": null,
+			"kind": "contact",
+			"name": "Example F",
+			"owner": null,
+			"summary": null,
+			"record_id": "00000000-0000-4000-8000-000000000106",
+			"territory": null,
+			"verticals": [],
+			"restricted": false,
+			"contact_state": "paused",
+			"contact_state_until": "2026-02-28"
+		},
+		{
+			"id": "party:00000000-0000-4000-8000-000000000107",
+			"ref": null,
+			"kind": "contact",
+			"name": "Example G",
+			"owner": null,
+			"summary": null,
+			"record_id": "00000000-0000-4000-8000-000000000107",
+			"territory": null,
+			"verticals": [],
+			"restricted": false,
+			"contact_state": "active",
+			"contact_state_until": null
+		}
+	],
+	"referrals": [
+		{
+			"won": 2,
+			"lost": 1,
+			"deals": 3,
+			"node_id": "party:00000000-0000-4000-8000-000000000101",
+			"win_rate": 0.6666666666666666
+		},
+		{
+			"won": 0,
+			"lost": 0,
+			"deals": 1,
+			"node_id": "party:00000000-0000-4000-8000-000000000102",
+			"win_rate": null
+		}
+	],
+	"suggestions": [
+		{
+			"id": "link:00000000-0000-4000-8000-000000000601",
+			"from": "party:00000000-0000-4000-8000-000000000107",
+			"to": "party:00000000-0000-4000-8000-000000000106",
+			"via": null,
+			"reason": "Knows F well",
+			"detail": "Knows F well",
+			"when": "2026-01-02T00:00:00+00:00"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000602",
+			"from": "party:00000000-0000-4000-8000-000000000107",
+			"to": "party:00000000-0000-4000-8000-000000000102",
+			"via": null,
+			"reason": "Met at an event",
+			"detail": "Met at an event",
+			"when": "2026-01-02T00:00:00.5+00:00"
+		},
+		{
+			"id": "link:00000000-0000-4000-8000-000000000610",
+			"from": "party:00000000-0000-4000-8000-000000000101",
+			"to": "party:00000000-0000-4000-8000-000000000106",
+			"via": "party:00000000-0000-4000-8000-000000000107",
+			"reason": "Through G",
+			"detail": "Through G",
+			"when": "2026-01-01T00:00:00+00:00"
+		}
+	]
+}
