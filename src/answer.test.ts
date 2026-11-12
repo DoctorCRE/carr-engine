@@ -155,15 +155,13 @@ test("a close_ field's own closing tag drops the prefix once, as the old door's 
 	] as const)
 		assert.equal(hasToolCallMarkup(field, value), refused, `${field} ${value}`);
 
-	const marked = (params: Record<string, string>, own?: string[]) =>
-		checkFields(new URLSearchParams(params), Object.keys(params), {
-			objects: own && { filter: own },
+	const marked = (field: string, value: string) =>
+		checkFields(new URLSearchParams({ [field]: value }), [field], {
+			objects: { filter: ["close_outcome"] },
 		})?.extra.fields;
-	assert.deepEqual(marked({ close_outcome: "</outcome>" }), ["close_outcome"]);
+	assert.deepEqual(marked("close_outcome", "</outcome>"), ["close_outcome"]);
 	assert.deepEqual(
-		marked({ filter: JSON.stringify({ close_outcome: "</outcome>" }) }, [
-			"close_outcome",
-		]),
+		marked("filter", JSON.stringify({ close_outcome: "</outcome>" })),
 		[],
 	);
 });
