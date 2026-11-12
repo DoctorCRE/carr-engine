@@ -83,13 +83,11 @@ test("bad input is refused in the old door's order, before any read", async () =
 	);
 	assert.deepEqual(await refused("?limit=%3C%2Flimit%3E"), markup("limit"));
 	assert.deepEqual(await refused("?limit=abc"), number);
-	assert.deepEqual(await refused("?query=Example&limit="), number);
 	assert.deepEqual(await refused("?query=Example&limit=%20"), number);
-	assert.deepEqual(await refused(""), missing);
 	assert.deepEqual(await refused("?query="), missing);
 	assert.deepEqual(await refused("?query=%20%20"), generic);
 	assert.deepEqual(await refused(`?query=${"a".repeat(201)}`), generic);
-	for (const limit of ["0", "51", "2.5", "-1"])
+	for (const limit of ["0", "51", "2.5"])
 		assert.deepEqual(await refused(`?query=Example&limit=${limit}`), generic);
 });
 

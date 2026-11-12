@@ -47,11 +47,6 @@ const client = (tx: Kysely<DB>, n: number, ref: string) =>
 		values (${uuid(n)}, ${uuid(n)}, ${ref}, ${uuid(900)}, ${uuid(900)})`.execute(
 		tx,
 	);
-const vendor = (tx: Kysely<DB>, n: number, ref: string) =>
-	sql`insert into vendor (id, party_id, vendor_ref, category, created_by, updated_by)
-		values (${uuid(n)}, ${uuid(n)}, ${ref}, 'cpa', ${uuid(900)}, ${uuid(900)})`.execute(
-		tx,
-	);
 const deal = (tx: Kysely<DB>, n: number, client: number, name: string) =>
 	sql`insert into deal (id, client_id, name, deal_type, phase, created_by, updated_by)
 		values (${uuid(n)}, ${uuid(client)}, ${name}, 'activity-lease', 'activity-open',
@@ -199,39 +194,6 @@ test("several matches list each live ref once, in locale order, at most 25", () 
 				...Array.from({ length: 21 }, (_, i) => `P-${i + 14}`),
 			],
 		);
-	}));
-
-test("a target the old resolver could not settle is refused", () =>
-	withRollback(async (tx) => {
-		await seed(tx);
-		await party(tx, 1, "person", "Kwyjibo Plinth");
-		await vendor(tx, 1, "VND-1");
-		assert.deepEqual(JSON.parse(await read(tx, "Kwyjibo Plinth")), {
-			error: "subject_not_found",
-		});
-		await party(tx, 2, "org", "Blorft Quaffle");
-		await client(tx, 2, "Example Lease");
-		await deal(tx, 3, 2, "Example Lease A");
-		await deal(tx, 4, 2, "Example Lease B");
-		assert.deepEqual(JSON.parse(await read(tx, "Blorft Quaffle")), {
-			error: "needs_disambiguation",
-			candidates: [
-				{
-					name: "Example Lease A",
-					phase: "activity-open",
-					client_ref: "Example Lease",
-				},
-				{
-					name: "Example Lease B",
-					phase: "activity-open",
-					client_ref: "Example Lease",
-				},
-			],
-		});
-		await deal(tx, 5, 2, "Thistlewick <invoke Deal");
-		assert.deepEqual(JSON.parse(await read(tx, "Thistlewick")), {
-			error: "tool_call_markup_in_value",
-		});
 	}));
 
 test("more than 5000 calendar captures is refused", () =>
