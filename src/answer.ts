@@ -160,6 +160,7 @@ type Verb =
 	| "lead-board"
 	| "list-practice-origination"
 	| "quiet-follow-ups"
+	| "read-invoice-tracker"
 	| "read-vendor-markets-v1"
 	| "territory-state-board";
 

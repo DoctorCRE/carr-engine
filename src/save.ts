@@ -14,6 +14,7 @@ export type WriterEnv = DatabaseEnv & {
 };
 
 // A save's input as the old door declared it.
+// Both lists keep the old schema's order, which picks the refusal, so never sort them.
 type Door = {
 	verb: string;
 	fields: readonly string[];

@@ -11,6 +11,7 @@ const detail: Ask = { read: "deal", deal };
 const fit: Ask = { read: "client fit" };
 const queue: Ask = { read: "capture queue" };
 const find: Ask = { read: "find", query: "Made-up & 50%" };
+const invoices: Ask = { read: "invoices" };
 const lead = "00000000-0000-4000-8000-000000000031";
 const leadReads: Ask[] = [
 	{ read: "lead board" },
@@ -52,13 +53,14 @@ const failedRead = (verb: string) => ({
 const header = (sent: Sent, name: string) =>
 	new Headers(sent.init.headers).get(name);
 
-test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue and a find, on the app's host with the session", async () => {
+test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue, a find and the invoices, on the app's host with the session", async () => {
 	const { askEngine, sent } = fake(() => json({ made_up: true }));
 	assert.deepEqual(await askEngine(board), { made_up: true });
 	await askEngine(detail);
 	await askEngine(fit);
 	await askEngine(queue);
 	await askEngine(find);
+	await askEngine(invoices);
 	assert.deepEqual(
 		sent.map((s) => s.url.href),
 		[
@@ -67,6 +69,7 @@ test("asks the engine's board by workspace, a deal by its reference, the client 
 			"https://app.example.test/api/engine/client-fit",
 			"https://app.example.test/api/engine/capture-queue",
 			"https://app.example.test/api/engine/find?query=Made-up+%26+50%25",
+			"https://app.example.test/api/engine/invoices",
 		],
 	);
 	for (const s of sent) {
@@ -83,9 +86,10 @@ test("asks the old system through the same host with the session and the app's o
 	await askOld(fit);
 	await askOld(queue);
 	await askOld(find);
+	await askOld(invoices);
 	assert.deepEqual(
 		sent.map((s) => [s.url.href, s.init.method]),
-		Array(5).fill(["https://app.example.test/mcp", "POST"]),
+		Array(6).fill(["https://app.example.test/mcp", "POST"]),
 	);
 	assert.deepEqual(
 		sent.map((s) => JSON.parse(String(s.init.body)).params),
@@ -95,6 +99,7 @@ test("asks the old system through the same host with the session and the app's o
 			{ name: "ideal-client-profile", arguments: {} },
 			{ name: "capture-queue", arguments: {} },
 			{ name: "find", arguments: { query: "Made-up & 50%" } },
+			{ name: "read-invoice-tracker", arguments: {} },
 		],
 	);
 	for (const s of sent) {
@@ -143,7 +148,7 @@ test("a refused deal is compared as its refusal without the correlation ID, on e
 		assert.deepEqual(await ask({ read: "lead board" }), expected);
 });
 
-test("a refused board fails its read instead of comparing as an empty board", async () => {
+test("a refused board or invoices read fails instead of comparing as an empty answer", async () => {
 	const refused = {
 		error: "unauthenticated",
 		correlation_id: "made-up",
@@ -153,10 +158,11 @@ test("a refused board fails its read instead of comparing as an empty board", as
 		fake(() => content(refused, true)).askOld,
 		fake(() => json(refused, 422)).askEngine,
 	])
-		await assert.rejects(
-			ask(board),
-			(error: Error) => !(error instanceof StopRun),
-		);
+		for (const read of [board, invoices])
+			await assert.rejects(
+				ask(read),
+				(error: Error) => !(error instanceof StopRun),
+			);
 });
 
 test("an engine find or Leads read that fails with a server error fails that read without stopping the run", async () => {

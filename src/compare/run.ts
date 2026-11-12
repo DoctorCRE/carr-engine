@@ -8,6 +8,7 @@ import {
 	detailShape,
 	feedShape,
 } from "./deals-shapes.ts";
+import { invoicesShape } from "./invoices-shape.ts";
 import {
 	leadBoardShape,
 	leadShape,
@@ -30,7 +31,8 @@ export type Ask =
 	| { read: "lead"; lead: string }
 	| { read: "quiet follow-ups" }
 	| { read: "territory" }
-	| { read: "reasons to reach out" };
+	| { read: "reasons to reach out" }
+	| { read: "invoices" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -67,6 +69,7 @@ const SHAPES = {
 	"quiet follow-ups": quietShape,
 	territory: territoryShape,
 	"reasons to reach out": reasonsShape,
+	invoices: invoicesShape,
 };
 
 // Each opened lead re-sends the whole board, so a fixed number spread over the
@@ -126,6 +129,7 @@ export async function compareDeals(
 		{ read: "quiet follow-ups" },
 		{ read: "territory" },
 		{ read: "reasons to reach out" },
+		{ read: "invoices" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
