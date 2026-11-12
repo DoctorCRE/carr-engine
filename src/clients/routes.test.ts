@@ -572,12 +572,14 @@ test("a client's details answer the old JSON for every branch the old read takes
 				[false, false, true],
 			);
 
-			for (const n of [999, 29, 30, 31])
+			for (const n of [999, 29, 30, 31]) {
+				const { status, text } = await ask(`/${id(n)}`);
 				assert.deepEqual(
-					[(await ask(`/${id(n)}`)).status, (await ask(`/${id(n)}`)).text],
+					[status, text],
 					[404, '{"error":"RECORD_NOT_FOUND"}'],
 					String(n),
 				);
+			}
 
 			// A partner without an actor row: ownership of an owned client is unknown.
 			await admin.query(
