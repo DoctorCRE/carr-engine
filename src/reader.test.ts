@@ -13,6 +13,7 @@ import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { readLeadBoard } from "./leads/board.ts";
 import { readQuietFollowUps } from "./leads/quiet-follow-ups.ts";
+import { readReasonsToReachOut } from "./leads/reasons-to-reach-out.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
@@ -28,6 +29,8 @@ const readable = [
 	"lead",
 	"next_action",
 	"party",
+	"practice_origination_event",
+	"practice_origination_feed",
 	"v_capture_candidate_queue",
 	"v_capture_session_status",
 	"v_client_account",
@@ -58,6 +61,7 @@ const readable = [
 	"v_lead_workspace",
 	"v_open_deal_room_board",
 	"v_party_graph",
+	"v_practice_origination_party_address",
 	"v_ref_index",
 	"v_requirement_request",
 	"vendor",
@@ -87,6 +91,13 @@ async function withReaderLogin(
 			await admin.query(`ALTER ROLE ${name} SET TimeZone = 'America/Chicago'`);
 			await admin.query(
 				`GRANT SELECT ON ${readable.map((t) => `public.${t}`).join(", ")} TO ${name}`,
+			);
+			// Production revoked PUBLIC's right to call this one.
+			await admin.query(
+				"REVOKE EXECUTE ON FUNCTION public.practice_address_key(text) FROM PUBLIC",
+			);
+			await admin.query(
+				`GRANT EXECUTE ON FUNCTION public.practice_address_key(text) TO ${name}`,
 			);
 			const login = new URL(database);
 			login.username = name;
@@ -182,7 +193,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board and quiet follow-ups and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, quiet follow-ups and reasons to reach out and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -241,6 +252,25 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				readQuietFollowUps(db, { lead_days: 45, vendor_days: 90 }, null),
 			);
 			assert.deepEqual("proposals" in quiet && quiet.proposals, []);
+			await withAdmin(
+				(admin) =>
+					admin.query(`insert into practice_origination_feed (source) values ('nppes');
+						insert into practice_origination_event (source, record_key, fingerprint, npi,
+							name, city, state, kind, evidence_date, date_basis, source_url, facts,
+							published_on, recorded_by)
+						select 'nppes', '1000000009', repeat('0', 64), '1000000009', 'Example Clinic',
+							'Exampleton', 'AL', 'enumeration', '2026-01-02', 'enumeration',
+							'https://example.test/1000000009', '{"address": "1 Example Way"}',
+							'2026-01-02', id from actor`),
+				database,
+			);
+			const reasons = await readSnapshot(login, (db) =>
+				readReasonsToReachOut(db, { limit: 25, before_id: null }),
+			);
+			assert.deepEqual(
+				reasons.cards.map((c) => [c.record_key, c.route]),
+				[["1000000009", "research"]],
+			);
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(

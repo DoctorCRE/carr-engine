@@ -237,6 +237,21 @@ CREATE FUNCTION public.org_identity_key(p_name text) RETURNS text
   end
 $$;
 
+CREATE FUNCTION public.practice_address_key(address text) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$
+  select string_agg(case token
+    when 'street' then 'st' when 'avenue' then 'ave' when 'road' then 'rd'
+    when 'boulevard' then 'blvd' when 'drive' then 'dr' when 'lane' then 'ln'
+    when 'court' then 'ct' when 'place' then 'pl' when 'parkway' then 'pkwy'
+    when 'highway' then 'hwy' when 'suite' then 'ste'
+    when 'apartment' then 'apt' when 'floor' then 'fl' else token end, ' ' order by ord)
+  from regexp_split_to_table(
+    regexp_replace(regexp_replace(lower(address), '\m([0-9]{5})-[0-9]{4}\M', '\1', 'g'),
+      '[^a-z0-9]+', ' ', 'g'), ' +') with ordinality as parts(token,ord)
+  where token <> '';
+$$;
+
 CREATE FUNCTION public.revise_deal_client_need() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -1829,6 +1844,53 @@ CREATE TABLE public.party_link_kind (
     sort integer NOT NULL
 );
 
+CREATE TABLE public.practice_origination_event (
+    id bigint NOT NULL,
+    source text NOT NULL,
+    record_key text NOT NULL,
+    fingerprint text NOT NULL,
+    npi text,
+    name text NOT NULL,
+    city text NOT NULL,
+    state text NOT NULL,
+    kind text NOT NULL,
+    evidence_date date NOT NULL,
+    date_basis text NOT NULL,
+    source_url text NOT NULL,
+    facts jsonb NOT NULL,
+    published_on date NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    recorded_by uuid NOT NULL,
+    document_number text,
+    filing_on date,
+    CONSTRAINT practice_origination_event_date_basis_check CHECK ((date_basis = ANY (ARRAY['enumeration'::text, 'registry_update'::text, 'publication'::text, 'filing'::text]))),
+    CONSTRAINT practice_origination_event_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT practice_origination_event_identity_check CHECK ((((source = ANY (ARRAY['nppes'::text, 'pecos'::text])) AND (npi IS NOT NULL) AND (document_number IS NULL) AND (filing_on IS NULL) AND (date_basis <> 'filing'::text) AND (kind <> 'formation_candidate'::text)) OR ((source = 'formation-fl'::text) AND (npi IS NULL) AND (document_number IS NOT NULL) AND (document_number ~ '^[A-Z0-9]{6}([A-Z0-9]{6})?$'::text) AND (record_key = document_number) AND (state = 'FL'::text) AND (filing_on IS NOT NULL) AND (evidence_date = filing_on) AND (filing_on <= published_on) AND (date_basis = 'filing'::text) AND (kind = 'formation_candidate'::text)))),
+    CONSTRAINT practice_origination_event_kind_check CHECK ((kind = ANY (ARRAY['enumeration'::text, 'registry_update'::text, 'pecos_observation'::text, 'pecos_correction'::text, 'formation_candidate'::text]))),
+    CONSTRAINT practice_origination_event_npi_check CHECK ((npi ~ '^[0-9]{10}$'::text)),
+    CONSTRAINT practice_origination_event_state_check CHECK ((state = ANY (ARRAY['AL'::text, 'FL'::text])))
+);
+
+ALTER TABLE public.practice_origination_event ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.practice_origination_event_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+CREATE TABLE public.practice_origination_feed (
+    source text NOT NULL,
+    checkpoint text,
+    published_on date,
+    status text DEFAULT 'unavailable'::text NOT NULL,
+    detail text DEFAULT 'No successful import'::text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT practice_origination_feed_source_check CHECK ((source = ANY (ARRAY['nppes'::text, 'pecos'::text, 'formation-fl'::text]))),
+    CONSTRAINT practice_origination_feed_status_check CHECK ((status = ANY (ARRAY['available'::text, 'blocked'::text, 'unavailable'::text])))
+);
+
 CREATE TABLE public.premises (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     deal_id uuid,
@@ -3404,6 +3466,13 @@ CREATE VIEW public.v_party_graph AS
      LEFT JOIN party_ref fr ON ((fr.party_id = pl.from_party)))
      LEFT JOIN party_ref tr ON ((tr.party_id = pl.to_party)));
 
+CREATE VIEW public.v_practice_origination_party_address AS
+ SELECT DISTINCT ON (subject_id) subject_id AS party_id,
+    (value ->> 'street_address'::text) AS street_address
+   FROM public.record_flag
+  WHERE ((subject_type = 'party'::text) AND (kind = 'address'::text) AND ((value ->> 'found'::text) = 'true'::text) AND ((value ->> 'epistemic_status'::text) = 'source_backed'::text) AND ((expires_on IS NULL) OR (expires_on >= CURRENT_DATE)))
+  ORDER BY subject_id, observed_at DESC, id DESC;
+
 CREATE VIEW public.v_requirement_request AS
  SELECT id,
     organization_tenant_id,
@@ -3998,6 +4067,15 @@ ALTER TABLE ONLY public.party_link
 ALTER TABLE ONLY public.party
     ADD CONSTRAINT party_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_source_record_key_published_on_f_key UNIQUE (source, record_key, published_on, fingerprint);
+
+ALTER TABLE ONLY public.practice_origination_feed
+    ADD CONSTRAINT practice_origination_feed_pkey PRIMARY KEY (source);
+
 ALTER TABLE ONLY public.premises
     ADD CONSTRAINT premises_pkey PRIMARY KEY (id);
 
@@ -4277,6 +4355,8 @@ CREATE INDEX party_name_trgm ON public.party USING gin (name public.gin_trgm_ops
 CREATE UNIQUE INDEX party_org_identity_uniq ON public.party USING btree (public.org_identity_key(name)) WHERE ((kind = 'org'::text) AND (merged_into IS NULL) AND (deleted_at IS NULL) AND (public.org_identity_key(name) IS NOT NULL));
 
 CREATE UNIQUE INDEX party_ref_uniq ON public.party USING btree (ref);
+
+CREATE INDEX practice_origination_record ON public.practice_origination_event USING btree (source, record_key, id DESC);
 
 CREATE INDEX prospect_pool_county_idx ON public.candidate_pool USING btree (county);
 
@@ -5068,6 +5148,12 @@ ALTER TABLE ONLY public.party
 
 ALTER TABLE ONLY public.party
     ADD CONSTRAINT party_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_recorded_by_fkey FOREIGN KEY (recorded_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.practice_origination_event
+    ADD CONSTRAINT practice_origination_event_source_fkey FOREIGN KEY (source) REFERENCES public.practice_origination_feed(source);
 
 ALTER TABLE ONLY public.premises
     ADD CONSTRAINT premises_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);
