@@ -122,9 +122,9 @@ export function unregisteredFields(
 const TOOL_CALL_MARKERS = ["<parameter", "</parameter", "<invoke", "</invoke"];
 
 // The old door refused a value carrying its own closing tag, or a marker
-// outside a backtick pair on one line.
+// outside a backtick pair on one line. A close_ field's own tag drops that prefix.
 export function hasToolCallMarkup(field: string, value: string) {
-	if (value.includes(`</${field}>`)) return true;
+	if (value.includes(`</${field.replace(/^close_/, "")}>`)) return true;
 	return TOOL_CALL_MARKERS.some((marker) => {
 		for (
 			let at = value.indexOf(marker);
