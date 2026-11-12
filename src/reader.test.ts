@@ -12,6 +12,7 @@ import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
+import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
@@ -47,7 +48,9 @@ const readable = [
 	"v_deal_room_presence",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
+	"v_lead_client_best",
 	"v_open_deal_room_board",
+	"v_party_graph",
 	"v_ref_index",
 	"v_requirement_request",
 ];
@@ -171,7 +174,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed and the capture queue and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue and search and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -218,6 +221,11 @@ test("the reader login reads the board, a deal, the client fit, the change feed 
 					capture_sessions: ["example-device"],
 					cursor: "",
 				},
+			);
+			const found = await readSnapshot(login, (db) => readFind(db, "Example"));
+			assert.deepEqual(
+				[found.parties.map((p) => p.kind), found.deals.map((d) => d.name)],
+				[["client"], ["Example Reader Deal"]],
 			);
 			const visible = await withAdmin(
 				(admin) =>

@@ -3371,6 +3371,39 @@ CREATE VIEW public.v_lead_workspace_stage_history AS
    FROM (public.v_lead_stage_transition e
      JOIN public.v_lead_workspace b ON ((b.id = e.lead_id)));
 
+CREATE VIEW public.v_party_graph AS
+ WITH party_ref AS (
+         SELECT DISTINCT ON (r.party_id) r.party_id,
+            r.ref
+           FROM ( SELECT c.party_id,
+                    c.roster_ref AS ref,
+                    1 AS pref
+                   FROM public.client c
+                UNION ALL
+                 SELECT v.party_id,
+                    v.vendor_ref,
+                    2
+                   FROM public.vendor v
+                UNION ALL
+                 SELECT l.party_id,
+                    l.registry_ref,
+                    3
+                   FROM public.lead l) r
+          ORDER BY r.party_id, (r.ref IS NULL), r.pref
+        )
+ SELECT fr.ref AS from_ref,
+    fp.name AS from_name,
+    tr.ref AS to_ref,
+    tp.name AS to_name,
+    pl.kind,
+    pl.note,
+    pl.created_at AS linked_at
+   FROM ((((public.party_link pl
+     JOIN public.party fp ON ((fp.id = pl.from_party)))
+     JOIN public.party tp ON ((tp.id = pl.to_party)))
+     LEFT JOIN party_ref fr ON ((fr.party_id = pl.from_party)))
+     LEFT JOIN party_ref tr ON ((tr.party_id = pl.to_party)));
+
 CREATE VIEW public.v_requirement_request AS
  SELECT id,
     organization_tenant_id,

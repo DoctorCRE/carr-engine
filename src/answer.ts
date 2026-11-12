@@ -23,6 +23,7 @@ const HINTS = {
 		"The operation could not be completed. Quote the correlation_id when reporting it.",
 	missing_required:
 		"Supply the named required fields from the tool's documented input.",
+	unregistered_operation_fields: "Remove fields outside the documented input.",
 	database_unavailable:
 		"The operation failed. Quote the correlation_id when reporting it.",
 };
