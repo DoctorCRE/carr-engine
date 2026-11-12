@@ -1,11 +1,6 @@
 import type { Context } from "hono";
 import { failureKind, sqlState } from "./failure.ts";
-import {
-	DATABASE_UNAVAILABLE,
-	type DatabaseEnv,
-	type Reader,
-	readSnapshot,
-} from "./reader.ts";
+import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
@@ -29,7 +24,7 @@ const HINTS = {
 };
 
 export class Refusal {
-	readonly status: 400 | 404 | 409 | 422 | 503;
+	readonly status: 400 | 404 | 409 | 422 | 500 | 503;
 	readonly error: keyof typeof HINTS;
 	readonly extra: Record<string, unknown>;
 	constructor(
@@ -61,12 +56,17 @@ const isKnownPartner = async (db: Reader, slug: string) =>
 		.where("slug", "=", slug)
 		.executeTakeFirst()) !== undefined;
 
+// `verb` is the old tool that answered the same read: its body for a failed
+// read named it.
 export async function answer(
 	c: Context<DatabaseEnv>,
+	verb: string,
 	read: (db: Reader) => Promise<unknown>,
 ) {
+	const failed = (status: 500 | 503) =>
+		refuse(c, new Refusal(status, "unhandled_verb_failure", { verb }));
 	const database = c.env.DATABASE;
-	if (!database) return c.json(DATABASE_UNAVAILABLE, 503);
+	if (!database) return failed(503);
 	const started = performance.now();
 	let result: unknown;
 	try {
@@ -82,7 +82,7 @@ export async function answer(
 			result = new Refusal(400, "database_refused_the_statement");
 		else {
 			console.warn("read failed:", failureKind(error));
-			return c.json({ error: "read_failed" }, 500);
+			return failed(500);
 		}
 	} finally {
 		c.header("Server-Timing", `db;dur=${performance.now() - started}`);
