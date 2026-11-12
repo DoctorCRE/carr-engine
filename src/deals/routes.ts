@@ -106,7 +106,7 @@ deals.get("/deals", async (c) => {
 		);
 	return answer(c, (db) =>
 		readBoard(db, {
-			actor: c.get("partner").slug,
+			partner: c.get("partner").slug,
 			workspace: workspace ?? null,
 			account_client_id: c.req.query("account_client_id") ?? null,
 		}),

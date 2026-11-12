@@ -178,7 +178,7 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 							plain(
 								await readSnapshot(url, (db) =>
 									readBoard(db, {
-										actor: "routes-agent",
+										partner: "routes-agent",
 										workspace: workspace as "team" | null,
 									}),
 								),

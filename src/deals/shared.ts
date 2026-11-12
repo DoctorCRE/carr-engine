@@ -10,6 +10,12 @@ export const RETIRED_ITEM_STATUSES = ["dropped", "expired"] as const;
 export const asText = (value: Expression<unknown>) =>
 	sql<string | null>`to_jsonb(${value})#>>'{}'`;
 
+// Over a deal board view aliased "b".
+export const nextStepRequired =
+	sql<boolean>`(${sql.ref("b.next_step")} is null or ${sql.ref("b.next_date")} is null)`.as(
+		"next_step_required",
+	);
+
 export const vendorsOf = (db: Kysely<DB>, deal: DealId) =>
 	db
 		.selectFrom("v_deal_room_vendor as v")

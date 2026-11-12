@@ -246,7 +246,7 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 				.returning("id")
 				.execute();
 			const board = await readBoard(tx, {
-				actor: partner.slug,
+				partner: partner.slug,
 				workspace: "team",
 			});
 			assert.equal(board.schema_version, "local-deals-board.v2");
@@ -411,7 +411,7 @@ test("a deal's vendors sort by role, then company, then contact", () =>
 		const kim = "00000000-0000-4000-8000-000000000002";
 		await assign("lender", a, "Kim Example", kim);
 		const board = await readBoard(tx, {
-			actor: partner.slug,
+			partner: partner.slug,
 			workspace: "team",
 		});
 		assert.deepEqual(
@@ -461,7 +461,7 @@ test("open deals leave out closed and lost ones, sort, and filter", () =>
 			account_client_id?: string,
 		) => {
 			const board = await readBoard(tx, {
-				actor: partner.slug,
+				partner: partner.slug,
 				...(workspace && { workspace }),
 				...(account_client_id !== undefined && { account_client_id }),
 			});
@@ -482,7 +482,10 @@ test("open deals leave out closed and lost ones, sort, and filter", () =>
 		assert.equal(all[2]?.parked_at, "2026-01-05T00:00:00+00:00");
 		assert.equal(all[1]?.next_step_required, true);
 		assert.equal(all[3]?.next_step_required, true);
-		const board = await readBoard(tx, { actor: partner.slug, workspace: null });
+		const board = await readBoard(tx, {
+			partner: partner.slug,
+			workspace: null,
+		});
 		assert.deepEqual(
 			board.deals.filter((d) => d.id && mine.includes(d.id)),
 			all,
@@ -556,7 +559,7 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 			account_client_id?: string,
 		) => {
 			const board = await readBoard(tx, {
-				actor: partner.slug,
+				partner: partner.slug,
 				...(workspace && { workspace }),
 				...(account_client_id && { account_client_id }),
 			});
@@ -612,7 +615,7 @@ test("closed and lost deals split, sort and filter by workspace", () =>
 		assert.deepEqual((await read("national_account")).closed, [national]);
 		assert.deepEqual((await read(undefined, account.id)).closed, [national]);
 		const unscoped = await readBoard(tx, {
-			actor: partner.slug,
+			partner: partner.slug,
 			workspace: null,
 		});
 		assert.deepEqual(
@@ -670,7 +673,7 @@ test("accounts summarize national accounts and skip inactive prospects", () =>
 			})
 			.execute();
 		const board = await readBoard(tx, {
-			actor: partner.slug,
+			partner: partner.slug,
 			workspace: "team",
 			account_client_id: first.id,
 		});
@@ -709,7 +712,7 @@ test("accounts summarize national accounts and skip inactive prospects", () =>
 			.set({ status: "prospect" })
 			.where("id", "=", account.id)
 			.execute();
-		const active = await readBoard(tx, { actor: partner.slug });
+		const active = await readBoard(tx, { partner: partner.slug });
 		assert.equal(
 			active.accounts.find((a) => a.account_client_id === account.id)
 				?.client_status,
@@ -720,7 +723,7 @@ test("accounts summarize national accounts and skip inactive prospects", () =>
 			.set({ prospect_engagement_status: "inactive" })
 			.where("id", "=", account.id)
 			.execute();
-		const quiet = await readBoard(tx, { actor: partner.slug });
+		const quiet = await readBoard(tx, { partner: partner.slug });
 		assert.equal(
 			quiet.accounts.some((a) => a.account_client_id === account.id),
 			false,
@@ -735,7 +738,7 @@ test("accounts summarize national accounts and skip inactive prospects", () =>
 			.set({ status: current })
 			.where("id", "=", account.id)
 			.execute();
-		const kept = await readBoard(tx, { actor: partner.slug });
+		const kept = await readBoard(tx, { partner: partner.slug });
 		assert.equal(
 			kept.accounts.some((a) => a.account_client_id === account.id),
 			true,
@@ -784,7 +787,7 @@ test("open_session is the signed-in actor's newest open review", () =>
 			two.id,
 		);
 		const open = async (input: Partial<Parameters<typeof readBoard>[1]>) =>
-			(await readBoard(tx, { actor: partner.slug, ...input })).open_session;
+			(await readBoard(tx, { partner: partner.slug, ...input })).open_session;
 		assert.deepEqual(await open({ workspace: "team" }), {
 			session_id: mine.id,
 			workspace_kind: "team",
@@ -805,7 +808,10 @@ test("open_session is the signed-in actor's newest open review", () =>
 			(await open({ account_client_id: one.id }))?.session_id,
 			newest.id,
 		);
-		assert.equal((await readBoard(tx, { actor: "nobody" })).open_session, null);
+		assert.equal(
+			(await readBoard(tx, { partner: "nobody" })).open_session,
+			null,
+		);
 	}));
 
 test("short_name uses the doctor's last name and market, else the deal name", () => {
