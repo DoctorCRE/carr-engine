@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { answer, asNumber, checkFields, Refusal, refuse } from "../answer.ts";
+import { answer, checkFields, Refusal, refuse } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard } from "./board.ts";
 import { historyCursors, readLeadDetail } from "./detail.ts";
@@ -22,7 +22,10 @@ export const leads = new Hono<DatabaseEnv>();
 
 leads.get("/leads", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const refused = checkFields(params, BOARD_FIELDS, { workspace: ["leads"] });
+	const refused = checkFields(params, BOARD_FIELDS, {
+		vocabularies: { workspace: ["leads"] },
+		objects: { correspondence_cursor: ["occurred_at", "id"] },
+	});
 	if (refused) return refuse(c, refused);
 	const cursors = historyCursors(params);
 	// The old refusal of a cursor was not public, so it answered generically.
@@ -40,24 +43,19 @@ leads.get("/leads", async (c) => {
 
 leads.get("/quiet-follow-ups", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const refused = checkFields(params, QUIET_FIELDS);
+	const refused = checkFields(params, QUIET_FIELDS, {
+		numbers: ["lead_days", "vendor_days"],
+	});
 	if (refused) return refuse(c, refused);
 	// The old read checked neither whole numbers nor their 1 to 365 range.
-	const lead_days = asNumber(params.get("lead_days"), 45);
-	if (lead_days === undefined)
-		return refuse(
-			c,
-			new Refusal(400, "invalid_number", { fields: ["lead_days"] }),
-		);
-	const vendor_days = asNumber(params.get("vendor_days"), 90);
-	if (vendor_days === undefined)
-		return refuse(
-			c,
-			new Refusal(400, "invalid_number", { fields: ["vendor_days"] }),
-		);
-	const ownerSlug = params.get("owner_slug");
+	const lead_days = Number(params.get("lead_days") ?? 45);
+	const vendor_days = Number(params.get("vendor_days") ?? 90);
+	const [ownerSlug = null, ...more] = params.getAll("owner_slug");
 	// Its own error code was not public, so the old system answered generically.
-	if (ownerSlug !== null && (!ownerSlug.trim() || ownerSlug.length > 100))
+	if (
+		more.length > 0 ||
+		(ownerSlug !== null && (!ownerSlug.trim() || ownerSlug.length > 100))
+	)
 		return refuse(c, new Refusal(422, "unhandled_verb_failure"));
 	return answer(c, "quiet-follow-ups", async (db) => {
 		const quiet = await readQuietFollowUps(
@@ -92,17 +90,16 @@ leads.get("/territory-state-board", async (c) => {
 
 leads.get("/reasons-to-reach-out", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const refused = checkFields(params, REASON_FIELDS);
+	const refused = checkFields(params, REASON_FIELDS, { numbers: ["limit"] });
 	if (refused) return refuse(c, refused);
-	const limit = asNumber(params.get("limit"), 25);
-	if (limit === undefined)
-		return refuse(c, new Refusal(400, "invalid_number", { fields: ["limit"] }));
-	const before_id = params.get("before_id");
+	const limit = Number(params.get("limit") ?? 25);
+	const [before_id = null, ...more] = params.getAll("before_id");
 	// The old schema check refused with a private code, so it answered generically.
 	if (
 		!Number.isInteger(limit) ||
 		limit < 1 ||
 		limit > 100 ||
+		more.length > 0 ||
 		(before_id !== null && !BEFORE_ID.test(before_id))
 	)
 		return refuse(c, new Refusal(400, "unhandled_verb_failure"));

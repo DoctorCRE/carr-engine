@@ -1,11 +1,14 @@
 import { sql } from "kysely";
-import { isoMillis } from "../answer.ts";
+import { hasToolCallMarkup, isoMillis } from "../answer.ts";
 import { resolveSubject } from "../deals/resolve.ts";
 import type { Reader } from "../reader.ts";
 import { readFind } from "../search/find.ts";
 
 const CANDIDATE_CAP = 25;
 const CALENDAR_CAP = 5000;
+
+// presence.ts imports it from here.
+export { hasToolCallMarkup };
 
 type Found = Awaited<ReturnType<typeof readFind>>;
 type Candidate = { kind: string; name: string; target: string };
@@ -18,31 +21,6 @@ const SUBJECT_COLUMN: Record<string, string> = {
 	vendor: "vendor_id",
 	party: "party_id",
 };
-
-const TOOL_CALL_MARKERS = ["<parameter", "</parameter", "<invoke", "</invoke"];
-
-// The old door refused a value carrying its own closing tag, or a marker
-// outside a backtick pair on one line.
-export function hasToolCallMarkup(field: string, value: string) {
-	if (value.includes(`</${field}>`)) return true;
-	return TOOL_CALL_MARKERS.some((marker) => {
-		for (
-			let at = value.indexOf(marker);
-			at !== -1;
-			at = value.indexOf(marker, at + 1)
-		) {
-			const before = value.lastIndexOf("`", at);
-			const after = value.indexOf("`", at);
-			if (
-				before === -1 ||
-				after === -1 ||
-				value.slice(before, after).includes("\n")
-			)
-				return true;
-		}
-		return false;
-	});
-}
 
 const REF_KINDS = [
 	[/^L-/i, "lead"],
