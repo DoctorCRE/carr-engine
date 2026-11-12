@@ -41,14 +41,16 @@ export type TrackRecordFacts = {
 // The one party-to-deal rule, shared with the Relationships map: evidence on
 // the party's live vendor rows, plus the referrals it is credited with, on
 // deals whose client is live. A referral date is UTC midnight in any zone.
-const associations = sql`(select e.party_id, e.deal_id, e.role, e.occurred_at, d.outcome
-	from (select ev.party_id, x.deal_id, x.role, x.occurred_at from vendor ev
+export const associations = sql`(select e.party_id, e.deal_id, e.role, e.occurred_at, e.detail,
+		d.outcome
+	from (select ev.party_id, x.deal_id, x.role, x.occurred_at, x.evidence_ref as detail
+			from vendor ev
 			cross join lateral jsonb_to_recordset(coalesce(ev.deal_evidence, '[]'))
-				as x(deal_id uuid, role text, occurred_at timestamptz)
+				as x(deal_id uuid, role text, occurred_at timestamptz, evidence_ref text)
 			where ev.merged_into is null
 		union all
 		select r.referred_by, r.deal_id, 'referred',
-			coalesce(r.occurred_on::timestamp at time zone 'UTC', r.created_at)
+			coalesce(r.occurred_on::timestamp at time zone 'UTC', r.created_at), r.note
 		from party_link_deal r) e
 	join deal d on d.id = e.deal_id
 	join client dc on dc.id = d.client_id and dc.merged_into is null
