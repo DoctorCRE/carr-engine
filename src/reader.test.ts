@@ -9,6 +9,7 @@ import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
+import { readInvoiceTracker } from "./invoices.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { url } from "./test-rollback.ts";
 
@@ -42,6 +43,7 @@ const readable = [
 	"v_deal_room_premises",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
+	"v_invoice_tracker",
 	"v_open_deal_room_board",
 	"v_ref_index",
 	"v_requirement_request",
@@ -156,7 +158,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal and the client fit and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit and the invoices and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -184,6 +186,10 @@ test("the reader login reads the board, a deal and the client fit and changes no
 				coverage: "recorded_closed_won_only",
 				profiles: [],
 			});
+			const tracker = await readSnapshot(login, (db) =>
+				readInvoiceTracker(db, seeded.actor),
+			);
+			assert.deepEqual(tracker.entries, []);
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(

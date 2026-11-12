@@ -232,11 +232,8 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 						422,
 						expected,
 					);
-					await refused(
-						await get("/client-fit", "no-such-partner"),
-						422,
-						expected,
-					);
+					for (const path of ["/client-fit", "/invoices"])
+						await refused(await get(path, "no-such-partner"), 422, expected);
 				},
 			);
 
@@ -343,7 +340,7 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 });
 
 test("without a database binding every read answers 503", async () => {
-	for (const path of ["/deals", "/deals/Example", "/client-fit"]) {
+	for (const path of ["/deals", "/deals/Example", "/client-fit", "/invoices"]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{ headers: { Cookie: cookie } },
@@ -357,7 +354,7 @@ test("without a database binding every read answers 503", async () => {
 
 test("a request with no session is refused before any read", async () => {
 	let sessionChecks = 0;
-	for (const path of ["/deals", "/deals/Example", "/client-fit"]) {
+	for (const path of ["/deals", "/deals/Example", "/client-fit", "/invoices"]) {
 		const response = await worker.request(
 			`https://app.example.test/api/engine${path}`,
 			{},
@@ -388,6 +385,7 @@ test("a failed read answers a fixed body and logs no input", async () => {
 		for (const path of [
 			`/deals?account_client_id=${secrets[1]}`,
 			`/deals/${encodeURIComponent(secrets[0])}`,
+			"/invoices",
 		]) {
 			const response = await worker.request(
 				`https://app.example.test/api/engine${path}`,
@@ -404,6 +402,7 @@ test("a failed read answers a fixed body and logs no input", async () => {
 		assert.deepEqual(
 			warnings.mock.calls.map((call) => call.arguments),
 			[
+				["read failed:", "Error"],
 				["read failed:", "Error"],
 				["read failed:", "Error"],
 			],

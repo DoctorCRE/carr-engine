@@ -16,7 +16,7 @@ with `kysely-codegen`, and runs TypeScript and tests against that database.
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.
-The snapshot contains 106 empty tables, 53 views, 6 sequences and 32 triggers.
+The snapshot contains 106 empty tables, 54 views, 6 sequences and 32 triggers.
 Its reviewed literals use fictional partners, tenants and domains. SQL comments
 and psql transport directives are removed. Of the old process schema it keeps
 only the four tables behind the client portal link and the document checklist,
@@ -37,16 +37,17 @@ scrubbing, do not report drift. This also excludes changes to literal values in
 function bodies, defaults and constraints from drift detection. This command does
 not update the snapshot or apply any schema change to its target.
 
-To compare the old system's and the engine's Deals answers outside CI, set
-`COMPARE_TARGET` to `staging` or `production`, `COMPARE_APP_URL` to the app's
-https base URL and `COMPARE_SESSION` to a signed-in partner's session cookie
-value, then run `npm run compare`. Both systems are read through the app's host,
-because sign-in works only there. Production also needs
+To compare the old system's and the engine's Deals and Invoices answers outside
+CI, set `COMPARE_TARGET` to `staging` or `production`, `COMPARE_APP_URL` to the
+app's https base URL and `COMPARE_SESSION` to a signed-in partner's session
+cookie value, then run `npm run compare`. Both systems are read through the
+app's host, because sign-in works only there. Production also needs
 `COMPARE_CONFIRM_PRODUCTION=read-only`. It only reads and waits 1.5 seconds
 between requests. It asks the engine before and after the old system and sets a
-request aside as unsettled when the engine's two answers differ. Boards are asked
-by workspace only, not by national account. A refused deal is compared as its
-refusal; a refused board counts as failed. A network or sign-in failure stops the
-run. It prints counts, field paths and record IDs, never values, bodies or the
-cookie. Exit codes are 0 for a match, 1 for differences or unsettled requests and
-2 for failure.
+request aside as unsettled when the engine's two answers differ. Boards are
+asked by workspace only, not by national account. Invoices ignore `observed_at`,
+the read's clock. A refused deal is compared as its refusal; a refused board or
+invoices read counts as failed. A network or sign-in failure stops the run. It
+prints counts, field paths and record IDs, never values, bodies or the cookie.
+Exit codes are 0 for a match, 1 for differences or unsettled requests and 2 for
+failure.

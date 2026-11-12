@@ -9,9 +9,10 @@ export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
 function refusal(ask: Ask, body: unknown) {
-	// A board for a listed workspace has no refusal to compare. Comparing one
-	// would match two empty boards and ask no deals.
-	if (ask.read === "board") throw new Error("board refused");
+	// A board for a listed workspace and the invoices have no refusal to
+	// compare. Comparing one would match two empty answers and ask no deals.
+	if (ask.read === "board" || ask.read === "invoices")
+		throw new Error("read refused");
 	if (typeof body !== "object" || body === null || !("error" in body))
 		throw new Error("refusal without an error");
 	const { correlation_id: _, ...rest } = body as Record<string, unknown>;
@@ -32,6 +33,8 @@ function enginePath(ask: Ask) {
 			return `/api/engine/deals/${encodeURIComponent(ask.deal)}`;
 		case "client fit":
 			return "/api/engine/client-fit";
+		case "invoices":
+			return "/api/engine/invoices";
 	}
 }
 
@@ -47,6 +50,8 @@ function oldCall(ask: Ask) {
 		// The app's first ask, with no filters.
 		case "client fit":
 			return { name: "ideal-client-profile", arguments: {} };
+		case "invoices":
+			return { name: "read-invoice-tracker", arguments: {} };
 	}
 }
 

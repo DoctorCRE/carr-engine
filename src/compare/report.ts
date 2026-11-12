@@ -17,9 +17,16 @@ function readOf(ask: Ask) {
 			return "deal detail";
 		case "client fit":
 			return "client fit";
+		case "invoices":
+			return "invoices";
 	}
 }
-const PREFIXES = { board: "board", deal: "detail", "client fit": "fit" };
+const PREFIXES = {
+	board: "board",
+	deal: "detail",
+	"client fit": "fit",
+	invoices: "invoices",
+};
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>
 		row
@@ -32,7 +39,7 @@ const table = (rows: (string | number)[][]) =>
 
 export function report(target: string, run: Run): string {
 	const lines = [
-		`Old and new Deals answers compared on ${target}`,
+		`Old and new answers compared on ${target}`,
 		`old reads made: ${run.oldReads}, engine reads made: ${run.engineReads}`,
 	];
 	if (run.stopped)

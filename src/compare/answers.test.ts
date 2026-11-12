@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { compareAnswers } from "./answers.ts";
-import { clientFitShape } from "./deals-shapes.ts";
+import { clientFitShape } from "./shapes.ts";
 
 const shape = {
 	rows: {

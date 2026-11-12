@@ -2945,6 +2945,28 @@ CREATE VIEW public.v_export_vendors AS
      LEFT JOIN public.v_last_touch lt ON (((lt.subject_type = 'vendor'::text) AND (lt.subject_id = v.id))))
   WHERE (v.merged_into IS NULL);
 
+CREATE VIEW public.v_invoice_tracker AS
+ SELECT d.id AS deal_id,
+    d.name,
+    d.owner,
+    d.phase,
+    d.lane,
+    d.outcome,
+    d.closed_on,
+    d.invoiced_on AS deal_invoiced_on,
+    cm.id AS commission_id,
+    cm.gross_amount,
+    cm.status,
+    cm.version AS base_version,
+    cm.invoiced_on AS commission_invoiced_on,
+    cm.received_on,
+    cm.due_on
+   FROM (((public.deal d
+     JOIN public.client cl ON (((cl.id = d.client_id) AND (cl.merged_into IS NULL))))
+     JOIN public.party p ON (((p.id = cl.party_id) AND (p.deleted_at IS NULL) AND (p.merged_into IS NULL))))
+     LEFT JOIN public.commission cm ON ((cm.deal_id = d.id)))
+  WHERE ((d.invoiced_on IS NOT NULL) OR ((d.phase = 'closed'::text) AND ((d.outcome IS NULL) OR (d.outcome = 'won'::text))) OR (cm.status = ANY (ARRAY['invoiced'::text, 'received'::text])));
+
 CREATE VIEW public.v_lead_board AS
  SELECT l.id,
     l.registry_ref,

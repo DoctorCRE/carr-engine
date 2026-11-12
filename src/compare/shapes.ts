@@ -60,3 +60,15 @@ export const clientFitShape = {
 	rows: { "profiles[].evidence[]": strict("deal_id") },
 	ignore,
 };
+
+// Entries have no single ID: a deal with several commissions repeats its
+// deal_id, matched in order.
+export const invoicesShape = {
+	rows: {
+		"entries[]": {
+			id: "deal_id",
+			sortedBy: ["name", "commission_invoiced_on", "commission_id"],
+		},
+	},
+	ignore: ["observed_at"],
+};
