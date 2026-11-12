@@ -385,7 +385,7 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 					correlationId: "example",
 				}),
 			);
-			assert.equal(vendor.record.people?.length, 1);
+			assert.deepEqual(vendor.record.people, []);
 			await withAdmin(
 				(admin) =>
 					admin.query(`insert into vendor_market select 'example', 'Example', 'market',
