@@ -1,8 +1,8 @@
 import { type Kysely, sql } from "kysely";
 import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../database.d.ts";
+import { asText } from "../reader.ts";
 import {
-	asText,
 	clientPortalUrlOf,
 	nextStepRequired,
 	phaseChangeOf,

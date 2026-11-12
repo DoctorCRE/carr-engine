@@ -1,6 +1,6 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
-import { asText } from "./shared.ts";
+import { asText } from "../reader.ts";
 
 type DealType = "lease" | "renewal" | "purchase" | "land";
 type Status =

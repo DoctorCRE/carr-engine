@@ -353,8 +353,8 @@ test("a failed read answers a fixed body and logs no input", async () => {
 		assert.deepEqual(
 			warnings.mock.calls.map((call) => call.arguments),
 			[
-				["deals read failed:", "Error"],
-				["deals read failed:", "Error"],
+				["read failed:", "Error"],
+				["read failed:", "Error"],
 			],
 		);
 		const logged = JSON.stringify(warnings.mock.calls.map((c) => c.arguments));

@@ -1,9 +1,9 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
+import { asText } from "../reader.ts";
 import { readChecklist } from "./checklist.ts";
 import { resolveSubject } from "./resolve.ts";
 import {
-	asText,
 	clientPortalUrlOf,
 	nextStepRequired,
 	phaseChangeOf,
