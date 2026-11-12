@@ -18,6 +18,13 @@ const detail = (deal: string, fields: object = {}) => ({
 	name: "Made-up",
 	...fields,
 });
+const clock = "2030-01-01T00:00:00.000Z";
+const invoices = (entries: object[] = [], observed_at = clock) => ({
+	schema_version: "invoice-tracker.v1",
+	actor: "example",
+	entries,
+	observed_at,
+});
 const fixed = {
 	"client fit": { schema_version: "ideal-client-profile.v1", profiles: [] },
 	"capture queue": { candidates: [] },
@@ -26,9 +33,9 @@ const fixed = {
 	"reasons to reach out": {
 		pages: [{ ok: true, cards: [], next_cursor: null }],
 	},
+	invoices: invoices(),
 };
 const [l1, l2] = [uuid(31), uuid(32)];
-const clock = "2030-01-01T00:00:00.000Z";
 const leadRow = (id: string, fields: object = {}) => ({
 	id,
 	stage: "new",
@@ -125,7 +132,7 @@ async function runWith(
 	return { run, calls, pauses };
 }
 
-test("asks the engine, the old system and the engine again for every board, the client fit, the capture queue, the change feed, the find probes, the Leads reads, every deal and every lead, pausing between requests", async () => {
+test("asks the engine, the old system and the engine again for every board, the client fit, the capture queue, the change feed, the find probes, the Leads reads, the invoices, every deal and every lead, pausing between requests", async () => {
 	const { run, calls, pauses } = await runWith(answer);
 	const asks = run.outcomes.map((o) => label(o.ask));
 	assert.deepEqual(asks, [
@@ -142,6 +149,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"quiet follow-ups",
 		"territory",
 		"reasons to reach out",
+		"invoices",
 		d1,
 		d2,
 		d3,
@@ -155,8 +163,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 17);
-	assert.deepEqual([run.oldReads, run.engineReads], [18, 36]);
+	assert.equal(pauses, 18);
+	assert.deepEqual([run.oldReads, run.engineReads], [19, 38]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -233,6 +241,7 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"quiet follow-ups matched",
 			"territory matched",
 			"reasons to reach out matched",
+			"invoices matched",
 			`${d1} matched`,
 			`${d2} matched`,
 			`${d3} matched`,
@@ -305,7 +314,7 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 18, engine reads made: 36
+old reads made: 19, engine reads made: 38
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
@@ -319,6 +328,7 @@ lead board                                       1         1         0         0
 quiet follow-ups                                 1         1         0         0         0         0         0
 territory                                        1         1         0         0         0         0         0
 reasons to reach out                             1         1         0         0         0         0         0
+invoices                                         1         1         0         0         0         0         0
 deal detail                                      3         0         0         0         3         0         0
 lead detail                                      2         2         0         0         0         0         0
 
@@ -505,9 +515,10 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 				],
 			},
 		},
+		invoices: invoices([{ deal_id: d1, name: m(s), commission_id: m(s) }]),
 	});
 	const answers = (s: string) => {
-		const { board, detail, fixed, feed, find, leads } = side(s);
+		const { board, detail, fixed, feed, find, leads, invoices } = side(s);
 		const details = new Map([d1, d2, d3].map((deal) => [deal, detail(deal)]));
 		return (ask: Ask) =>
 			ask.read === "board"
@@ -518,9 +529,11 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 						? feed
 						: ask.read === "find"
 							? find
-							: ask.read === "client fit" || ask.read === "capture queue"
-								? fixed[ask.read]
-								: leads[ask.read];
+							: ask.read === "invoices"
+								? invoices
+								: ask.read === "client fit" || ask.read === "capture queue"
+									? fixed[ask.read]
+									: leads[ask.read];
 	};
 	const { run } = await runWith(answers("new"), answers("old"));
 	assert.ok(
@@ -718,4 +731,48 @@ test("Leads reads the engine fails are recorded as failed and the run goes on", 
 		),
 		["lead board"],
 	);
+});
+
+test("invoice entries match when only the read's clock differs, pair a deal's commissions by content and report a changed amount by deal", async () => {
+	const entry = (deal: string, commission: string | null, name = "Same") => ({
+		deal_id: deal,
+		name,
+		commission_invoiced_on: null,
+		commission_id: commission,
+		gross_amount: "1250.00",
+	});
+	const tied = [entry(d1, null), entry(d2, null)];
+	const twice = [entry(d3, uuid(10), "Later"), entry(d3, uuid(11), "Later")];
+	const once = entry(uuid(12), uuid(13), "Latest");
+	const { run } = await runWith(
+		(ask, call) =>
+			ask.read === "invoices"
+				? invoices(
+						[
+							...tied.toReversed(),
+							...twice,
+							{ ...once, gross_amount: "99.00" },
+						],
+						`2030-01-01T00:00:${String(call).padStart(2, "0")}.000Z`,
+					)
+				: answer(ask),
+		(ask) =>
+			ask.read === "invoices"
+				? invoices([...tied, ...twice, once])
+				: answer(ask),
+	);
+	assert.deepEqual(
+		run.outcomes.filter((o) => o.result !== "matched").map((o) => o.ask),
+		[{ read: "invoices" }],
+	);
+	const text = report("staging", run);
+	assert.match(
+		text,
+		/\ninvoices\.entries\[\]\.gross_amount {2}value differs {2}1 {2}0{8}-0{4}-4000-8000-0{10}12\n/,
+	);
+	assert.match(
+		text,
+		/tied rows in another order: array path, requests\ninvoices\.entries\[\] {2}1\n/,
+	);
+	assert.doesNotMatch(text, /observed_at|99\.00|Latest/);
 });

@@ -46,7 +46,7 @@ because sign-in works only there. Production also needs
 between requests. It asks the engine before and after the old system and sets a
 request aside as unsettled when the engine's two answers differ. Boards are asked
 by workspace only, not by national account. A refused deal is compared as its
-refusal; a refused board counts as failed. A network or sign-in failure stops the
-run. It prints counts, field paths and record IDs, never values, bodies or the
+refusal; a refused board or invoices read counts as failed. A network or sign-in
+failure stops the run. It prints counts, field paths and record IDs, never values, bodies or the
 cookie. Exit codes are 0 for a match, 1 for differences or unsettled requests and
 2 for failure.
