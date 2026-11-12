@@ -2,7 +2,7 @@ import { type RawBuilder, sql } from "kysely";
 import type { Reader } from "../reader.ts";
 import { ORIGINATION_SOURCES } from "./origination-sources.ts";
 
-export type Page = { limit: number; before_id: string | null };
+type Page = { limit: number; before_id: string | null };
 
 type Kind =
 	| "enumeration"
@@ -28,11 +28,7 @@ type Row = {
 	facts: unknown;
 	published_on: string;
 	recorded_at: string;
-	parties: number;
-	npi_parties: number;
-	clients: number;
-	shared_agent: boolean;
-	mailing_only: boolean;
+	route: "identity_review" | "relationship_follow_up" | "research";
 	client_refs: string[];
 	client_ids: string[];
 };
@@ -52,6 +48,7 @@ const isoMillis = (stamp: RawBuilder<unknown>) =>
 const addressKey = (address: RawBuilder<unknown>) =>
 	sql`practice_address_key(${address})`;
 
+// The route stays a CASE because the old read cast mailing_only only when the earlier branches missed.
 const events = (db: Reader, page: Page) =>
 	sql<Row>`with latest as (
 		select distinct on (source, record_key) *
@@ -67,16 +64,19 @@ const events = (db: Reader, page: Page) =>
 		e.kind, e.document_number, e.filing_on::text as filing_on,
 		e.evidence_date::text as evidence_date, e.date_basis, e.source_url, e.facts,
 		e.published_on::text as published_on, ${isoMillis(sql`e.recorded_at`)} as recorded_at,
-		m.parties, m.npi_parties, m.clients,
-		coalesce(e.source = 'formation-fl'
-			and coalesce(e.facts->>'registered_agent_address', '') <> ''
-			and (${addressKey(sql`e.facts->>'registered_agent_address'`)} = ${addressKey(sql`e.facts->>'address'`)}
-				or exists (select 1 from latest other
-					where other.source = 'formation-fl' and other.record_key <> e.record_key
-					and ${addressKey(sql`other.facts->>'registered_agent_address'`)}
-						= ${addressKey(sql`e.facts->>'registered_agent_address'`)})),
-			false) as shared_agent,
-		coalesce((e.facts->>'mailing_only')::boolean, false) as mailing_only,
+		case when e.source = 'formation-fl'
+				and coalesce(e.facts->>'registered_agent_address', '') <> ''
+				and (${addressKey(sql`e.facts->>'registered_agent_address'`)} = ${addressKey(sql`e.facts->>'address'`)}
+					or exists (select 1 from latest other
+						where other.source = 'formation-fl' and other.record_key <> e.record_key
+						and ${addressKey(sql`other.facts->>'registered_agent_address'`)}
+							= ${addressKey(sql`e.facts->>'registered_agent_address'`)}))
+			then 'identity_review'
+			when m.parties = 1 and m.npi_parties = 1 and m.clients = 1
+				and not coalesce((e.facts->>'mailing_only')::boolean, false)
+			then 'relationship_follow_up'
+			when m.parties > 0 then 'identity_review'
+			else 'research' end as route,
 		m.client_refs, m.client_ids
 	from page e
 	cross join lateral (
@@ -96,39 +96,14 @@ const events = (db: Reader, page: Page) =>
 	) m
 	order by e.id desc`.execute(db);
 
-function route(row: Row) {
-	if (row.shared_agent) return "identity_review";
-	if (
-		row.parties === 1 &&
-		row.npi_parties === 1 &&
-		row.clients === 1 &&
-		!row.mailing_only
-	)
-		return "relationship_follow_up";
-	return row.parties > 0 ? "identity_review" : "research";
-}
-
 function card(row: Row) {
-	const {
-		parties,
-		npi_parties,
-		clients,
-		shared_agent,
-		mailing_only,
-		client_refs,
-		client_ids,
-		...event
-	} = row;
 	const unverified =
-		event.source === "formation-fl"
+		row.source === "formation-fl"
 			? "; practice identity and opening unverified"
 			: "";
 	return {
-		...event,
-		route: route(row),
-		client_refs,
-		client_ids,
-		why_now: `${WHY[event.kind]} on ${event.evidence_date}${unverified}`,
+		...row,
+		why_now: `${WHY[row.kind]} on ${row.evidence_date}${unverified}`,
 	};
 }
 
@@ -152,7 +127,7 @@ export async function readReasonsToReachOut(db: Reader, page: Page) {
 		ok: true,
 		contract: "practice-origination.v1",
 		cards,
-		next_cursor: rows.length > page.limit ? (cards.at(-1)?.id ?? null) : null,
+		next_cursor: rows.length > page.limit ? cards.at(-1)?.id : null,
 		coverage: ORIGINATION_SOURCES.map((source) => ({
 			...source,
 			...(source.enabled

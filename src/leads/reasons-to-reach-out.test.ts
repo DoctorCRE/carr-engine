@@ -211,6 +211,21 @@ test("Florida filings sharing a registered agent's address go to identity review
 		);
 	}));
 
+test("a malformed mailing_only fails no card routed before it is read", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await formation(tx, "EXAMPLE00001", {
+			address: "5 Example Ave",
+			registered_agent_address: "5 example avenue",
+			mailing_only: "maybe",
+		});
+		await nppes(tx, { key: "1000000001", facts: { mailing_only: "maybe" } });
+		assert.deepEqual(await routes(tx), {
+			EXAMPLE00001: "identity_review",
+			"1000000001": "research",
+		});
+	}));
+
 test("coverage lists every configured source, imported or not", () =>
 	withRollback(async (tx) => {
 		await seed(tx);
