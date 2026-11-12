@@ -30,15 +30,15 @@ type Party = {
 	contact_state?: string;
 	merged_into?: number;
 	deleted?: boolean;
+	npi?: string;
 };
 const party = (tx: Reader, n: number, name: string, p: Party = {}) =>
 	sql`insert into party (id, kind, name, org_id, city, contact_state, merged_into,
-		deleted_at, created_by, updated_by)
+		deleted_at, npi, created_by, updated_by)
 		select ${uuid(n)}::uuid, ${p.kind ?? "person"}, ${name}, ${p.org ? uuid(p.org) : null}::uuid,
 		'Springfield', ${p.contact_state ?? "active"}, ${p.merged_into ? uuid(p.merged_into) : null}::uuid,
-		${p.deleted ? "2026-01-01T00:00:00Z" : null}::timestamptz, actor, actor from fixture`.execute(
-		tx,
-	);
+		${p.deleted ? "2026-01-01T00:00:00Z" : null}::timestamptz, ${p.npi ?? null}, actor, actor
+		from fixture`.execute(tx);
 
 type Lead = {
 	stage?: string;
@@ -85,21 +85,18 @@ const stageEvent = (
 const uuid = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
-// Drops the clock fields after checking their format.
+// Drops the board's clock after checking it and each label's against it.
 const board = async (tx: Reader) => {
 	const answer = await readLeadBoard(tx);
 	assert.ok(!("error" in answer));
 	const { generated_at, ...rest } = answer;
 	assert.match(generated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-	return {
-		...rest,
-		leads: rest.leads.map((lead) => {
-			const { evaluated_at, ...reachability } = lead.reachability;
-			assert.equal(evaluated_at, generated_at);
-			return { ...lead, reachability };
-		}),
-	};
+	for (const lead of rest.leads)
+		assert.equal(lead.reachability.evaluated_at, generated_at);
+	return rest;
 };
+const withoutClock = (value: unknown) =>
+	JSON.stringify(value, (key, v) => (key === "evaluated_at" ? undefined : v));
 
 test("a lead answers in the old keys, key order, nulls and formats", () =>
 	withRollback(async (tx) => {
@@ -143,10 +140,10 @@ test("a lead answers in the old keys, key order, nulls and formats", () =>
 				sent: false,
 			},
 		};
-		const row = `{"id":"${uuid(5)}","city":"Springfield","lane":null,"name":"Dr. Example","owner":null,"score":85,"stage":"qualified","state":null,"county":null,"is_deal":false,"segment":null,"party_id":"${uuid(2)}","client_id":"${uuid(4)}","is_client":true,"specialty":null,"created_at":"2026-01-05T09:30:00.12+00:00","last_touch":null,"stage_sort":2,"suppressed":false,"updated_at":"2026-01-06T10:00:00+00:00","doctor_name":"Dr. Example","entity_name":"Dr. Example","owner_label":null,"stage_label":"Qualified","base_version":1,"registry_ref":"L-5","score_reason":null,"contact_state":"active","linked_client":true,"practice_name":"Example Practice","do_not_contact":false,"est_lease_event":null,"last_stage_move":{"to":"qualified","from":"new","reason":"Example reason","undone":null,"event_id":"${uuid(9)}","automatic":true,"occurred_at":"2026-02-03T14:05:06.5+00:00","evidence_date":"2026-02-01","idempotency_key":"key-9"},"contact_eligible":true,"event_confidence":"medium","next_action_date":"2026-03-01","possible_clients":[{"name":" dr. EXAMPLE ","client_id":"${uuid(3)}"}],"prospect_client_id":"${uuid(4)}","prospect_client_version":1,"prospect_engagement_status":"inactive",${JSON.stringify(advice).slice(1, -1)}}`;
+		const row = `{"id":"${uuid(5)}","city":"Springfield","lane":null,"name":"Dr. Example","owner":null,"score":85,"stage":"qualified","state":null,"county":null,"is_deal":false,"segment":null,"party_id":"${uuid(2)}","client_id":"${uuid(4)}","is_client":true,"specialty":null,"created_at":"2026-01-05T09:30:00.12+00:00","last_touch":null,"stage_sort":2,"suppressed":false,"updated_at":"2026-01-06T10:00:00+00:00","doctor_name":"Dr. Example","entity_name":"Dr. Example","owner_label":null,"stage_label":"Qualified","base_version":1,"registry_ref":"L-5","score_reason":null,"contact_state":"active","linked_client":true,"practice_name":"Example Practice","do_not_contact":false,"est_lease_event":null,"last_stage_move":{"to":"qualified","from":"new","reason":"Example reason","undone":null,"event_id":"${uuid(9)}","automatic":true,"occurred_at":"2026-02-03T14:05:06.5+00:00","evidence_date":"2026-02-01","idempotency_key":"key-9"},"contact_eligible":true,"event_confidence":"medium","next_action_date":"2026-03-01","possible_clients":[{"name":" dr. EXAMPLE ","client_id":"${uuid(3)}"}],"opportunity_timing":{"events":[],"status":"unknown","contract":"lead-opportunity-timing.v1","record_added_at":"2026-01-05T09:30:00.12+00:00"},"prospect_client_id":"${uuid(4)}","prospect_client_version":1,"prospect_engagement_status":"inactive",${JSON.stringify(advice).slice(1, -1)}}`;
 		const label = `{"schema_version":"lead-reachability.v2","classification":"research","basis":"successful_contact_and_current_route","evidence_state":"unknown","contact_eligible":true,"research_state":"needs_research","missing_reasons":["verified_usable_route_not_established","recent_successful_contact_not_established"],"source_revision":"sha256:17012c7a3a1f943fdc74bf39143b625b5238d589eb451050f2b78620fff9fe5a","evidence":[],"successful_contact":null,"usable_route":null,"contact_freshness_days":90,"source_inputs":{"cell":null,"email":null,"phone":null,"party_id":"${uuid(2)}","activities":[],"created_at":"2026-01-05T09:30:00.12+00:00"}}`;
 		assert.equal(
-			JSON.stringify(await board(tx)),
+			withoutClock(await board(tx)),
 			`{"schema_version":"lead-workspace.v1","leads":[${row.slice(0, -1)},"reachability":${label}}],"last_search_at":null,"search_run_coverage":"unavailable"}`,
 		);
 	}));
@@ -209,7 +206,7 @@ test("possible clients match the trimmed lower-case name of other live clients",
 		await party(tx, 7, "Example Other");
 		await client(tx, 7, 7);
 		await lead(tx, 31, 1);
-		const [only]: Record<string, unknown>[] = (await board(tx)).leads;
+		const [only] = (await board(tx)).leads;
 		assert.deepEqual(only?.possible_clients, [
 			{ name: "EXAMPLE CLINIC", client_id: uuid(3) },
 			{ name: "example clinic ", client_id: uuid(4) },
@@ -227,9 +224,7 @@ test("the last stage move is the newest stage event, with undo and no review", (
 		});
 		await party(tx, 2, "Example Unmoved");
 		await lead(tx, 44, 2);
-		const moves = (await board(tx)).leads.map(
-			(l: Record<string, unknown>) => l.last_stage_move,
-		);
+		const moves = (await board(tx)).leads.map((l) => l.last_stage_move);
 		assert.deepEqual(moves, [
 			null,
 			{
@@ -252,7 +247,7 @@ test("a lead linked to a client that is not a prospect has no prospect fields", 
 		await party(tx, 1, "Example Client");
 		await client(tx, 1, 1);
 		await lead(tx, 51, 1, { client: 1 });
-		const [only]: Record<string, unknown>[] = (await board(tx)).leads;
+		const [only] = (await board(tx)).leads;
 		assert.deepEqual(
 			[
 				only?.prospect_client_id,
@@ -327,6 +322,151 @@ test("the advice text follows the hold, the stage and the next action date", () 
 		]);
 	}));
 
+type Registry = {
+	source?: "nppes" | "pecos";
+	key?: string;
+	npi?: string;
+	kind?: string;
+	basis?: string;
+	date?: string;
+};
+const feeds = (tx: Reader, nppes = "available") =>
+	sql`insert into practice_origination_feed (source, status)
+		values ('nppes', ${nppes}), ('pecos', 'available')`.execute(tx);
+const registry = (tx: Reader, revision: number, r: Registry = {}) =>
+	sql`insert into practice_origination_event (id, source, record_key, fingerprint, npi,
+		name, city, state, kind, evidence_date, date_basis, source_url, facts, published_on,
+		recorded_at, recorded_by) overriding system value
+		select ${revision}, ${r.source ?? "nppes"}, ${r.key ?? "R-1"},
+		md5(${revision}::text) || md5(${revision}::text), ${r.npi ?? "1000000001"},
+		'Example Practice', 'Springfield', 'AL', ${r.kind ?? "enumeration"},
+		${r.date ?? "2025-06-01"}::date, ${r.basis ?? "enumeration"},
+		${`https://registry.example/${revision}`}, '{}', '2025-07-01',
+		'2026-03-04 05:06:07.123456+00', actor from fixture`.execute(tx);
+test("timing lists each registry record's newest revision, by source then record", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await feeds(tx);
+		await party(tx, 1, "Example Registered", { npi: "1000000001" });
+		await lead(tx, 81, 1);
+		await registry(tx, 1, { key: "R-2" });
+		await registry(tx, 2, {
+			kind: "registry_update",
+			basis: "registry_update",
+		});
+		await registry(tx, 3, {
+			kind: "registry_update",
+			basis: "registry_update",
+			date: "2025-08-09",
+		});
+		const pecos = { source: "pecos", basis: "publication" } as const;
+		await registry(tx, 4, { ...pecos, kind: "pecos_observation" });
+		await registry(tx, 5, { ...pecos, key: "R-0", kind: "pecos_correction" });
+		const event = (
+			revision: number,
+			[source, key, date, basis, meaning]: string[],
+		) =>
+			`{"date":"${date}","source":"${source}","meaning":"${meaning}","revision":"${revision}","date_type":"date","date_basis":"${basis}","record_key":"${key}","source_url":"https://registry.example/${revision}","observed_at":"2026-03-04T05:06:07.123456+00:00","uncertainty":"Practice opening and real-estate decision unverified","published_on":"2025-07-01"}`;
+		assert.equal(
+			JSON.stringify((await board(tx)).leads[0]?.opportunity_timing),
+			`{"events":[${[
+				event(3, [
+					"nppes",
+					"R-1",
+					"2025-08-09",
+					"registry_update",
+					"NPPES registry updated",
+				]),
+				event(1, [
+					"nppes",
+					"R-2",
+					"2025-06-01",
+					"enumeration",
+					"NPI enumerated",
+				]),
+				event(5, [
+					"pecos",
+					"R-0",
+					"2025-06-01",
+					"publication",
+					"Public PECOS evidence corrected",
+				]),
+				event(4, [
+					"pecos",
+					"R-1",
+					"2025-06-01",
+					"publication",
+					"Public PECOS enrollment observed",
+				]),
+			].join(
+				",",
+			)}],"status":"supported","contract":"lead-opportunity-timing.v1","record_added_at":"2026-01-05T09:30:00.12+00:00"}`,
+		);
+	}));
+
+test("timing is unknown without one live NPI holder, an available feed or a current match", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await feeds(tx, "blocked");
+		const holders = [
+			[1, "Example Blocked Feed", "1000000001"],
+			[2, "Example Shared A", "1000000002"],
+			[3, "Example Shared B", "1000000002"],
+			[4, "Example Kept", "1000000004"],
+			[6, "Example Corrected Away", "1000000006"],
+		] as const;
+		for (const [n, name, npi] of holders) await party(tx, n, name, { npi });
+		await party(tx, 5, "Example Merged", { npi: "1000000004", merged_into: 4 });
+		for (const [n] of holders) await lead(tx, 90 + n, n);
+		const pecos = { source: "pecos", basis: "publication" } as const;
+		await registry(tx, 1, { npi: "1000000001" });
+		await registry(tx, 2, { ...pecos, key: "R-2", npi: "1000000002" });
+		await registry(tx, 4, { ...pecos, key: "R-4", npi: "1000000004" });
+		await registry(tx, 6, { ...pecos, key: "R-6", npi: "1000000006" });
+		await registry(tx, 7, { ...pecos, key: "R-6", npi: "1000000007" });
+		assert.deepEqual(
+			(await board(tx)).leads.map((l) => [l.name, l.opportunity_timing.status]),
+			[
+				["Example Blocked Feed", "unknown"],
+				["Example Corrected Away", "unknown"],
+				["Example Kept", "supported"],
+				["Example Shared A", "unknown"],
+				["Example Shared B", "unknown"],
+			],
+		);
+	}));
+
+test("one malformed stored timing value refuses the whole board", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await feeds(tx);
+		await party(tx, 1, "Example Fine");
+		await party(tx, 2, "Example Registered", { npi: "1000000001" });
+		await lead(tx, 101, 1, { score: 90 });
+		await lead(tx, 102, 2);
+		await registry(tx, 1);
+		const event = "update practice_origination_event set";
+		for (const malformed of [
+			`${event} date_basis = 'publication'`,
+			`${event} source_url = ' '`,
+			`${event} record_key = E'\u00a0'`,
+			`${event} evidence_date = 'infinity'`,
+			`${event} published_on = '0044-03-15 BC'`,
+			`${event} recorded_at = '10000-01-01 00:00:00+00'`,
+			`update lead set created_at = '-infinity' where id = '${uuid(102)}'`,
+		]) {
+			await sql`savepoint malformed`.execute(tx);
+			assert.equal((await board(tx)).leads.length, 2);
+			await sql.raw(malformed).execute(tx);
+			assert.deepEqual(
+				await readLeadBoard(tx),
+				{ error: "invalid_lead_opportunity_timing" },
+				malformed,
+			);
+			await sql`rollback to savepoint malformed`.execute(tx);
+		}
+	}));
+
 const finding = (
 	tx: Reader,
 	n: number,
@@ -363,7 +503,9 @@ const activityKinds = (tx: Reader) =>
 		on conflict do nothing`.execute(tx);
 
 const labels = async (tx: Reader) =>
-	(await board(tx)).leads.map((l) => l.reachability);
+	(await board(tx)).leads.map(
+		({ reachability: { evaluated_at, ...label } }) => label,
+	);
 
 test("the label keeps the old fingerprint, findings and route", () =>
 	withRollback(async (tx) => {

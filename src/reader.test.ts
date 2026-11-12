@@ -28,6 +28,8 @@ const readable = [
 	"lead",
 	"next_action",
 	"party",
+	"practice_origination_event",
+	"practice_origination_feed",
 	"v_capture_candidate_queue",
 	"v_capture_session_status",
 	"v_client_account",

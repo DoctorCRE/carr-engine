@@ -154,7 +154,7 @@ test("the board refuses a bad workspace, then unknown fields, then a cursor, bef
 	assert.deepEqual(await refused("?correspondence_cursor="), [400, generic]);
 });
 
-test("the board answers, and refuses whole past the finding limit", () =>
+test("the board answers, and refuses whole on bad timing or past the finding limit", () =>
 	withSnapshot(async (url) => {
 		const db = new pg.Client({ connectionString: url });
 		await db.connect();
@@ -163,10 +163,19 @@ test("the board answers, and refuses whole past the finding limit", () =>
 			k as (insert into contact_state (slug, label, contactable, sort)
 				values ('active', 'Example', true, 1)),
 			s as (insert into lead_stage (slug, label, sort) values ('new', 'New', 1)),
-			p as (insert into party (kind, name, created_by, updated_by)
-				select 'org', 'Example Route Lead', id, id from a returning id, created_by)
+			p as (insert into party (kind, name, npi, created_by, updated_by)
+				select 'org', 'Example Route Lead', '1000000001', id, id from a
+				returning id, created_by)
 			insert into lead (party_id, stage, created_by, updated_by)
 			select id, 'new', created_by, created_by from p`;
+		const badTiming = `with f as (insert into practice_origination_feed (source, status)
+				values ('pecos', 'available'))
+			insert into practice_origination_event (source, record_key, fingerprint, npi, name,
+				city, state, kind, evidence_date, date_basis, source_url, facts, published_on,
+				recorded_by)
+			select 'pecos', 'R-1', repeat('a', 64), '1000000001', 'Example', 'Springfield', 'AL',
+				'pecos_observation', '2025-06-01', 'enumeration', 'https://registry.example',
+				'{}', '2025-07-01', id from actor`;
 		const flood = `insert into record_flag (subject_type, subject_id, kind, value, source, created_by)
 			select 'party', party_id, 'note', '{}', 'Example', created_by
 			from lead, generate_series(1, 501)`;
@@ -181,6 +190,9 @@ test("the board answers, and refuses whole past the finding limit", () =>
 				answered.leads.map((l) => [l.name, l.reachability.classification]),
 				[["Example Route Lead", "research"]],
 			);
+			await db.query(badTiming);
+			assert.deepEqual(await refusal(await board("", url)), [422, generic]);
+			await db.query("delete from practice_origination_event");
 			await db.query(flood);
 			assert.deepEqual(await refusal(await board("", url)), [422, generic]);
 		} finally {
