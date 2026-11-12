@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
+import type { Context } from "hono";
 import { type InsertObject, sql, type Transaction } from "kysely";
+import { Refusal, refuse } from "./answer.ts";
 import type { DB, JsonObject } from "./database.d.ts";
-import { connect } from "./reader.ts";
+import { failureKind } from "./failure.ts";
+import { connect, type DatabaseEnv } from "./reader.ts";
 import { UUID } from "./uuid.ts";
+
+export type WriterEnv = DatabaseEnv & {
+	Bindings: { DATABASE_WRITER?: { connectionString: string } };
+};
 
 export type Save = {
 	partner: string;
@@ -33,10 +40,10 @@ export type Saving = {
 export type Change = (saving: Saving) => Promise<JsonObject>;
 
 export class SaveRefusal extends Error {
-	readonly answer: { error: string } & JsonObject;
-	constructor(answer: SaveRefusal["answer"]) {
-		super(answer.error);
-		this.answer = answer;
+	readonly refusal: Refusal;
+	constructor(refusal: Refusal) {
+		super(refusal.error);
+		this.refusal = refusal;
 	}
 }
 
@@ -76,11 +83,7 @@ export async function runSave(
 					.where("slug", "=", save.partner)
 					.executeTakeFirst();
 				if (!actor)
-					throw new SaveRefusal({
-						error: "actor_not_provisioned",
-						slug: save.partner,
-						hint: "the token authenticates as this actor but no row exists in the actor table — provision the actor before any write verb will run",
-					});
+					throw new SaveRefusal(new Refusal(422, "actor_not_provisioned"));
 				const stamped = stamp(save, actor.id, key);
 				const hash = requestHash(save.args, stamped);
 				// The old system's lock text, so same-key saves from either system
@@ -98,7 +101,7 @@ export async function runSave(
 					.executeTakeFirst();
 				if (prior) {
 					if (prior.request_hash !== hash)
-						throw new SaveRefusal({ error: "key_reuse" });
+						throw new SaveRefusal(new Refusal(409, "key_reuse"));
 					return { replayed: true, ...prior.response };
 				}
 				const answer = await change({
@@ -122,18 +125,46 @@ export async function runSave(
 	}
 }
 
+// A save's answer to the signed-in partner: its JSON answer, or the old
+// system's public refusal body.
+export async function answerSave(
+	c: Context<WriterEnv>,
+	verb: string,
+	args: JsonObject,
+	change: Change,
+) {
+	const failed = (status: 500 | 503) =>
+		refuse(c, new Refusal(status, "unhandled_verb_failure", { verb }));
+	const writer = c.env.DATABASE_WRITER;
+	if (!writer) return failed(503);
+	try {
+		const answer: unknown = await runSave(
+			writer.connectionString,
+			{
+				partner: c.get("partner").slug,
+				verb,
+				args,
+				correlation_id: crypto.randomUUID(),
+			},
+			change,
+		);
+		return c.json(answer);
+	} catch (error) {
+		if (error instanceof SaveRefusal) return refuse(c, error.refusal);
+		console.warn("save failed:", failureKind(error));
+		return failed(500);
+	}
+}
+
 function idempotencyKey(args: JsonObject): string {
 	const key = args.idempotency_key;
-	if (!key)
-		throw new SaveRefusal({
-			error: "missing_idempotency_key",
-			hint: "generate a UUID per intended action; retries reuse the SAME key",
-		});
+	if (!key) throw new SaveRefusal(new Refusal(400, "missing_idempotency_key"));
 	if (typeof key !== "string" || !UUID.test(key))
-		throw new SaveRefusal({
-			error: "invalid_idempotency_key",
-			field: "idempotency_key",
-		});
+		throw new SaveRefusal(
+			new Refusal(400, "invalid_idempotency_key", {
+				fields: ["idempotency_key"],
+			}),
+		);
 	return key;
 }
 

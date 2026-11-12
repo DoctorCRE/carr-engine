@@ -24,6 +24,13 @@ const HINTS = {
 	tool_call_markup_in_value: "Remove tool-call markup from the named fields.",
 	database_unavailable:
 		"The operation failed. Quote the correlation_id when reporting it.",
+	missing_idempotency_key: "Supply a fresh idempotency_key for this operation.",
+	invalid_idempotency_key:
+		"Supply a UUID as idempotency_key and reuse it only for the same action.",
+	key_reuse: "Use a fresh idempotency_key for changed arguments.",
+	actor_not_provisioned: "The authenticated actor is not provisioned.",
+	field_required:
+		"Supply the required field using the documented operation shape.",
 };
 
 export class Refusal {
