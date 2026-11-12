@@ -678,7 +678,7 @@ test("conflicting, expired and restricted leads stay in research", () =>
 		);
 	}));
 
-test("the first lead past 500 findings or 500 activities refuses the board", () =>
+test("bad timing on any lead, then the first lead past 500 findings or activities, refuses the board", () =>
 	withRollback(async (tx) => {
 		await seed(tx);
 		await activityKinds(tx);
@@ -704,5 +704,11 @@ test("the first lead past 500 findings or 500 activities refuses the board", () 
 		await calls(1);
 		assert.deepEqual(await readLeadBoard(tx), {
 			error: "contact_evidence_limit_exceeded",
+		});
+		await sql`update lead set created_at = '-infinity' where id = ${uuid(77)}::uuid`.execute(
+			tx,
+		);
+		assert.deepEqual(await readLeadBoard(tx), {
+			error: "invalid_lead_opportunity_timing",
 		});
 	}));

@@ -166,24 +166,24 @@ type BoardLead = WorkspaceLead &
 		reachability: Awaited<ReturnType<typeof reachability>>;
 	};
 
-// The first lead in board order that fails a check refuses the whole board,
-// in the old projection's order.
-function refusal({ lead, findings, contact }: Row) {
-	if (!isServable(lead.opportunity_timing))
+// The old projection threw on bad timing at once but on a limit only after an
+// await, so bad timing on any lead beat a limit on an earlier one.
+function refusal(rows: Row[]) {
+	if (!rows.every(({ lead }) => isServable(lead.opportunity_timing)))
 		return "invalid_lead_opportunity_timing";
-	if (findings.length > EVIDENCE_LIMIT)
-		return "research_evidence_limit_exceeded";
-	if (contact.activities.length > EVIDENCE_LIMIT)
-		return "contact_evidence_limit_exceeded";
+	for (const { findings, contact } of rows) {
+		if (findings.length > EVIDENCE_LIMIT)
+			return "research_evidence_limit_exceeded";
+		if (contact.activities.length > EVIDENCE_LIMIT)
+			return "contact_evidence_limit_exceeded";
+	}
 	return null;
 }
 
 export async function readLeadBoard(db: Reader) {
 	const rows = await leadsInBoardOrder(db);
-	for (const row of rows) {
-		const error = refusal(row);
-		if (error) return { error } as const;
-	}
+	const error = refusal(rows);
+	if (error) return { error } as const;
 	const now = Date.now();
 	return {
 		schema_version: "lead-workspace.v1",
