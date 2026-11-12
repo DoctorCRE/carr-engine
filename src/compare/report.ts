@@ -1,5 +1,5 @@
 import type { Difference } from "./answers.ts";
-import type { Ask, Outcome, Run } from "./run.ts";
+import { type Ask, type Outcome, READS, type Run } from "./run.ts";
 
 type Tally = Map<string, { records: number; ids: Set<string> }>;
 
@@ -13,19 +13,10 @@ const RESULTS = [
 	"failed",
 ] as const;
 
-// A read prints as its own name unless renamed here.
-const LABELS: Partial<Record<Ask["read"], string>> = {
-	deal: "deal detail",
-	feed: "change feed",
-	find: "search find",
-	lead: "lead detail",
-	client: "client detail",
-	vendor: "vendor detail",
-};
 const readOf = (ask: Ask) =>
 	ask.read === "board"
 		? `board ${ask.workspace}`
-		: (LABELS[ask.read] ?? ask.read);
+		: (READS[ask.read].label ?? ask.read);
 function recordOf(ask: Ask) {
 	switch (ask.read) {
 		case "deal":
@@ -42,27 +33,6 @@ function recordOf(ask: Ask) {
 			return undefined;
 	}
 }
-const PREFIXES = {
-	board: "board",
-	deal: "detail",
-	"client fit": "fit",
-	"capture queue": "queue",
-	feed: "feed",
-	find: "find",
-	"lead board": "leads",
-	lead: "lead",
-	"quiet follow-ups": "quiet",
-	territory: "territory",
-	"reasons to reach out": "reasons",
-	invoices: "invoices",
-	"client list": "clients",
-	client: "client",
-	"vendor list": "vendors",
-	vendor: "vendor",
-	"vendor markets": "markets",
-	relationships: "network",
-	"recent activity": "activity",
-};
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>
 		row
@@ -125,7 +95,7 @@ export function report(target: string, run: Run): string {
 	const ties = new Map<string, number>();
 	for (const outcome of run.outcomes) {
 		if (!("comparison" in outcome)) continue;
-		const prefix = PREFIXES[outcome.ask.read];
+		const { prefix } = READS[outcome.ask.read];
 		for (const difference of outcome.comparison.differences)
 			tally(paths, prefix, outcome.ask, difference);
 		for (const difference of outcome.comparison.capAmbiguous)
