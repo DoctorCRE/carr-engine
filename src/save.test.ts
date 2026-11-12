@@ -74,6 +74,7 @@ test("saves", (t) =>
 					await saving.record({ ...subject(saving), human_quote: "  " });
 					await saving.record({
 						...subject(saving),
+						verb: "other-save",
 						after_lock: true,
 						occurred_at: "2030-01-15T18:00:00Z",
 					});
@@ -130,7 +131,12 @@ test("saves", (t) =>
 							agent_rationale: "Example",
 						},
 						{ ...row, occurred_at: start, human_quote: "  " },
-						{ ...row, occurred_at: "2030-01-15 18:00:00+00", after_lock: true },
+						{
+							...row,
+							verb: "other-save",
+							occurred_at: "2030-01-15 18:00:00+00",
+							after_lock: true,
+						},
 					],
 				);
 				const { created_at, request_hash, ...receipt } = await db
@@ -173,6 +179,13 @@ test("saves", (t) =>
 				[save({ idempotency_key: key }, "nobody"), "actor_not_provisioned"],
 			] as const)
 				await assert.rejects(run(request, unreachable), refused(error));
+			await assert.rejects(
+				run(save({ idempotency_key: key }, "nobody"), unreachable),
+				(thrown) =>
+					thrown instanceof SaveRefusal &&
+					thrown.answer.hint ===
+						"the token authenticates as this actor but no row exists in the actor table — provision the actor before any write verb will run",
+			);
 			for (const failure of [
 				new SaveRefusal({ error: "example" }),
 				new Error("example"),

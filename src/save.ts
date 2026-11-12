@@ -11,6 +11,7 @@ export type Save = {
 };
 
 type HistoryEntry = {
+	verb?: string;
 	subject_type: string;
 	subject_id: string;
 	field?: string;
@@ -77,11 +78,12 @@ export async function runSave(
 					throw new SaveRefusal({
 						error: "actor_not_provisioned",
 						slug: save.partner,
+						hint: "the token authenticates as this actor but no row exists in the actor table — provision the actor before any write verb will run",
 					});
 				const stamped = stamp(save, actor.id, key);
 				const hash = requestHash(save.args, stamped);
-				// The old system's lock text, so a retry racing a first call to
-				// either system waits for it and then replays its answer.
+				// The old system's lock text, so same-key saves from either system
+				// queue behind each other.
 				await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(
 					tx,
 				);
@@ -90,6 +92,7 @@ export async function runSave(
 					.select(["request_hash", "response"])
 					.where("idempotency_key", "=", key)
 					.where("created_at", ">", sql<string>`now() - interval '30 days'`)
+					// Every receipt, old or new, stores an answer object.
 					.$narrowType<{ response: JsonObject }>()
 					.executeTakeFirst();
 				if (prior) {
@@ -140,8 +143,12 @@ function idempotencyKey(args: JsonObject): string {
 // old release, so the engine hashes under its own name and a retry that
 // crosses a save's switch is refused once as key_reuse.
 function requestHash(
-	{ idempotency_key, ...args }: JsonObject,
-	{ idempotency_key: key, correlation_id, ...principal }: Stamp,
+	{ idempotency_key: _key, ...args }: JsonObject,
+	{
+		idempotency_key: _stampedKey,
+		correlation_id: _correlation,
+		...principal
+	}: Stamp,
 ): string {
 	const manifest = { version: "doctorcre-engine-save.v1", principal, args };
 	const sorted = JSON.stringify(manifest, (_, value: unknown) =>
@@ -159,6 +166,7 @@ const historyRow = (
 	stamped: Stamp,
 ): InsertObject<DB, "event"> => ({
 	...stamped,
+	verb: entry.verb ?? stamped.verb,
 	occurred_at: entry.occurred_at || sql<string>`now()`,
 	recorded_at: entry.after_lock
 		? sql<string>`clock_timestamp()`
