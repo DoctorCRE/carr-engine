@@ -12,6 +12,7 @@ import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { readLeadBoard } from "./leads/board.ts";
+import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
@@ -54,6 +55,7 @@ const readable = [
 	"v_lead_workspace",
 	"v_open_deal_room_board",
 	"v_party_graph",
+	"v_record_flag_subject",
 	"v_ref_index",
 	"v_requirement_request",
 ];
@@ -177,7 +179,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search and the lead board and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board and territory and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -232,6 +234,14 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			);
 			const leads = await readSnapshot(login, readLeadBoard);
 			assert.deepEqual(leads.leads, []);
+			const territory = await readSnapshot(login, (db) =>
+				readTerritory(db, { vertical: null, city: null, state: null }),
+			);
+			assert.deepEqual(territory, {
+				schema_version: "territory-state-board.v1",
+				coverage: "recorded_geographies_only",
+				submarkets: [],
+			});
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(

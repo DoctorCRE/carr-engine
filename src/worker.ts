@@ -2,6 +2,7 @@ import { Hono } from "hono";
 
 import { connection } from "./connection.ts";
 import { deals } from "./deals/routes.ts";
+import { leads } from "./leads/routes.ts";
 import type { DatabaseEnv } from "./reader.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
@@ -20,6 +21,7 @@ app.use("/api/engine/*", requireSession);
 app.get("/api/engine/whoami", (c) => c.json(c.get("partner")));
 app.route("/api/engine", connection);
 app.route("/api/engine", deals);
+app.route("/api/engine", leads);
 app.route("/api/engine", search);
 
 export default app;
