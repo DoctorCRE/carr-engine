@@ -63,7 +63,9 @@ const isCurrent = (f: Finding, now: number) =>
 	Date.parse(f.observed_at) + (/\.\d{3}\d*[1-9]/.test(f.observed_at) ? 1 : 0) <=
 		now;
 
-function researchState(current: Finding[]) {
+function researchState(
+	current: Finding[],
+): "needs_review" | "verified" | "needs_research" {
 	if (
 		current.some(
 			(f) => f.found && (f.kind === "discrepancy" || f.proposes_correction),

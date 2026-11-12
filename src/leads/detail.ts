@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import type { Reader } from "../reader.ts";
+import { UUID } from "../uuid.ts";
 import { readLeadBoard } from "./board.ts";
 
 type CorrespondenceCursor = { occurred_at: string; id: string };
@@ -47,16 +48,17 @@ type Board = Exclude<
 >;
 type BoardLead = Board["leads"][number];
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INSTANT =
 	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
 const BIGINT_MAX = 9223372036854775807n;
-const nextStep = (state: string) =>
-	state === "needs_review"
-		? "Review discrepancies against original sources before working this record."
-		: state === "verified"
-			? "Read the cited sources and confirm the practice decision before drafting outreach."
-			: "Check practice website, professional registry and public filings; record sourced findings with record-finding, including nothing found.";
+const NEXT_STEP: Record<BoardLead["reachability"]["research_state"], string> = {
+	needs_review:
+		"Review discrepancies against original sources before working this record.",
+	verified:
+		"Read the cited sources and confirm the practice decision before drafting outreach.",
+	needs_research:
+		"Check practice website, professional registry and public filings; record sourced findings with record-finding, including nothing found.",
+};
 
 const isCalendarDate = (day: string) => {
 	const at = Date.parse(`${day}T00:00:00Z`);
@@ -180,7 +182,7 @@ function openLead(lead: BoardLead, fields: DetailFields) {
 			evidence: reachability.evidence,
 			coverage: "recorded_findings_only",
 			external_search_performed: false,
-			next_step: nextStep(reachability.research_state),
+			next_step: NEXT_STEP[reachability.research_state],
 		},
 	};
 }

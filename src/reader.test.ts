@@ -22,7 +22,8 @@ import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
-// name. The views read their tables with their owner's rights.
+// name, and `carr_business_date()`. The views read their tables with their
+// owner's rights.
 const readable = [
 	"actor",
 	"client",
@@ -99,6 +100,13 @@ async function withReaderLogin(
 			await admin.query(`ALTER ROLE ${name} SET TimeZone = 'America/Chicago'`);
 			await admin.query(
 				`GRANT SELECT ON ${readable.map((t) => `public.${t}`).join(", ")} TO ${name}`,
+			);
+			// Production revoked PUBLIC's execute, so the login holds its own.
+			await admin.query(
+				"REVOKE EXECUTE ON FUNCTION public.carr_business_date(timestamptz) FROM PUBLIC",
+			);
+			await admin.query(
+				`GRANT EXECUTE ON FUNCTION public.carr_business_date(timestamptz) TO ${name}`,
 			);
 			// Production revoked PUBLIC's right to call this one.
 			await admin.query(

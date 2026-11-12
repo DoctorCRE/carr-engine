@@ -27,6 +27,12 @@ const json = (body: unknown, status = 200) => Response.json(body, { status });
 const rpc = (result: object) => json({ jsonrpc: "2.0", id: 1, result });
 const content = (body: unknown, isError?: true) =>
 	rpc({ content: [{ type: "text", text: JSON.stringify(body) }], isError });
+const failedRead = (verb: string) => ({
+	error: "unhandled_verb_failure",
+	correlation_id: "made-up",
+	hint: "The operation failed. Quote the correlation_id when reporting it.",
+	verb,
+});
 const header = (sent: Sent, name: string) =>
 	new Headers(sent.init.headers).get(name);
 
@@ -99,8 +105,8 @@ test("reads the old answer from the last data line of an event stream", async ()
 test("a refused deal is compared as its refusal without the correlation ID, on either side", async () => {
 	const refused = {
 		error: "not_found",
-		hint: "The requested record was not found.",
 		correlation_id: "00000000-0000-4000-8000-000000000900",
+		hint: "The requested record was not found.",
 	};
 	const expected = {
 		error: "not_found",
@@ -117,7 +123,11 @@ test("a refused deal is compared as its refusal without the correlation ID, on e
 });
 
 test("a refused board fails its read instead of comparing as an empty board", async () => {
-	const refused = { error: "unauthenticated", correlation_id: "made-up" };
+	const refused = {
+		error: "unauthenticated",
+		correlation_id: "made-up",
+		hint: "The authenticated actor could not be resolved.",
+	};
 	for (const ask of [
 		fake(() => content(refused, true)).askOld,
 		fake(() => json(refused, 422)).askEngine,
@@ -130,7 +140,7 @@ test("a refused board fails its read instead of comparing as an empty board", as
 
 test("an engine find that fails with a server error fails that read without stopping the run", async () => {
 	await assert.rejects(
-		fake(() => json({ error: "read_failed" }, 500)).askEngine(find),
+		fake(() => json(failedRead("find"), 500)).askEngine(find),
 		(error: Error) => !(error instanceof StopRun),
 	);
 });
@@ -140,7 +150,7 @@ test("a network or sign-in failure stops the run, and no failure shows the sessi
 		() => {
 			throw new TypeError(`fetch failed ${session}`);
 		},
-		() => json({ error: "unauthorized" }, 401),
+		() => json({ error: "unauthorized", state: "sign_in_required" }, 401),
 		() => new Response(null, { status: 302, headers: { location: "/login" } }),
 	];
 	for (const respond of failures)
@@ -151,7 +161,7 @@ test("a network or sign-in failure stops the run, and no failure shows the sessi
 					error instanceof StopRun && !error.message.includes(session),
 			);
 	for (const ask of [
-		fake(() => json({ error: "read_failed" }, 500)).askEngine,
+		fake(() => json(failedRead("get-deal-room"), 500)).askEngine,
 		fake(() => json({ error: "made-up" }, 500)).askOld,
 	])
 		await assert.rejects(
@@ -231,7 +241,14 @@ test("a full last page is followed by one more request, which hands back its cur
 
 test("an unavailable feed or one that never ends fails its read without stopping the run", async () => {
 	const unavailable = () =>
-		json({ error: "database_unavailable", correlation_id: "made-up" }, 503);
+		json(
+			{
+				error: "database_unavailable",
+				correlation_id: "made-up",
+				hint: "The operation failed. Quote the correlation_id when reporting it.",
+			},
+			503,
+		);
 	const endless = () => feedPage({ events: events(0, 200), cursor: "c1" });
 	for (const respond of [unavailable, endless])
 		for (const ask of [fake(respond).askEngine, fake(respond).askOld])
