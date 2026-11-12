@@ -28,5 +28,5 @@ search.get("/find", async (c) => {
 			c,
 			new Refusal(400, "missing_required", { fields: ["query"] }),
 		);
-	return answer(c, (db) => readFind(db, query));
+	return answer(c, "find", (db) => readFind(db, query));
 });

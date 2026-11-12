@@ -23,7 +23,7 @@ deals.get("/deals", async (c) => {
 				fields: ["workspace"],
 			}),
 		);
-	return answer(c, (db) =>
+	return answer(c, "deal-room-board", (db) =>
 		readBoard(db, {
 			partner: c.get("partner").slug,
 			workspace: workspace ?? null,
@@ -37,7 +37,7 @@ deals.get("/deals/", (c) =>
 );
 
 deals.get("/deals/:deal{.+}", (c) =>
-	answer(c, async (db) => {
+	answer(c, "get-deal-room", async (db) => {
 		const detail = await readDealDetail(db, c.req.param("deal"));
 		if (!("error" in detail)) return detail;
 		switch (detail.error) {
@@ -57,7 +57,7 @@ deals.get("/deals/:deal{.+}", (c) =>
 );
 
 deals.get("/client-fit", (c) =>
-	answer(c, async (db) => {
+	answer(c, "ideal-client-profile", async (db) => {
 		const fit = await readClientFit(db, {
 			vertical: c.req.query("vertical") || null,
 			city: c.req.query("city") || null,
@@ -68,7 +68,9 @@ deals.get("/client-fit", (c) =>
 	}),
 );
 
-deals.get("/capture-queue", (c) => answer(c, readCaptureQueue));
+deals.get("/capture-queue", (c) =>
+	answer(c, "capture-queue", readCaptureQueue),
+);
 
 // The old feed checked the partner, then the method, then the cursor, and
 // answered with bare error bodies.

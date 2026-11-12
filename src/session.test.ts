@@ -34,6 +34,17 @@ function binding(
 	};
 }
 
+const correlation = "00000000-0000-4000-8000-000000000000";
+mock.method(crypto, "randomUUID", () => correlation);
+// Strings, so the tests also pin the old system's key order.
+const signInRequired = '{"error":"unauthorized","state":"sign_in_required"}';
+const unavailable = `{"error":"internal_error","correlation_id":"${correlation}"}`;
+
+async function assertUnavailable(response: Response) {
+	assert.equal(response.status, 503);
+	assert.equal(await response.text(), unavailable);
+}
+
 function writeHeaders(): Record<string, string> {
 	return {
 		Cookie: cookie,
@@ -67,7 +78,7 @@ for (const value of [
 		const headers = value === undefined ? {} : { Cookie: value };
 		const response = await worker.request(path, { headers }, fake.env);
 		assert.equal(response.status, 401);
-		assert.deepEqual(await response.json(), { error: "unauthorized" });
+		assert.equal(await response.text(), signInRequired);
 		assert.equal(response.headers.get("Cache-Control"), "no-store");
 		assert.equal(fake.requests.length, 0);
 		assert.equal(warnings.mock.callCount(), 0);
@@ -83,9 +94,8 @@ for (const status of [401, 302, 500]) {
 			fake.env,
 		);
 		assert.equal(response.status, status === 401 ? 401 : 503);
-		assert.deepEqual(await response.json(), {
-			error: status === 401 ? "unauthorized" : "sign_in_unavailable",
-		});
+		if (status === 401) assert.equal(await response.text(), signInRequired);
+		else await assertUnavailable(response);
 		assert.equal(response.headers.get("Cache-Control"), "no-store");
 		assert.equal(warnings.mock.callCount(), status === 401 ? 0 : 1);
 	});
@@ -101,7 +111,7 @@ test("a thrown CARR error is sign-in unavailable", async () => {
 		fake.env,
 	);
 	assert.equal(response.status, 503);
-	assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
+	await assertUnavailable(response);
 });
 
 for (const body of [
@@ -126,7 +136,7 @@ for (const body of [
 			fake.env,
 		);
 		assert.equal(response.status, 503);
-		assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
+		await assertUnavailable(response);
 	});
 }
 
@@ -164,7 +174,7 @@ for (const [name, reply] of [
 			binding(reply).env,
 		);
 		assert.equal(response.status, 503);
-		assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
+		await assertUnavailable(response);
 		assert.deepEqual(limits, [3000]);
 		assert.equal(warnings.mock.callCount(), 1);
 		assert.equal(
@@ -216,7 +226,7 @@ test("invalid JSON fails closed", async () => {
 		fake.env,
 	);
 	assert.equal(response.status, 503);
-	assert.deepEqual(await response.json(), { error: "sign_in_unavailable" });
+	await assertUnavailable(response);
 });
 
 for (const status of [200, 401, 500]) {
