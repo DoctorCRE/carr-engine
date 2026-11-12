@@ -54,3 +54,12 @@ export const detailShape = {
 	],
 	ignore,
 };
+
+// Profiles have no ID, and their sort keys are their group, so none can tie.
+export const clientFitShape = {
+	rows: {
+		"profiles[]": { sortedBy: [] },
+		"profiles[].evidence[]": strict("deal_id"),
+	},
+	ignore,
+};

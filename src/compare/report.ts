@@ -10,8 +10,12 @@ const RESULTS = [
 ] as const;
 
 const readOf = (ask: Ask) =>
-	ask.read === "board" ? `board ${ask.workspace}` : "deal detail";
-const prefixOf = (ask: Ask) => (ask.read === "board" ? "board" : "detail");
+	ask.read === "board"
+		? `board ${ask.workspace}`
+		: ask.read === "deal"
+			? "deal detail"
+			: "client fit";
+const PREFIXES = { board: "board", deal: "detail", "client fit": "fit" };
 const table = (rows: (string | number)[][]) =>
 	rows.map((row) =>
 		row
@@ -52,7 +56,7 @@ export function report(target: string, run: Run): string {
 	const ties = new Map<string, number>();
 	for (const outcome of run.outcomes) {
 		if (!("comparison" in outcome)) continue;
-		const prefix = prefixOf(outcome.ask);
+		const prefix = PREFIXES[outcome.ask.read];
 		for (const difference of outcome.comparison.differences) {
 			const key = `${prefix}.${difference.path}\t${difference.kind}`;
 			const entry = paths.get(key) ?? { records: 0, ids: new Set() };

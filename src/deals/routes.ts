@@ -7,6 +7,7 @@ import {
 	readSnapshot,
 } from "../reader.ts";
 import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
+import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 
 // The hints are the old system's public ones, so a refusal body is exactly
@@ -134,5 +135,17 @@ deals.get("/deals/:deal{.+}", (c) =>
 			case "not_found":
 				return new Refusal(404, "not_found");
 		}
+	}),
+);
+
+deals.get("/client-fit", (c) =>
+	answer(c, async (db) => {
+		const fit = await readClientFit(db, {
+			vertical: c.req.query("vertical") || null,
+			city: c.req.query("city") || null,
+			state: c.req.query("state") || null,
+		});
+		// The old system's limit error was not public, so it answered generically.
+		return "error" in fit ? new Refusal(422, "unhandled_verb_failure") : fit;
 	}),
 );

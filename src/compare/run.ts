@@ -1,12 +1,13 @@
 import { WORKSPACES, type Workspace } from "../deals/board.ts";
 import { compareAnswers, UUID } from "./answers.ts";
-import { boardShape, detailShape } from "./deals-shapes.ts";
+import { boardShape, clientFitShape, detailShape } from "./deals-shapes.ts";
 
 export class StopRun extends Error {}
 
 export type Ask =
 	| { read: "board"; workspace: Workspace }
-	| { read: "deal"; deal: string };
+	| { read: "deal"; deal: string }
+	| { read: "client fit" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -34,6 +35,12 @@ function dealsOn(board: unknown): string[] {
 		.filter((id): id is string => typeof id === "string" && UUID.test(id));
 }
 
+const SHAPES = {
+	board: boardShape,
+	deal: detailShape,
+	"client fit": clientFitShape,
+};
+
 export async function compareDeals(
 	askEngine: Fetch,
 	askOld: Fetch,
@@ -45,14 +52,14 @@ export async function compareDeals(
 		engineReads: 0,
 		stopped: false,
 	};
-	const queue: Ask[] = WORKSPACES.map((workspace) => ({
-		read: "board",
-		workspace,
-	}));
+	const queue: Ask[] = [
+		...WORKSPACES.map((workspace) => ({ read: "board", workspace }) as const),
+		{ read: "client fit" },
+	];
 	const queued = new Set<string>();
 	for (const [index, ask] of queue.entries()) {
 		if (index > 0) await pause();
-		const shape = ask.read === "board" ? boardShape : detailShape;
+		const shape = SHAPES[ask.read];
 		let answers: unknown[];
 		try {
 			run.engineReads++;

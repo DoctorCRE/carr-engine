@@ -24,6 +24,32 @@ function lastData(stream: string) {
 	return line.slice(5);
 }
 
+function enginePath(ask: Ask) {
+	switch (ask.read) {
+		case "board":
+			return `/api/engine/deals?${new URLSearchParams({ workspace: ask.workspace })}`;
+		case "deal":
+			return `/api/engine/deals/${encodeURIComponent(ask.deal)}`;
+		case "client fit":
+			return "/api/engine/client-fit";
+	}
+}
+
+function oldCall(ask: Ask) {
+	switch (ask.read) {
+		case "board":
+			return {
+				name: "deal-room-board",
+				arguments: { workspace: ask.workspace },
+			};
+		case "deal":
+			return { name: "get-deal-room", arguments: { deal: ask.deal } };
+		// The app's first ask, with no filters.
+		case "client fit":
+			return { name: "ideal-client-profile", arguments: {} };
+	}
+}
+
 export function askers(app: URL, session: string, fetch: Fetch) {
 	const cookie = `__Host-dealroom_session=${session}`;
 
@@ -46,11 +72,7 @@ export function askers(app: URL, session: string, fetch: Fetch) {
 	}
 
 	async function askEngine(ask: Ask): Promise<unknown> {
-		const path =
-			ask.read === "board"
-				? `/api/engine/deals?${new URLSearchParams({ workspace: ask.workspace })}`
-				: `/api/engine/deals/${encodeURIComponent(ask.deal)}`;
-		const response = await send(path, {
+		const response = await send(enginePath(ask), {
 			headers: { accept: "application/json" },
 		});
 		if (response.status === 200) return response.json();
@@ -61,10 +83,6 @@ export function askers(app: URL, session: string, fetch: Fetch) {
 
 	let rpcId = 0;
 	async function askOld(ask: Ask): Promise<unknown> {
-		const params =
-			ask.read === "board"
-				? { name: "deal-room-board", arguments: { workspace: ask.workspace } }
-				: { name: "get-deal-room", arguments: { deal: ask.deal } };
 		const response = await send("/mcp", {
 			method: "POST",
 			headers: {
@@ -76,7 +94,7 @@ export function askers(app: URL, session: string, fetch: Fetch) {
 				jsonrpc: "2.0",
 				id: ++rpcId,
 				method: "tools/call",
-				params,
+				params: oldCall(ask),
 			}),
 		});
 		if (response.status !== 200) throw new Error("old read failed");

@@ -8,6 +8,7 @@ const session = "made-up-session-value";
 const deal = "00000000-0000-4000-8000-000000000001";
 const board: Ask = { read: "board", workspace: "national_account" };
 const detail: Ask = { read: "deal", deal };
+const fit: Ask = { read: "client fit" };
 
 type Sent = { url: URL; init: RequestInit };
 
@@ -27,15 +28,17 @@ const content = (body: unknown, isError?: true) =>
 const header = (sent: Sent, name: string) =>
 	new Headers(sent.init.headers).get(name);
 
-test("asks the engine's board by workspace and a deal by its reference, on the app's host with the session", async () => {
+test("asks the engine's board by workspace, a deal by its reference and the client fit, on the app's host with the session", async () => {
 	const { askEngine, sent } = fake(() => json({ made_up: true }));
 	assert.deepEqual(await askEngine(board), { made_up: true });
 	await askEngine(detail);
+	await askEngine(fit);
 	assert.deepEqual(
 		sent.map((s) => s.url.href),
 		[
 			"https://app.example.test/api/engine/deals?workspace=national_account",
 			`https://app.example.test/api/engine/deals/${deal}`,
+			"https://app.example.test/api/engine/client-fit",
 		],
 	);
 	for (const s of sent) {
@@ -49,9 +52,11 @@ test("asks the old system through the same host with the session and the app's o
 	const { askOld, sent } = fake(() => content({ made_up: true }));
 	assert.deepEqual(await askOld(board), { made_up: true });
 	await askOld(detail);
+	await askOld(fit);
 	assert.deepEqual(
 		sent.map((s) => [s.url.href, s.init.method]),
 		[
+			["https://app.example.test/mcp", "POST"],
 			["https://app.example.test/mcp", "POST"],
 			["https://app.example.test/mcp", "POST"],
 		],
@@ -61,6 +66,7 @@ test("asks the old system through the same host with the session and the app's o
 		[
 			{ name: "deal-room-board", arguments: { workspace: "national_account" } },
 			{ name: "get-deal-room", arguments: { deal } },
+			{ name: "ideal-client-profile", arguments: {} },
 		],
 	);
 	for (const s of sent) {
