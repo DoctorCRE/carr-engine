@@ -20,8 +20,8 @@ const encodeCursor = ({ recorded_at, id }: Cursor) =>
 		.replaceAll("/", "_")
 		.replace(/=+$/, "");
 
-// Undefined means the cursor is refused. A valid cursor's values are ASCII, so
-// reading the bytes as Latin-1 accepts exactly what a UTF-8 decode would.
+// Undefined means the cursor is refused. A valid cursor's values are ASCII, so reading
+// the bytes as Latin-1 accepts what a UTF-8 decode would, except a leading byte-order mark.
 export function decodeCursor(text: string): Cursor | undefined {
 	const base64 = text.replaceAll("-", "+").replaceAll("_", "/");
 	let value: unknown;

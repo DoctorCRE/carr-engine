@@ -135,7 +135,7 @@ test("the change feed pages events and lists live presence and capture sessions"
 				`],"cursor":"${lastCursor}"}`,
 		);
 
-		// The app starts from a time with standard base64 and a zero id.
+		// A start cursor from a time and a zero id, here in padded standard base64.
 		const start = btoa(
 			JSON.stringify({
 				recorded_at: new Date("2030-01-01T00:01:40Z").toISOString(),
