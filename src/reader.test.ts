@@ -42,7 +42,7 @@ const readable = [
 	"party_link_deal",
 	"practice_origination_event",
 	"practice_origination_feed",
-	"tool_call",
+	"v_calendar_capture_receipt",
 	"v_capture_candidate_queue",
 	"v_capture_session_status",
 	"v_client_account",
@@ -410,6 +410,7 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				"capture_candidate",
 				"deal_note",
 				"schema_migrations",
+				"tool_call",
 			] as const) {
 				await assert.rejects(
 					readSnapshot(login, (db) =>

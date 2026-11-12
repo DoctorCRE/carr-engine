@@ -2317,6 +2317,8 @@ CREATE VIEW public.v_record_flag_subject AS
    FROM (public.record_flag f
      LEFT JOIN public.actor a ON ((a.id = f.created_by)));
 
+CREATE VIEW public.v_calendar_capture_receipt AS SELECT actor_id, idempotency_key, response->>'activity_id' AS activity_id FROM public.tool_call WHERE verb = 'log-activity' AND idempotency_key LIKE 'calcap-%';
+
 CREATE VIEW public.v_capture_candidate_queue AS
  SELECT c.id,
     c.session_id,

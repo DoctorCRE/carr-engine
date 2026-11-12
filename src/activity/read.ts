@@ -136,21 +136,19 @@ const calendarHistory = (
 	id: string,
 ) =>
 	db
-		.selectFrom("tool_call as t")
+		.selectFrom("v_calendar_capture_receipt as r")
 		.innerJoin("activity as a", (join) =>
-			join.on(sql`a.id::text`, "=", sql`t.response->>'activity_id'`),
+			join.on(sql`a.id::text`, "=", sql.ref("r.activity_id")),
 		)
-		.innerJoin("actor", "actor.id", "t.actor_id")
+		.innerJoin("actor", "actor.id", "r.actor_id")
 		.select([
-			"t.idempotency_key as key",
+			"r.idempotency_key as key",
 			sql<string>`a.id::text`.as("activity_id"),
 			"a.summary",
 		])
-		.where("t.verb", "=", "log-activity")
 		.where("actor.slug", "=", partner)
 		.where(sql.ref(`a.${SUBJECT_COLUMN[type]}`), "=", id)
-		.where("t.idempotency_key", "like", "calcap-%")
-		.orderBy("t.idempotency_key")
+		.orderBy("r.idempotency_key")
 		.limit(CALENDAR_CAP + 1)
 		.execute();
 
