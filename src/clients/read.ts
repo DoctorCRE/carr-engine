@@ -1,4 +1,4 @@
-import { type Kysely, sql } from "kysely";
+import { type Kysely, type RawBuilder, sql } from "kysely";
 import type { DB } from "../database.d.ts";
 import { asText } from "../reader.ts";
 
@@ -18,18 +18,21 @@ export const CONTRACTS = [
 ] as const;
 export const PAGE_SIZE = 25;
 
-type Contract = (typeof CONTRACTS)[number];
+export type Contract = (typeof CONTRACTS)[number];
+export type Dataset = keyof typeof DATASETS;
 // The old query echo, in its key order.
-export type ClientQuery = {
-	dataset: "clients";
+export type ListQuery<D extends Dataset, Sort extends string> = {
+	dataset: D;
 	contract?: Contract;
 	scope: "team" | "mine";
 	q: string | null;
 	owner: "all" | (typeof PARTNERS)[number];
-	territory: null;
-	sort: (typeof SORTS)[number];
+	territory: string | null;
+	sort: Sort;
 	page: number;
 	page_size: typeof PAGE_SIZE;
+};
+export type ClientQuery = ListQuery<"clients", (typeof SORTS)[number]> & {
 	status: string | null;
 	type: string | null;
 	pipeline: (typeof PIPELINES)[number];
@@ -64,8 +67,18 @@ export class BusinessRefusal {
 export const invalid = (detail: NonNullable<RefusalBody["detail"]>) =>
 	new BusinessRefusal({ error: "QUERY_INVALID", detail });
 
-const NOTE =
-	"Status and ETL are what someone entered on this record. They are shown as entered, and they are not proof that an agreement was signed or that anyone was put on the work.";
+const DATASETS = {
+	clients: {
+		source: "client",
+		source_ref: "client+party+client_status+client_type",
+		note: "Status and ETL are what someone entered on this record. They are shown as entered, and they are not proof that an agreement was signed or that anyone was put on the work.",
+	},
+	vendors: {
+		source: "vendor",
+		source_ref: "vendor+party+vendor_category+vendor_stage+vendor_disposition",
+		note: "Stage, disposition and relationship level are what someone entered on this record. They are shown as entered, and they are not proof of a commitment either way.",
+	},
+};
 const FRESH_FOR_MS = 60_000;
 const NOT_IN_THIS_READ = [
 	"assignments",
@@ -75,6 +88,8 @@ const NOT_IN_THIS_READ = [
 	"documents",
 	"history",
 ];
+
+type Column = RawBuilder<unknown>;
 
 const lastDealAt = sql<
 	string | null
@@ -88,9 +103,9 @@ const ORDER = {
 	last_deal_asc: sql`${lastDealAt} asc nulls last, lower(p.name), c.id`,
 };
 
-const source = ({ observedAt, correlationId }: Stamp) => ({
-	source: "client",
-	source_ref: "client+party+client_status+client_type",
+const source = (dataset: Dataset, { observedAt, correlationId }: Stamp) => ({
+	source: DATASETS[dataset].source,
+	source_ref: DATASETS[dataset].source_ref,
 	observed_at: observedAt.toISOString(),
 	valid_until: new Date(observedAt.valueOf() + FRESH_FOR_MS).toISOString(),
 	freshness: "fresh",
@@ -98,6 +113,32 @@ const source = ({ observedAt, correlationId }: Stamp) => ({
 	safe_explanation:
 		"Fresh because this is a no-store request-time canonical database read of live business records; valid for 60 seconds.",
 });
+
+// The old list envelope, with the rows, facets and partial signal in between.
+export function listAnswer<
+	Body extends { rows: unknown[]; facets: object; partial: object | null },
+>(
+	viewer: string,
+	query: ListQuery<Dataset, string>,
+	total: number,
+	body: Body,
+	stamp: Stamp,
+) {
+	const page_count = Math.max(1, Math.ceil(total / PAGE_SIZE));
+	return {
+		viewer,
+		dataset: query.dataset,
+		query,
+		total,
+		page: query.page,
+		page_size: PAGE_SIZE,
+		page_count,
+		out_of_range: query.page > page_count,
+		...body,
+		recorded_field_note: DATASETS[query.dataset].note,
+		source: source(query.dataset, stamp),
+	};
+}
 
 const PIPELINE = { active: true, other: false, unknown: null } as const;
 
@@ -110,17 +151,18 @@ const liveClients = (db: Kysely<DB>) =>
 		.where("c.merged_into", "is", null)
 		.where("p.merged_into", "is", null)
 		.where("p.deleted_at", "is", null);
-const partnerId = (db: Kysely<DB>, slug: string) =>
+export const partnerId = (db: Kysely<DB>, slug: string) =>
 	db.selectFrom("actor").select("id").where("slug", "=", slug);
 
-// Null, not false, when the client has an owner and the viewer has no actor row.
-const ownedByViewer = (viewerId: string | null) =>
-	sql<
-		boolean | null
-	>`(c.owner_id is not null and c.owner_id = ${viewerId}::uuid)`;
+// Null, not false, when the record has an owner and the viewer has no actor row.
+export const ownedByViewer = (owner: Column, viewerId: string | null) =>
+	sql<boolean | null>`(${owner} is not null and ${owner} = ${viewerId}::uuid)`;
 
 // The searcher's %, _ and \ match themselves.
-const likeTerm = (q: string) => `%${q.replace(/([\\%_])/g, "\\$1")}%`;
+export function searched(q: string, ref: Column) {
+	const term = `%${q.replace(/([\\%_])/g, "\\$1")}%`;
+	return sql<boolean>`(p.name ilike ${term} escape '\\' or ${ref} ilike ${term} escape '\\' or p.ref ilike ${term} escape '\\')`;
+}
 
 // The legacy shape, for a caller that names no contract.
 const shaped = <Row extends { last_deal_at: unknown; deal_type: unknown }>(
@@ -132,7 +174,7 @@ const shaped = <Row extends { last_deal_at: unknown; deal_type: unknown }>(
 	return legacy;
 };
 
-const viewerIdOf = async (db: Kysely<DB>, viewer: string) =>
+export const viewerIdOf = async (db: Kysely<DB>, viewer: string) =>
 	(await partnerId(db, viewer).executeTakeFirst())?.id ?? null;
 
 function matchingClients(db: Kysely<DB>, query: ClientQuery, viewer: string) {
@@ -142,12 +184,7 @@ function matchingClients(db: Kysely<DB>, query: ClientQuery, viewer: string) {
 		clients = clients.where("c.owner_id", "=", partnerId(db, viewer));
 	if (owner !== "all")
 		clients = clients.where("c.owner_id", "=", partnerId(db, owner));
-	if (q !== null) {
-		const term = likeTerm(q);
-		clients = clients.where(
-			sql<boolean>`(p.name ilike ${term} escape '\\' or c.roster_ref ilike ${term} escape '\\' or p.ref ilike ${term} escape '\\')`,
-		);
-	}
+	if (q !== null) clients = clients.where(searched(q, sql.ref("c.roster_ref")));
 	if (status !== null) clients = clients.where("c.status", "=", status);
 	if (type !== null) clients = clients.where("c.client_type", "=", type);
 	if (pipeline !== "any")
@@ -184,7 +221,7 @@ export async function readClientList(
 			lastDealAt.as("last_deal_at"),
 			"c.deal_type_label as deal_type",
 			"c.owner_label",
-			ownedByViewer(ownerId).as("owned_by_viewer"),
+			ownedByViewer(sql.ref("c.owner_id"), ownerId).as("owned_by_viewer"),
 			asText(eb.ref("c.updated_at")).as("updated_at"),
 		])
 		.orderBy(ORDER[query.sort])
@@ -205,24 +242,19 @@ export async function readClientList(
 		.execute();
 	if (query.scope === "mine" && ownerId === null)
 		throw new BusinessRefusal({ error: "VIEWER_OWNER_UNKNOWN" });
-	const page_count = Math.max(1, Math.ceil(total / PAGE_SIZE));
-	return {
+	return listAnswer(
 		viewer,
-		dataset: "clients",
 		query,
 		total,
-		page: query.page,
-		page_size: PAGE_SIZE,
-		page_count,
-		out_of_range: query.page > page_count,
-		rows: rows.map((row) => shaped(row, query.contract)),
-		facets: { statuses, types },
-		// The status and type foreign keys always find a label, so the old
-		// signal for an unlabelled code is always null.
-		partial: null,
-		recorded_field_note: NOTE,
-		source: source(stamp),
-	};
+		{
+			rows: rows.map((row) => shaped(row, query.contract)),
+			facets: { statuses, types },
+			// The status and type foreign keys always find a label, so the old
+			// signal for an unlabelled code is always null.
+			partial: null,
+		},
+		stamp,
+	);
 }
 
 export async function readClient(
@@ -272,7 +304,7 @@ export async function readClient(
 			"c.possible_duplicate_label",
 			"c.notes",
 			"c.owner_label",
-			ownedByViewer(ownerId).as("owned_by_viewer"),
+			ownedByViewer(sql.ref("c.owner_id"), ownerId).as("owned_by_viewer"),
 			"c.version as record_version",
 			asText(eb.ref("c.created_at")).as("created_at"),
 			asText(eb.ref("c.updated_at")).as("updated_at"),
@@ -285,7 +317,7 @@ export async function readClient(
 		record: shaped(record, contract),
 		partial: null,
 		not_in_this_read: NOT_IN_THIS_READ,
-		recorded_field_note: NOTE,
-		source: source(stamp),
+		recorded_field_note: DATASETS.clients.note,
+		source: source("clients", stamp),
 	};
 }

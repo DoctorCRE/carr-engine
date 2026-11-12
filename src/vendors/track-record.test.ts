@@ -102,7 +102,6 @@ async function seed(tx: Kysely<DB>) {
 async function rating(tx: Kysely<DB>, vendor: string, clock: string | number) {
 	const row = await tx
 		.selectFrom("vendor as v")
-		.innerJoin("party as p", "p.id", "v.party_id")
 		.innerJoinLateral(trackRecordFacts.as("vr"), (join) => join.onTrue())
 		.select(["vr.facts", asText(sql.ref("vr.last_deal_at")).as("last_deal_at")])
 		.where("v.id", "=", vendor)
@@ -240,10 +239,10 @@ test("the track record keeps the old keys, contact and introductions", () =>
 		const intro = await s.link(party, await s.party("Example Other"), "intro");
 		await s.link(party, await s.party(), "knows");
 		await s.link(await s.party("Example Gone", NOW), party, "intro");
-		const record = await rating(tx, vendor, NOW);
+		const { last_deal_at: _, ...record } = await rating(tx, vendor, NOW);
 		assert.equal(
 			Object.keys(record).join(" "),
-			"coverage_verified_at deals_referred deals_worked won lost first_worked_at last_contacted_at last_contact_note override recent_entries introductions computed_tier win_rate formula_version last_deal_at",
+			"coverage_verified_at deals_referred deals_worked won lost first_worked_at last_contacted_at last_contact_note override recent_entries introductions computed_tier win_rate formula_version",
 		);
 		assert.partialDeepStrictEqual(record, {
 			coverage_verified_at: "2024-01-01T00:00:00+00:00",
@@ -268,4 +267,34 @@ test("the track record keeps the old keys, contact and introductions", () =>
 				via_party: null,
 			},
 		]);
+	}));
+
+test("introductions and entries that tie on time come highest id first", () =>
+	withRollback(async (tx) => {
+		const s = await seed(tx);
+		const party = await s.party();
+		const vendor = await s.vendor(party);
+		const [low, high] = [
+			"00000000-0000-4000-8000-00000000000a",
+			"00000000-0000-4000-8000-00000000000b",
+		];
+		for (const id of [low, high]) {
+			await sql`insert into party_link (id, from_party, to_party, kind, source, created_by, created_at)
+				select ${id}, ${party}, ${await s.party(`Example ${id}`)}, 'intro', 'Example', created_by,
+				'2026-01-01T00:00:00Z' from party where id = ${party}`.execute(tx);
+			await sql`insert into activity (id, vendor_id, occurred_at, kind, summary, actor_id)
+				select ${id}, ${vendor}, '2026-01-01T00:00:00Z', 'note', 'Example', created_by
+				from party where id = ${party}`.execute(tx);
+		}
+		const record = await rating(tx, vendor, NOW);
+		assert.deepEqual(
+			[
+				record.introductions.map((i) => i.id),
+				record.recent_entries.map((e) => e.id),
+			],
+			[
+				[high, low],
+				[high, low],
+			],
+		);
 	}));

@@ -2,12 +2,16 @@ import { type Context, Hono } from "hono";
 import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
+import { readVendorList, VENDOR_SORTS } from "../vendors/read.ts";
 import {
 	BusinessRefusal,
 	type ClientQuery,
 	CONTRACTS,
+	type Contract,
+	type Dataset,
 	type Dependency,
 	invalid,
+	type ListQuery,
 	PAGE_SIZE,
 	PARTNERS,
 	PIPELINES,
@@ -17,18 +21,21 @@ import {
 	type Stamp,
 } from "./read.ts";
 
-const LIST_FIELDS = [
+const SHARED_FIELDS = [
 	"contract",
 	"viewer",
 	"scope",
 	"q",
-	"status",
-	"type",
-	"pipeline",
 	"sort",
 	"page",
 	"owner",
 ];
+const LIST_FIELDS = {
+	clients: [...SHARED_FIELDS, "status", "type", "pipeline"],
+	vendors: [...SHARED_FIELDS, "category", "stage", "disposition", "territory"],
+};
+// vendor-directory.v2 adds a vendor's people, which the engine does not read yet.
+const VENDOR_CONTRACTS = ["vendor-directory.v1"] as const;
 const RECORD_FIELDS = ["viewer", "contract"];
 const SCOPES = ["team", "mine"] as const;
 const OWNERS = ["all", ...PARTNERS] as const;
@@ -36,6 +43,8 @@ const SLUG = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const PAGE = /^[1-9][0-9]{0,3}$/;
 const MAX_PAGE = 200;
 const MAX_SEARCH = 80;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the old refusal of control characters
+const CONTROL = /[\u0000-\u001f\u007f]/;
 // The old reader's SQLSTATE and driver codes for a read it could not run.
 const UNPROVISIONED = new Map<string, Dependency>([
 	["42501", "read_access"],
@@ -98,9 +107,7 @@ function search(params: URLSearchParams) {
 	if (!q) return null;
 	if (q.length > MAX_SEARCH)
 		throw invalid({ parameter: "q", reason: "too_long", limit: MAX_SEARCH });
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: the old refusal of control characters
-	if (/[\u0000-\u001f\u007f]/.test(q))
-		throw invalid({ parameter: "q", reason: "malformed" });
+	if (CONTROL.test(q)) throw invalid({ parameter: "q", reason: "malformed" });
 	return q;
 }
 
@@ -118,24 +125,49 @@ function page(params: URLSearchParams) {
 	return Number(given);
 }
 
-function listQuery(params: URLSearchParams, viewer: string): ClientQuery {
-	checkFields(params, LIST_FIELDS, viewer);
-	const contract = oneOf(params, "contract", CONTRACTS, null);
+// Unlike the search, a territory is not trimmed and is refused without a reason.
+function territory(params: URLSearchParams) {
+	const given = params.get("territory") ?? "";
+	if (given.length > MAX_SEARCH || CONTROL.test(given))
+		throw invalid({ parameter: "territory" });
+	return given || null;
+}
+
+function listQuery<D extends Dataset, Sort extends string>(
+	dataset: D,
+	params: URLSearchParams,
+	viewer: string,
+	sorts: readonly ("name" | Sort)[],
+	contracts: readonly Contract[],
+): ListQuery<D, "name" | Sort> {
+	checkFields(params, LIST_FIELDS[dataset], viewer);
+	const contract = oneOf(params, "contract", contracts, null);
 	return {
-		dataset: "clients",
+		dataset,
 		...(contract ? { contract } : {}),
 		scope: oneOf(params, "scope", SCOPES, "team"),
 		q: search(params),
 		owner: oneOf(params, "owner", OWNERS, "all"),
-		territory: null,
-		sort: oneOf(params, "sort", SORTS, "name"),
+		territory: territory(params),
+		sort: oneOf(params, "sort", sorts, "name"),
 		page: page(params),
 		page_size: PAGE_SIZE,
-		status: slug(params, "status"),
-		type: slug(params, "type"),
-		pipeline: oneOf(params, "pipeline", PIPELINES, "any"),
 	};
 }
+
+const clientQuery = (params: URLSearchParams, viewer: string): ClientQuery => ({
+	...listQuery("clients", params, viewer, SORTS, CONTRACTS),
+	status: slug(params, "status"),
+	type: slug(params, "type"),
+	pipeline: oneOf(params, "pipeline", PIPELINES, "any"),
+});
+
+const vendorQuery = (params: URLSearchParams, viewer: string) => ({
+	...listQuery("vendors", params, viewer, VENDOR_SORTS, VENDOR_CONTRACTS),
+	category: slug(params, "category"),
+	stage: slug(params, "stage"),
+	disposition: slug(params, "disposition"),
+});
 
 function refusalOf(error: unknown) {
 	if (error instanceof BusinessRefusal) return error;
@@ -191,18 +223,17 @@ async function answer(
 	}
 }
 
-export const clients = new Hono<DatabaseEnv>();
+export const directory = new Hono<DatabaseEnv>();
 
-clients.get("/clients", (c) =>
+directory.get("/clients", (c) =>
 	answer(c, (params, viewer) => {
-		const query = listQuery(params, viewer);
+		const query = clientQuery(params, viewer);
 		return (db, stamp) => readClientList(db, viewer, query, stamp);
 	}),
 );
-
 // The old door answered any id that is not a UUID before anything else.
 // It tested the raw path, where a percent-encoded id is not a UUID.
-clients.get("/clients/:id{.*}", async (c) => {
+directory.get("/clients/:id{.*}", async (c) => {
 	const id = c.req.param("id");
 	if (!UUID.test(id) || new URL(c.req.url).pathname !== c.req.path)
 		return c.json({ error: "not_found" }, 404);
@@ -212,3 +243,9 @@ clients.get("/clients/:id{.*}", async (c) => {
 		return (db, stamp) => readClient(db, viewer, id, contract, stamp);
 	});
 });
+directory.get("/vendors", (c) =>
+	answer(c, (params, viewer) => {
+		const query = vendorQuery(params, viewer);
+		return (db, stamp) => readVendorList(db, viewer, query, stamp);
+	}),
+);
