@@ -168,6 +168,8 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 		} else if (opaque.has(path)) {
 			if (canonical(a) !== canonical(b))
 				differences.push({ path, records, kind: "value differs" });
+			else if (JSON.stringify(a) !== JSON.stringify(b))
+				differences.push({ path, records, kind: "key order" });
 		} else if (isRecord(a) && isRecord(b)) {
 			for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
 				const child = childOf(path, key);

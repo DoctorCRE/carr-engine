@@ -266,17 +266,21 @@ test("arrays the read does not describe compare by position", () => {
 
 test("opaque fields compare whole and report only their own path", () => {
 	const event = (old_value: unknown) => ({ events: [{ old_value }] });
+	const at = (kind: string) => [
+		{ path: "events[].old_value", records: [{ index: 0 }], kind },
+	];
 	assert.deepEqual(
-		compare(event({ a: 1, b: [2] }), event({ b: [2], a: 1 })),
+		compare(event({ a: 1, b: [2] }), event({ b: [2], a: 1 })).differences,
+		at("key order"),
+	);
+	assert.deepEqual(
+		compare(event({ a: 1 }), event({ a: "1" })).differences,
+		at("value differs"),
+	);
+	assert.deepEqual(
+		compare(event({ a: 1, b: [2] }), event({ a: 1, b: [2] })),
 		none,
 	);
-	assert.deepEqual(compare(event({ a: 1 }), event({ a: "1" })).differences, [
-		{
-			path: "events[].old_value",
-			records: [{ index: 0 }],
-			kind: "value differs",
-		},
-	]);
 });
 
 test("answers that are not parsed JSON are refused", () => {
@@ -660,7 +664,7 @@ test("clock values may differ while their keys, types and formats match", () => 
 	);
 });
 
-test("a moved clock is a key order difference, and an opaque field's keys keep no order", () => {
+test("a moved clock or opaque field key is a key order difference", () => {
 	const { generated_at, leads } = leadBoard(zulu, zulu);
 	assert.deepEqual(
 		compareAnswers(
@@ -674,8 +678,14 @@ test("a moved clock is a key order difference, and an opaque field's keys keep n
 		compare(
 			{ events: [{ old_value: { a: 1, b: 2 } }] },
 			{ events: [{ old_value: { b: 2, a: 1 } }] },
-		),
-		none,
+		).differences,
+		[
+			{
+				path: "events[].old_value",
+				records: [{ index: 0 }],
+				kind: "key order",
+			},
+		],
 	);
 });
 
