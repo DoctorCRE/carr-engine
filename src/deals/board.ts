@@ -195,6 +195,7 @@ export async function readBoard(
 				.end()
 				.as("workspace_kind"),
 		])
+		// The complement of v_open_deal_room_board's WHERE, hence "invoiced".
 		.where((q) =>
 			q.or([
 				q("b.phase", "in", ["closed", "invoiced"]),

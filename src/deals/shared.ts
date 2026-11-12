@@ -3,6 +3,8 @@ import type { DB } from "../database.d.ts";
 
 type DealId = string | Expression<string | null>;
 
+// The old system's JSON text for dates and timestamps, such as
+// "2026-01-05T00:00:00+00:00", not PostgreSQL's own text form.
 export const asText = (value: Expression<unknown>) =>
 	sql<string | null>`to_jsonb(${value})#>>'{}'`;
 
@@ -41,6 +43,8 @@ export const phaseStartedOn = (
 	starts: { phase: string | null; started_on: string | null }[],
 ) => Object.fromEntries(starts.map((s) => [s.phase, s.started_on]));
 
+// "Dr. Jo Example (Example Clinic)" in Springfield reads "Dr. Example's
+// Springfield Deal"; any other client keeps the deal's own name.
 export function shortName(deal: {
 	name: string | null;
 	client_name: string | null;

@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { createMiddleware } from "hono/factory";
+import { failureKind } from "./failure.ts";
 
 const SESSION_COOKIE = "__Host-dealroom_session";
 type Partner = { slug: string; display: string };
@@ -9,6 +10,9 @@ export type SessionEnv = {
 	Variables: { partner: Partner };
 };
 
+const nonBlank = (value: unknown): value is string =>
+	typeof value === "string" && value.trim() !== "";
+
 function parseSession(value: unknown): Session {
 	if (
 		typeof value !== "object" ||
@@ -17,14 +21,11 @@ function parseSession(value: unknown): Session {
 		typeof value.actor !== "object" ||
 		value.actor === null ||
 		!("slug" in value.actor) ||
-		typeof value.actor.slug !== "string" ||
-		!value.actor.slug.trim() ||
+		!nonBlank(value.actor.slug) ||
 		!("display" in value.actor) ||
-		typeof value.actor.display !== "string" ||
-		!value.actor.display.trim() ||
+		!nonBlank(value.actor.display) ||
 		!("csrf_token" in value) ||
-		typeof value.csrf_token !== "string" ||
-		!value.csrf_token.trim()
+		!nonBlank(value.csrf_token)
 	)
 		throw new Error("Invalid session response");
 	return {
@@ -46,6 +47,7 @@ async function equalTokens(
 }
 
 export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
+	// Set before anything can throw, so an error answer is not cached either.
 	c.header("Cache-Control", "no-store");
 	let renewed: string[] = [];
 	const protect = () => {
@@ -88,11 +90,7 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 		);
 		renewed = response.headers.getSetCookie();
 	} catch (error) {
-		return unavailable(
-			error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name)
-				? error.name
-				: "unknown",
-		);
+		return unavailable(failureKind(error));
 	}
 	if (response.status === 401) return refuse("unauthorized", 401);
 	if (response.status !== 200) return unavailable(`status ${response.status}`);
