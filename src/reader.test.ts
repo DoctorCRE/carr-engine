@@ -11,6 +11,7 @@ import { readCaptureQueue } from "./deals/capture-queue.ts";
 import { readChanges } from "./deals/changes.ts";
 import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
+import { readLeadBoard } from "./leads/board.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
@@ -49,6 +50,8 @@ const readable = [
 	"v_deal_room_session",
 	"v_deal_room_vendor",
 	"v_lead_client_best",
+	"v_lead_prospect_engagement",
+	"v_lead_workspace",
 	"v_open_deal_room_board",
 	"v_party_graph",
 	"v_ref_index",
@@ -174,7 +177,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue and search and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search and the lead board and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -227,6 +230,8 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				[found.parties.map((p) => p.kind), found.deals.map((d) => d.name)],
 				[["client"], ["Example Reader Deal"]],
 			);
+			const leads = await readSnapshot(login, readLeadBoard);
+			assert.deepEqual(leads.leads, []);
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(
