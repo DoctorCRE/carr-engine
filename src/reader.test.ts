@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
-import { readClientList } from "./clients/read.ts";
+import { readClient, readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
 import { readCaptureQueue } from "./deals/capture-queue.ts";
@@ -209,7 +209,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out and the client list and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list and a client's details and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -303,10 +303,19 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 					{ observedAt: new Date(), correlationId: "example" },
 				),
 			);
+			const [listed] = clients.rows;
 			assert.deepEqual(
-				clients.rows.map((r) => [r.name, r.owned_by_viewer]),
-				[["Example Clinic", false]],
+				[listed?.name, listed?.owned_by_viewer, clients.rows.length],
+				["Example Clinic", false, 1],
 			);
+			assert.ok(listed);
+			const client = await readSnapshot(login, (db) =>
+				readClient(db, seeded.actor, listed.id, "vendor-directory.v1", {
+					observedAt: new Date(),
+					correlationId: "example",
+				}),
+			);
+			assert.equal(client.record.name, "Example Clinic");
 			await withAdmin(
 				(admin) =>
 					admin.query(`insert into practice_origination_feed (source) values ('nppes');

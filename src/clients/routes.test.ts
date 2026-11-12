@@ -9,13 +9,14 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const unread = "postgres://made-up@127.0.0.1:1/none";
 
-const list = (
+const get = (
 	search: string,
-	{ slug = "joe", database = unread as string | null } = {},
+	{ slug = "joe", database = unread as string | null, method = "GET" } = {},
 ) =>
 	worker.request(
 		`https://app.example.test/api/engine/clients${search}`,
 		{
+			method,
 			headers: {
 				Cookie: "__Host-dealroom_session=made-up-session",
 				"x-correlation-id": ` ${CORRELATION.toUpperCase()} `,
@@ -102,7 +103,7 @@ test("the client list refuses bad inputs with the old bodies, in the old order",
 		["?viewer=joe&q=%20&page=", 503, { error: "DEPENDENCY_UNAVAILABLE" }],
 	];
 	for (const [search, status, expected, options] of cases) {
-		const answer = await body(await list(search, options));
+		const answer = await body(await get(search, options));
 		assert.deepEqual(
 			[answer.status, answer.text],
 			[status, JSON.stringify(expected)],
@@ -180,7 +181,7 @@ test("the client list answers the old JSON across pages, searches, sorts and fil
 		try {
 			await admin.query(SEED);
 			const ask = async (search: string, slug = "joe") => {
-				const answer = await body(await list(search, { slug, database }));
+				const answer = await body(await get(search, { slug, database }));
 				assert.equal(answer.status, 200, answer.text);
 				return answer.json;
 			};
@@ -188,7 +189,7 @@ test("the client list answers the old JSON across pages, searches, sorts and fil
 				(await ask(search, slug)).rows.map((r: { id: string }) => r.id);
 
 			const page2 = await body(
-				await list("?contract=vendor-directory.v1&page=2&viewer=joe", {
+				await get("?contract=vendor-directory.v1&page=2&viewer=joe", {
 					database,
 				}),
 			);
@@ -344,7 +345,7 @@ test("the client list answers the old JSON across pages, searches, sorts and fil
 				"update actor set slug = 'example-gone' where slug = 'dell'",
 			);
 			const refused = await body(
-				await list("?scope=mine", { slug: "dell", database }),
+				await get("?scope=mine", { slug: "dell", database }),
 			);
 			assert.deepEqual(
 				[refused.status, refused.text],
@@ -355,6 +356,234 @@ test("the client list answers the old JSON across pages, searches, sorts and fil
 			assert.equal(
 				(await ask("?q=Example%2002", "dell")).rows[0].owned_by_viewer,
 				false,
+			);
+		} finally {
+			await admin.end();
+		}
+	}));
+
+test("a client's details refuse bad paths and inputs with the old bodies, in the old order", async () => {
+	const invalid = (detail: object) => ({ error: "QUERY_INVALID", detail });
+	const notFound = { error: "not_found" };
+	const cases: [string, number, object, object?][] = [
+		["/", 404, notFound],
+		["/example", 404, notFound],
+		[`/${id(1)}x`, 404, notFound],
+		[`/${id(1)}/deals`, 404, notFound],
+		["/example", 404, notFound, { database: null, slug: "example" }],
+		[`/${id(1)}`, 503, { error: "DEPENDENCY_UNAVAILABLE" }, { database: null }],
+		[
+			`/${id(1)}?scope=mine`,
+			400,
+			invalid({ parameter: "scope", reason: "unsupported" }),
+		],
+		[
+			`/${id(1)}?viewer=dell&contract=x`,
+			403,
+			{ error: "AUTHORIZATION_REFUSED" },
+		],
+		[
+			`/${id(1)}?contract=vendor-directory.v3`,
+			400,
+			invalid({ parameter: "contract", reason: "unsupported_value" }),
+		],
+		[
+			`/${id(1)}?contract=x`,
+			400,
+			invalid({ parameter: "contract", reason: "unsupported_value" }),
+			{ slug: "example" },
+		],
+		[`/${id(1)}`, 403, { error: "AUTHORIZATION_REFUSED" }, { slug: "example" }],
+		[
+			`/${id(1)}?viewer=joe&contract=`,
+			503,
+			{ error: "DEPENDENCY_UNAVAILABLE" },
+		],
+	];
+	for (const [path, status, expected, options] of cases) {
+		const answer = await body(await get(path, options));
+		assert.deepEqual(
+			[answer.status, answer.text],
+			[status, JSON.stringify(expected)],
+			path,
+		);
+	}
+});
+
+const DETAIL_SEED = `
+insert into contact_state (slug, label, contactable, sort) values ('example-paused', 'Example', false, 2);
+alter table client disable trigger client_touch;
+update client set subtype = 'Example subtype', acquisition_source = 'example-referral',
+	acquisition_detail = 'Example detail', contact_label = 'Example contact',
+	specialty_type_label = 'Example specialty', possible_duplicate_label = 'Example duplicate',
+	notes = 'Example notes', version = 7, created_at = '2025-12-31 23:59:59.5+00'
+	where id = '${id(27)}';
+alter table client enable trigger client_touch;
+update party set ref = 'P-27', city = 'Springfield', state = 'IL', county = 'Example County',
+	title = 'Example title', specialty = 'Example specialty', npi = '1000000001',
+	phone = '555-0100', cell = '555-0101', email = 'example@example.test',
+	contact_state = 'example-paused', contact_state_reason = 'Example reason',
+	contact_state_until = '2026-03-04', contact_state_cadence = 'quarterly'
+	where id = '${id(127)}';
+insert into deal (client_id, name, deal_type, phase, created_by, updated_by)
+	values ('${id(3)}', 'Example Deal', 'example-lease', 'example-open', '${id(903)}', '${id(903)}');
+`;
+
+test("a client's details answer the old JSON for every branch the old read takes", () =>
+	withSnapshot(async (database) => {
+		const admin = new pg.Client({ connectionString: database });
+		await admin.connect();
+		try {
+			await admin.query(SEED);
+			await admin.query(DETAIL_SEED);
+			const ask = async (path: string, slug = "joe") =>
+				body(await get(path, { slug, database }));
+			const record = async (n: number, slug = "joe", search = "") => {
+				const answer = await ask(`/${id(n)}${search}`, slug);
+				assert.equal(answer.status, 200, answer.text);
+				return answer.json.record;
+			};
+
+			const rich = await ask(`/${id(27)}?contract=vendor-directory.v1`);
+			const { observed_at, valid_until } = rich.json.source;
+			assert.equal(Date.parse(valid_until) - Date.parse(observed_at), 60_000);
+			const full = {
+				id: id(27),
+				ref: "C-27",
+				name: "Example Zeta Rich",
+				party_kind: "org",
+				city: "Springfield",
+				state: "IL",
+				county: "Example County",
+				title: "Example title",
+				specialty: "Example specialty",
+				npi: "1000000001",
+				phone: "555-0100",
+				cell: "555-0101",
+				email: "example@example.test",
+				contact_state: "example-paused",
+				contact_state_reason: "Example reason",
+				contact_state_until: "2026-03-04",
+				contact_state_cadence: "quarterly",
+				recorded_status: "example-prospect",
+				recorded_status_label: "Example prospect",
+				recorded_status_active_pipeline: true,
+				recorded_status_note: "Example note",
+				recorded_etl_status: "example-etl",
+				recorded_client_type: "a-type",
+				recorded_client_type_label: "Example B",
+				vertical: "Dental",
+				last_deal_at: "2025-06-07",
+				deal_type: "Lease",
+				subtype: "Example subtype",
+				acquisition_source: "example-referral",
+				acquisition_detail: "Example detail",
+				contact_label: "Example contact",
+				deal_type_label: "Lease",
+				specialty_type_label: "Example specialty",
+				possible_duplicate_label: "Example duplicate",
+				notes: "Example notes",
+				owner_label: "Example Owner",
+				owned_by_viewer: false,
+				record_version: 7,
+				created_at: "2025-12-31T23:59:59.5+00:00",
+				updated_at: "2026-02-03T04:05:06.123456+00:00",
+			};
+			assert.equal(
+				rich.text,
+				JSON.stringify({
+					viewer: "joe",
+					dataset: "clients",
+					record: full,
+					partial: null,
+					not_in_this_read: [
+						"assignments",
+						"negotiations",
+						"deals",
+						"email",
+						"documents",
+						"history",
+					],
+					recorded_field_note:
+						"Status and ETL are what someone entered on this record. They are shown as entered, and they are not proof that an agreement was signed or that anyone was put on the work.",
+					source: {
+						source: "client",
+						source_ref: "client+party+client_status+client_type",
+						observed_at,
+						valid_until,
+						freshness: "fresh",
+						correlation_id: CORRELATION,
+						safe_explanation:
+							"Fresh because this is a no-store request-time canonical database read of live business records; valid for 60 seconds.",
+					},
+				}),
+			);
+			const { last_deal_at: _, deal_type: __, ...legacy } = full;
+			assert.deepEqual(await record(27, "dell", "?viewer=dell"), legacy);
+			assert.deepEqual(
+				await record(27, "joe", "?contract=vendor-directory.v2"),
+				full,
+			);
+			assert.deepEqual(
+				(await ask(`/${id(27).toUpperCase()}`)).json.record.id,
+				id(27),
+			);
+			const head = await get(`/${id(27)}`, { database, method: "HEAD" });
+			assert.deepEqual([head.status, await head.text()], [200, ""]);
+
+			const plain = await record(1, "dell", "?contract=vendor-directory.v1");
+			assert.deepEqual(
+				[
+					plain.ref,
+					plain.recorded_status,
+					plain.recorded_status_label,
+					plain.recorded_status_active_pipeline,
+					plain.recorded_status_note,
+					plain.recorded_client_type_label,
+					plain.contact_state,
+					plain.contact_state_until,
+					plain.last_deal_at,
+					plain.record_version,
+					plain.owned_by_viewer,
+				],
+				[null, null, null, null, null, null, "active", null, null, 1, true],
+			);
+			const past = await record(3, "joe", "?contract=vendor-directory.v1");
+			assert.deepEqual(
+				[
+					past.recorded_status_label,
+					past.recorded_status_active_pipeline,
+					past.recorded_status_note,
+					past.last_deal_at,
+					past.owned_by_viewer,
+				],
+				["Example past", false, null, null, true],
+			);
+			const owned = async (n: number, slug: string) =>
+				(await record(n, slug)).owned_by_viewer;
+			assert.deepEqual(
+				[
+					await owned(3, "dell"),
+					await owned(2, "joe"),
+					await owned(28, "dell"),
+				],
+				[false, false, true],
+			);
+
+			for (const n of [999, 29, 30, 31])
+				assert.deepEqual(
+					[(await ask(`/${id(n)}`)).status, (await ask(`/${id(n)}`)).text],
+					[404, '{"error":"RECORD_NOT_FOUND"}'],
+					String(n),
+				);
+
+			// A partner without an actor row: ownership of an owned client is unknown.
+			await admin.query(
+				"update actor set slug = 'example-gone' where slug = 'dell'",
+			);
+			assert.deepEqual(
+				[await owned(1, "dell"), await owned(2, "dell")],
+				[null, false],
 			);
 		} finally {
 			await admin.end();
