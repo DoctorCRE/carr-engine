@@ -104,6 +104,7 @@ type Verb =
 	| "lead-board"
 	| "list-practice-origination"
 	| "quiet-follow-ups"
+	| "read-vendor-markets-v1"
 	| "territory-state-board";
 
 export async function answer(
