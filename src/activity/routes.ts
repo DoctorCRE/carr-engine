@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { answer, checkFields, Refusal, refuse } from "../answer.ts";
+import { lookupRefusal } from "../deals/resolve.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readRecentActivity } from "./read.ts";
 
@@ -41,14 +42,11 @@ activity.get("/recent-activity", async (c) => {
 		if (!("error" in read)) return read;
 		switch (read.error) {
 			case "needs_disambiguation":
-				return new Refusal(409, "needs_disambiguation", {
-					candidates: read.candidates,
-				});
+			case "subject_not_found":
+				return lookupRefusal(read);
 			case "tool_call_markup_in_value":
 				// The old answer kept only fields of its own input, and `ref` is not one.
 				return new Refusal(400, "tool_call_markup_in_value", { fields: [] });
-			case "subject_not_found":
-				return new Refusal(404, "unhandled_verb_failure");
 			case "calendar_history_too_large":
 				return generic();
 		}

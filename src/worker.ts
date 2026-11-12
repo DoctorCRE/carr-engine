@@ -18,8 +18,7 @@ type WorkerEnv = WriterEnv & {
 	Bindings: { CF_VERSION_METADATA: { id: string } };
 };
 
-// The old door matched its addresses on the raw path, so routes see it too.
-// A route's own values, such as a deal's name, are still decoded.
+// Routes match the raw path as the old door did, but still decode their values.
 const app = new Hono<WorkerEnv>({
 	getPath: (request) => new URL(request.url).pathname,
 });

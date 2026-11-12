@@ -181,7 +181,8 @@ CREATE FUNCTION public.enforce_allocation_tree() RETURNS trigger
     SET search_path TO 'pg_catalog', 'public', 'pg_temp'
     AS $$
 begin
-
+  -- The ancestor census must see commits made by the prior lock holder.
+  -- Fixed snapshots do not refresh after an advisory-lock wait.
   if current_setting('transaction_isolation') not in ('read committed','read uncommitted') then
     raise exception using errcode='25001',
       message='commission allocation tree writes require READ COMMITTED isolation';
@@ -229,10 +230,10 @@ CREATE FUNCTION public.org_identity_key(p_name text) RETURNS text
   select case
     when p_name is null                then null
     when btrim(p_name) = ''            then null
-    when btrim(p_name) like '(%'       then null   
+    when btrim(p_name) like '(%'       then null   -- '(TBD)', '(new practice, relocating…)'
     when p_name ~* '\mtbd\M'
       or p_name ~* '\munknown\M'
-      or p_name ~* '\mn/a\M'           then null   
+      or p_name ~* '\mn/a\M'           then null   -- 'Startup dental practice (entity name TBD)'
     else lower(regexp_replace(btrim(p_name), '\s+', ' ', 'g'))
   end
 $$;
@@ -276,7 +277,7 @@ begin
   if new.rate_amount is not null
      and new.rate_basis in ('usd_mo_gross','usd_yr_gross')
      and new.rate_norm_gross_sf_yr is null then
-    new.norm_owed := true;                       
+    new.norm_owed := true;                       -- [A5] normalized-or-owed, enforced
   end if;
   return new;
 end $$;
@@ -3799,6 +3800,12 @@ ALTER TABLE ONLY ops.requirement_request
 ALTER TABLE ONLY ops.requirement_upload_grant
     ADD CONSTRAINT requirement_upload_grant_id_request_id_key UNIQUE (id, request_id);
 
+ALTER TABLE ONLY ops.requirement_upload_grant
+    ADD CONSTRAINT requirement_upload_grant_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY ops.requirement_upload_grant
+    ADD CONSTRAINT requirement_upload_grant_token_sha256_key UNIQUE (token_sha256);
+
 ALTER TABLE ONLY ops.requirement_upload_receipt
     ADD CONSTRAINT requirement_upload_receipt_grant_id_key UNIQUE (grant_id);
 
@@ -4314,6 +4321,8 @@ CREATE INDEX capture_session_active_idx ON public.capture_session USING btree (e
 
 CREATE INDEX client_merged_idx ON public.client USING btree (merged_into) WHERE (merged_into IS NOT NULL);
 
+CREATE UNIQUE INDEX code_subject_identity_uniq ON public.code_subject USING btree (repo, COALESCE(commit_sha, ''::text));
+
 CREATE INDEX critical_date_deal_due_idx ON public.critical_date USING btree (deal_id, due_on, id);
 
 CREATE INDEX critical_date_open_due_idx ON public.critical_date USING btree (due_on, id) WHERE (status = 'open'::text);
@@ -4593,6 +4602,9 @@ ALTER TABLE ONLY ops.requirement_request
 ALTER TABLE ONLY ops.requirement_request
     ADD CONSTRAINT requirement_request_thread_activity_id_fkey FOREIGN KEY (thread_activity_id) REFERENCES public.activity(id);
 
+ALTER TABLE ONLY ops.requirement_upload_grant
+    ADD CONSTRAINT requirement_upload_grant_request_id_organization_tenant_id_fkey FOREIGN KEY (request_id, organization_tenant_id, deal_id, row_key) REFERENCES ops.requirement_request(id, organization_tenant_id, deal_id, row_key);
+
 ALTER TABLE ONLY ops.requirement_upload_receipt
     ADD CONSTRAINT requirement_upload_receipt_grant_id_request_id_fkey FOREIGN KEY (grant_id, request_id) REFERENCES ops.requirement_upload_grant(id, request_id);
 
@@ -4742,6 +4754,9 @@ ALTER TABLE ONLY public.client
 
 ALTER TABLE ONLY public.client
     ADD CONSTRAINT client_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.code_subject
+    ADD CONSTRAINT code_subject_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);
 
 ALTER TABLE ONLY public.commission_allocation
     ADD CONSTRAINT commission_allocation_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);

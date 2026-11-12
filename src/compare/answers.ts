@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { UUID } from "../uuid.ts";
 
 // A list at its cap holds one of several right answers when its order has
@@ -25,7 +24,8 @@ type Kind =
 	| "type differs"
 	| "missing in old"
 	| "missing in new"
-	| "order differs";
+	| "order differs"
+	| "key order";
 type Step = { id: string } | { index: number };
 type Place = { path: string; records: Step[] };
 export type Difference = Place & { kind: Kind };
@@ -61,6 +61,19 @@ const sameFormat = (a: unknown, b: unknown) =>
 	a.replace(/[0-9a-f]/g, "0") === b.replace(/[0-9a-f]/g, "0");
 
 export const strict = (id: string) => ({ id, sortedBy: [] });
+
+const childOf = (path: string, key: string) => {
+	const field = FIELD.test(key) ? key : "*";
+	return path ? `${path}.${field}` : field;
+};
+
+// The first key both answers hold that the new one puts elsewhere.
+function movedKey(a: Record<string, unknown>, b: Record<string, unknown>) {
+	const order = Object.keys(b).filter((key) => Object.hasOwn(a, key));
+	return Object.keys(a)
+		.filter((key) => Object.hasOwn(b, key))
+		.find((key, i) => key !== order[i]);
+}
 
 // A dotted name reaches into a nested object, such as `contact.id`.
 const fieldOf = (value: unknown, name?: string) =>
@@ -131,7 +144,9 @@ function untie(rows: Row[]): Row[] {
 	let run: Row[] = [];
 	for (const row of rows) {
 		const tied =
-			run[0]?.ties && row.ties && isDeepStrictEqual(run[0].ties, row.ties);
+			run[0]?.ties &&
+			row.ties &&
+			canonical(run[0].ties) === canonical(row.ties);
 		if (run[0] && !tied) {
 			sorted.push(...run.sort(byKey));
 			run = [];
@@ -154,10 +169,11 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 		} else if (opaque.has(path)) {
 			if (canonical(a) !== canonical(b))
 				differences.push({ path, records, kind: "value differs" });
+			else if (JSON.stringify(a) !== JSON.stringify(b))
+				differences.push({ path, records, kind: "key order" });
 		} else if (isRecord(a) && isRecord(b)) {
 			for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
-				const field = FIELD.test(key) ? key : "*";
-				const child = path ? `${path}.${field}` : field;
+				const child = childOf(path, key);
 				if (clocks.has(child) && sameFormat(a[key], b[key])) continue;
 				if (!Object.hasOwn(b, key))
 					differences.push({ path: child, records, kind: "missing in new" });
@@ -165,6 +181,13 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 					differences.push({ path: child, records, kind: "missing in old" });
 				else walk(a[key], b[key], child, records);
 			}
+			const moved = movedKey(a, b);
+			if (moved !== undefined)
+				differences.push({
+					path: childOf(path, moved),
+					records,
+					kind: "key order",
+				});
 		} else if (Array.isArray(a) && Array.isArray(b)) {
 			const rows = shape.rows[`${path}[]`];
 			if (rows) compareRows(a, b, `${path}[]`, records, rows);
@@ -212,7 +235,9 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 			rows.cap &&
 			a.length >= rows.cap.size &&
 			b.length === a.length &&
-			oneSided.every((row) => isDeepStrictEqual(row.ties, left.at(-1)?.ties))
+			oneSided.every(
+				(row) => canonical(row.ties) === canonical(left.at(-1)?.ties),
+			)
 		)
 			full.push({ ...rows.cap, path });
 		for (const row of left) {
@@ -249,8 +274,10 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	}
 
 	walk(old, next, "", []);
-	// A cap decides which rows lists hold and the note, never a held row's fields.
+	// A cap decides which rows lists hold and the note, never a held row's fields
+	// or any key order.
 	const allowed = (d: Difference) =>
+		d.kind !== "key order" &&
 		full.some(
 			(cap) =>
 				[cap.path, ...cap.decides].includes(d.path) &&

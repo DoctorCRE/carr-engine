@@ -5,11 +5,12 @@ Engine for the DoctorCRE app. See `AGENTS.md` for how work happens here.
 Run `npm ci` once, then `npm run check` before every push. CI runs the same command.
 
 Database checks need a local, disposable PostgreSQL 18 server with `pgcrypto` and
-`pg_trgm`. The test user needs permission to create databases and extensions. For example, start `docker run --rm -p 5432:5432 -e
+`pg_trgm`. The test user needs permission to create databases and extensions. For example, start `docker run --rm -p 127.0.0.1:5432:5432 -e
 POSTGRES_HOST_AUTH_METHOD=trust postgres:18`, then run `npm run check`.
 `TEST_DATABASE_URL` defaults to `postgres://postgres@127.0.0.1:5432/postgres`.
 The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a shared server.
+One server serves every worktree, because each check makes and drops its own database.
 
 Each check restores `schema/business.sql`, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
@@ -18,7 +19,8 @@ query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.
 The snapshot contains 106 empty tables, 53 views, 6 sequences and 32 triggers.
 Its reviewed literals use fictional partners, tenants and domains. SQL comments
-and psql transport directives are removed. Of the old process schema it keeps
+and psql transport directives are removed, except comments inside function
+bodies, which production stores and the drift command compares. Of the old process schema it keeps
 only the four tables behind the client portal link and the document checklist,
 without their triggers. The rest of that schema, its triggers on public tables and two
 dependent public views are excluded.
@@ -31,11 +33,12 @@ values or definitions. Exit codes are 0 for a match, 1 for drift and 2 for failu
 It compares public and ops columns, defaults, constraints, indexes, public-function
 triggers, policies, views, sequences and functions belonging to the snapshot.
 Unrelated extra relations and functions are outside this selected snapshot.
-Before comparison, both catalogs replace every quoted SQL string literal in each
-definition with the same placeholder. Literal-only changes, including privacy
-scrubbing, do not report drift. This also excludes changes to literal values in
-function bodies, defaults and constraints from drift detection. This command does
-not update the snapshot or apply any schema change to its target.
+Definitions are compared exactly. A quoted SQL string literal is ignored only where
+the snapshot holds one of the made-up values in `schema/made-up-literals.json` that
+replaced a real one, so privacy scrubbing does not report drift and any other
+changed value does. A value newly scrubbed in a later snapshot update must be added
+to that file, or the command reports it. This command does not update the snapshot
+or apply any schema change to its target.
 
 To compare the old system's and the engine's Deals answers outside CI, set
 `COMPARE_TARGET` to `staging` or `production`, `COMPARE_APP_URL` to the app's
@@ -50,9 +53,12 @@ the app asks them: the first page of each list, every record on it, and recent
 activity for the first five records of each read with a name and ref. Vendor
 markets and the Relationships map are asked once. The old system answers the
 lists, records and map at its `/api/v1/business` paths. Their `observed_at`,
-`valid_until` and `correlation_id` may differ in value, not in format. A refused
-deal, client or vendor is compared as its refusal; a refused board, invoices
-read or list counts as failed. A network or sign-in failure stops the run. It
-prints counts, field paths and record IDs, never values, bodies or the cookie.
-Exit codes are 0 for a match, 1 for differences or unsettled requests and 2 for
-failure.
+`valid_until` and `correlation_id` may differ in value, not in format. Keys in
+another order are a `key order` difference at the first moved key. A field
+compared whole, such as a card's facts, reports it at its own path. Order is
+read from the parsed answers, where JavaScript puts whole-number keys first, so
+their order is not checked. A refused deal, client or vendor is compared as its
+refusal; a refused board, invoices read or list counts as failed. A network or
+sign-in failure stops the run. It prints counts, field paths and record IDs,
+never values, bodies or the cookie. Exit codes are 0 for a match, 1 for
+differences or unsettled requests and 2 for failure.
