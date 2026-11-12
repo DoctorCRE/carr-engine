@@ -99,33 +99,32 @@ const RESERVED_FIELDS = new Set([
 	"call_models",
 ]);
 
-export function reservedFields(params: URLSearchParams) {
-	const reserved = [...new Set(params.keys())]
-		.filter((key) => RESERVED_FIELDS.has(key))
-		.sort();
-	return reserved.length === 0
-		? undefined
-		: new Refusal(403, "caller_authority_field_forbidden", {
-				fields: reserved.slice(0, 20),
-			});
-}
-
-export function unregisteredFields(
+// The old input gate in its order: reserved names, then each field's declared
+// vocabulary, then names outside the documented input.
+export function checkFields(
 	params: URLSearchParams,
-	known: readonly string[],
+	fields: readonly string[],
+	vocabularies: Readonly<Record<string, readonly string[]>> = {},
 ) {
-	const reserved = reservedFields(params);
-	if (reserved) return reserved;
-	const extra = [...new Set(params.keys())].filter(
-		(key) => !known.includes(key),
-	);
+	const names = [...new Set(params.keys())].sort();
+	const reserved = names.filter((name) => RESERVED_FIELDS.has(name));
+	if (reserved.length > 0)
+		return new Refusal(403, "caller_authority_field_forbidden", {
+			fields: reserved.slice(0, 20),
+		});
+	for (const [field, allowed] of Object.entries(vocabularies)) {
+		const value = params.get(field);
+		if (value !== null && !allowed.includes(value))
+			return new Refusal(400, "value_not_in_declared_vocabulary", {
+				allowed_values: allowed,
+				fields: [field],
+			});
+	}
+	const extra = names.filter((name) => !fields.includes(name));
 	return extra.length === 0
 		? undefined
 		: new Refusal(400, "unregistered_operation_fields", {
-				fields: extra
-					.sort()
-					.filter((key) => ECHOED_FIELD.test(key))
-					.slice(0, 20),
+				fields: extra.filter((name) => ECHOED_FIELD.test(name)).slice(0, 20),
 			});
 }
 

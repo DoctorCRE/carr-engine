@@ -1,5 +1,6 @@
 import { type Kysely, type RawBuilder, sql } from "kysely";
 import type { DB } from "../database.d.ts";
+import { failureKind } from "../failure.ts";
 import { asText } from "../reader.ts";
 
 export const PARTNERS = ["joe", "dell"] as const;
@@ -48,7 +49,7 @@ const STATUS = {
 	DEPENDENCY_UNAVAILABLE: 503,
 	DEPENDENCY_NOT_PROVISIONED: 503,
 } as const;
-export type Dependency = "read_access" | "read_source" | "read_credential";
+type Dependency = "read_access" | "read_source" | "read_credential";
 type RefusalBody = {
 	error: keyof typeof STATUS;
 	detail?: { parameter: string; reason?: string; limit?: number };
@@ -66,6 +67,48 @@ export class BusinessRefusal {
 
 export const invalid = (detail: NonNullable<RefusalBody["detail"]>) =>
 	new BusinessRefusal({ error: "QUERY_INVALID", detail });
+
+// The old reader's SQLSTATE and driver codes for a read it could not run.
+const UNPROVISIONED = new Map<string, Dependency>([
+	["42501", "read_access"],
+	["42P01", "read_source"],
+	["42703", "read_source"],
+	["3F000", "read_source"],
+	["3D000", "read_source"],
+	["28000", "read_credential"],
+	["28P01", "read_credential"],
+]);
+const UNAVAILABLE = new Set([
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"ENOTFOUND",
+	"08000",
+	"57P01",
+]);
+
+export function refusalOf(error: unknown) {
+	if (error instanceof BusinessRefusal) return error;
+	const code =
+		typeof error === "object" && error !== null && "code" in error
+			? String(error.code)
+			: "";
+	const dependency = UNPROVISIONED.get(code);
+	if (dependency)
+		return new BusinessRefusal({
+			error: "DEPENDENCY_NOT_PROVISIONED",
+			dependency,
+		});
+	if (UNAVAILABLE.has(code))
+		return new BusinessRefusal({ error: "DEPENDENCY_UNAVAILABLE" });
+	console.warn("read failed:", failureKind(error));
+	return new BusinessRefusal({ error: "INTERNAL_ERROR" });
+}
+
+export const isOneOf = <T extends string>(
+	allowed: readonly T[],
+	value: string,
+): value is T => (allowed as readonly string[]).includes(value);
 
 const DATASETS = {
 	clients: {

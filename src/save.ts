@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { type InsertObject, sql, type Transaction } from "kysely";
 import pg from "pg";
 import { hasToolCallMarkup } from "./activity/read.ts";
-import { Refusal, refuse, unregisteredFields } from "./answer.ts";
+import { checkFields, Refusal, refuse } from "./answer.ts";
 import type { DB, JsonObject, JsonValue } from "./database.d.ts";
 import { failureKind } from "./failure.ts";
 import { connect, type DatabaseEnv } from "./reader.ts";
@@ -176,7 +176,7 @@ export async function answerSave(
 // The old door's checks in its order: reserved and unknown fields, markup,
 // then the required fields. The save checks the key itself.
 function inputRefusal(args: JsonObject, { fields, required }: Door) {
-	const unregistered = unregisteredFields(
+	const unregistered = checkFields(
 		new URLSearchParams(Object.keys(args).map((key) => [key, ""])),
 		fields,
 	);

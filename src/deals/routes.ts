@@ -1,43 +1,43 @@
 import { Hono } from "hono";
-import { answer, Refusal, refuse } from "../answer.ts";
+import { answer, checkFields, Refusal, refuse } from "../answer.ts";
 import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
-import { readBoard, WORKSPACES, type Workspace } from "./board.ts";
+import { readBoard, WORKSPACES } from "./board.ts";
 import { readCaptureQueue } from "./capture-queue.ts";
 import { decodeCursor, readChanges } from "./changes.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 
-const isWorkspace = (value: string): value is Workspace =>
-	(WORKSPACES as readonly string[]).includes(value);
-
 export const deals = new Hono<DatabaseEnv>();
 
 deals.get("/deals", async (c) => {
-	const workspace = c.req.query("workspace");
-	if (workspace !== undefined && !isWorkspace(workspace))
-		return refuse(
-			c,
-			new Refusal(400, "value_not_in_declared_vocabulary", {
-				allowed_values: WORKSPACES,
-				fields: ["workspace"],
-			}),
-		);
+	const params = new URL(c.req.url).searchParams;
+	const refused = checkFields(params, ["workspace", "account_client_id"], {
+		workspace: WORKSPACES,
+	});
+	if (refused) return refuse(c, refused);
+	const given = params.get("workspace");
 	return answer(c, "deal-room-board", (db) =>
 		readBoard(db, {
 			partner: c.get("partner").slug,
-			workspace: workspace ?? null,
-			account_client_id: c.req.query("account_client_id") ?? null,
+			workspace: WORKSPACES.find((workspace) => workspace === given) ?? null,
+			account_client_id: params.get("account_client_id"),
 		}),
 	);
 });
 
 deals.get("/deals/", (c) =>
-	refuse(c, new Refusal(400, "missing_required", { fields: ["deal"] })),
+	refuse(
+		c,
+		checkFields(new URL(c.req.url).searchParams, ["deal"]) ??
+			new Refusal(400, "missing_required", { fields: ["deal"] }),
+	),
 );
 
-deals.get("/deals/:deal{.+}", (c) =>
-	answer(c, "get-deal-room", async (db) => {
+deals.get("/deals/:deal{.+}", async (c) => {
+	const refused = checkFields(new URL(c.req.url).searchParams, ["deal"]);
+	if (refused) return refuse(c, refused);
+	return answer(c, "get-deal-room", async (db) => {
 		const detail = await readDealDetail(db, c.req.param("deal"));
 		if (!("error" in detail)) return detail;
 		switch (detail.error) {
@@ -53,27 +53,33 @@ deals.get("/deals/:deal{.+}", (c) =>
 			case "not_found":
 				return new Refusal(404, "not_found");
 		}
-	}),
-);
+	});
+});
 
-deals.get("/client-fit", (c) =>
-	answer(c, "ideal-client-profile", async (db) => {
+deals.get("/client-fit", async (c) => {
+	const params = new URL(c.req.url).searchParams;
+	const refused = checkFields(params, ["vertical", "city", "state"]);
+	if (refused) return refuse(c, refused);
+	return answer(c, "ideal-client-profile", async (db) => {
 		const fit = await readClientFit(db, {
-			vertical: c.req.query("vertical") || null,
-			city: c.req.query("city") || null,
-			state: c.req.query("state") || null,
+			vertical: params.get("vertical") || null,
+			city: params.get("city") || null,
+			state: params.get("state") || null,
 		});
 		// The old system's limit error was not public, so it answered generically.
 		return "error" in fit ? new Refusal(422, "unhandled_verb_failure") : fit;
-	}),
-);
+	});
+});
 
-deals.get("/capture-queue", (c) =>
-	answer(c, "capture-queue", readCaptureQueue),
-);
+deals.get("/capture-queue", async (c) => {
+	const refused = checkFields(new URL(c.req.url).searchParams, []);
+	return refused
+		? refuse(c, refused)
+		: answer(c, "capture-queue", readCaptureQueue);
+});
 
-// The old feed checked the partner, then the method, then the cursor, and
-// answered with bare error bodies.
+// The old feed checked the partner, then the method, then the cursor, ignored
+// any other query field and answered with bare error bodies.
 deals.all("/pipeline/changes", async (c) => {
 	if (c.req.method !== "GET")
 		return c.json({ error: "method_not_allowed" }, 405);
