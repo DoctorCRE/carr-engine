@@ -22,7 +22,8 @@ export const pause = () =>
 
 function refusal(ask: ToolAsk, body: unknown) {
 	// A board for a listed workspace and the invoices have no refusal to
-	// compare. Comparing one would match two empty answers and ask no deals.
+	// compare. Comparing one would match two empty answers, and an empty board
+	// asks no deals.
 	if (ask.read === "board" || ask.read === "invoices")
 		throw new Error("read refused");
 	if (typeof body !== "object" || body === null || !("error" in body))

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sql } from "kysely";
-import { answer } from "./answer.ts";
+import { answer, checkFields, refuse } from "./answer.ts";
 import { asText, type DatabaseEnv, type Reader } from "./reader.ts";
 
 export async function readInvoiceTracker(db: Reader, partner: string) {
@@ -24,11 +24,10 @@ export async function readInvoiceTracker(db: Reader, partner: string) {
 			asText(q.ref("due_on")).as("due_on"),
 			asText(sql`current_date`).as("as_of"),
 		])
-		// No deal tie-break, as in the old read: same-name deals without a
-		// commission come back in whatever order the plan gives.
 		.orderBy("name")
 		.orderBy("commission_invoiced_on", (o) => o.asc().nullsLast())
 		.orderBy("commission_id")
+		.orderBy("deal_id")
 		.execute();
 	return {
 		schema_version: "invoice-tracker.v1",
@@ -40,8 +39,11 @@ export async function readInvoiceTracker(db: Reader, partner: string) {
 
 export const invoices = new Hono<DatabaseEnv>();
 
-invoices.get("/invoices", (c) =>
-	answer(c, "read-invoice-tracker", (db) =>
-		readInvoiceTracker(db, c.get("partner").slug),
-	),
-);
+invoices.get("/invoices", async (c) => {
+	const refused = checkFields(new URL(c.req.url).searchParams, []);
+	return refused
+		? refuse(c, refused)
+		: answer(c, "read-invoice-tracker", (db) =>
+				readInvoiceTracker(db, c.get("partner").slug),
+			);
+});
