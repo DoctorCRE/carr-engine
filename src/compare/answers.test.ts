@@ -44,14 +44,38 @@ const compare = (old: unknown, next: unknown) =>
 	compareAnswers(old, next, shape);
 const none = { differences: [], tiedRowsReordered: [], capAmbiguous: [] };
 
-test("identical answers match whatever their key order", () => {
+test("keys in another order are reported once per object, at the first moved key", () => {
 	const old = board([deal(d1), deal(d2, { attention: true })]);
 	const next = JSON.parse(JSON.stringify(old), (_key, value) =>
 		value && typeof value === "object" && !Array.isArray(value)
 			? Object.fromEntries(Object.entries(value).reverse())
 			: value,
 	);
-	assert.deepEqual(compare(old, next), none);
+	assert.deepEqual(compare(old, structuredClone(old)), none);
+	assert.deepEqual(compare(old, next).differences, [
+		{ path: "deals[].id", records: [{ id: d1 }], kind: "key order" },
+		{ path: "deals[].id", records: [{ id: d2 }], kind: "key order" },
+		{ path: "schema_version", records: [], kind: "key order" },
+	]);
+});
+
+test("a changed value and a missing key keep their own kinds beside a moved key", () => {
+	const result = compare(
+		board([deal(d1, { owner: null })]),
+		board([
+			{
+				next_date: "2030-01-02",
+				id: d1,
+				name: "Made-up Deal",
+				attention: false,
+			},
+		]),
+	);
+	assert.deepEqual(result.differences, [
+		{ path: "deals[].next_date", records: [{ id: d1 }], kind: "value differs" },
+		{ path: "deals[].owner", records: [{ id: d1 }], kind: "missing in new" },
+		{ path: "deals[].id", records: [{ id: d1 }], kind: "key order" },
+	]);
 });
 
 test("a changed value names the field and the record", () => {
@@ -438,6 +462,15 @@ test("a field that differs on a deal in both answers is a difference even when t
 	assert.deepEqual(result.capAmbiguous, []);
 });
 
+test("a full old list leaves no key order as cap ambiguity", () => {
+	const { note, ...rest } = found({ deals: [1, 2, 3, 4, 5].map(named) });
+	const result = find({ note, ...rest }, { ...rest, note });
+	assert.deepEqual(result.differences, [
+		{ path: "note", records: [], kind: "key order" },
+	]);
+	assert.deepEqual(result.capAmbiguous, []);
+});
+
 test("a full old list hides nothing when the engine returns a different number of rows", () => {
 	const ten = Array.from({ length: 10 }, (_, i) => party(`C-${i + 1}`));
 	for (const parties of [ten.slice(0, 3), [...ten, party("C-11")]]) {
@@ -622,6 +655,25 @@ test("clock values may differ while their keys, types and formats match", () => 
 			leadBoard(null, null),
 			leadBoard(null, null),
 			leadBoardShape,
+		),
+		none,
+	);
+});
+
+test("a moved clock is a key order difference, and an opaque field's keys keep no order", () => {
+	const { generated_at, leads } = leadBoard(zulu, zulu);
+	assert.deepEqual(
+		compareAnswers(
+			{ generated_at, leads },
+			{ leads, generated_at: "2031-12-31T23:59:59.999Z" },
+			leadBoardShape,
+		).differences,
+		[{ path: "generated_at", records: [], kind: "key order" }],
+	);
+	assert.deepEqual(
+		compare(
+			{ events: [{ old_value: { a: 1, b: 2 } }] },
+			{ events: [{ old_value: { b: 2, a: 1 } }] },
 		),
 		none,
 	);
