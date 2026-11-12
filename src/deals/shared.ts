@@ -3,6 +3,8 @@ import type { DB } from "../database.d.ts";
 
 type DealId = string | Expression<string | null>;
 
+export const RETIRED_ITEM_STATUSES = ["dropped", "expired"] as const;
+
 // The old system's JSON text for dates and timestamps, such as
 // "2026-01-05T00:00:00+00:00", not PostgreSQL's own text form.
 export const asText = (value: Expression<unknown>) =>

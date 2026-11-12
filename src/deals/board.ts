@@ -7,6 +7,7 @@ import {
 	phaseChangeOf,
 	phaseStartedOn,
 	phaseStartsOf,
+	RETIRED_ITEM_STATUSES,
 	shortName,
 	vendorsOf,
 } from "./shared.ts";
@@ -61,7 +62,7 @@ export async function readBoard(
 					.select(["i.status", "i.item_bullets as bullets", "i.source_ref"])
 					.whereRef("i.deal_id", "=", "b.id")
 					.where("i.item_title", "is not", null)
-					.where("i.status", "not in", ["dropped", "expired"])
+					.where("i.status", "not in", RETIRED_ITEM_STATUSES)
 					.orderBy("i.created_order")
 					.orderBy("i.id"),
 			).as("items"),

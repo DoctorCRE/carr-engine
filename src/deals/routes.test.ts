@@ -186,7 +186,7 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 						);
 					}
 					const detail = await readSnapshot(url, (db) =>
-						readDealDetail(db, rows.deal, "routes-agent"),
+						readDealDetail(db, rows.deal),
 					);
 					assert.ok(!("error" in detail));
 					const response = await get(`/deals/${rows.deal}`);

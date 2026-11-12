@@ -56,6 +56,13 @@ const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
 		refusal.status,
 	);
 
+const isKnownPartner = async (db: Reader, slug: string) =>
+	(await db
+		.selectFrom("actor")
+		.select("id")
+		.where("slug", "=", slug)
+		.executeTakeFirst()) !== undefined;
+
 async function answer(
 	c: Context<DatabaseEnv>,
 	read: (db: Reader) => Promise<unknown>,
@@ -65,7 +72,11 @@ async function answer(
 	const started = performance.now();
 	let result: unknown;
 	try {
-		result = await readSnapshot(database.connectionString, read);
+		result = await readSnapshot(database.connectionString, async (db) =>
+			(await isKnownPartner(db, c.get("partner").slug))
+				? read(db)
+				: new Refusal(422, "unauthenticated"),
+		);
 	} catch (error) {
 		// The old system turned PostgreSQL's refusal of a malformed id into this
 		// public error.
@@ -93,20 +104,13 @@ deals.get("/deals", async (c) => {
 				fields: ["workspace"],
 			}),
 		);
-	const actor = c.get("partner").slug;
-	return answer(c, async (db) => {
-		const known = await db
-			.selectFrom("actor")
-			.select("id")
-			.where("slug", "=", actor)
-			.executeTakeFirst();
-		if (!known) return new Refusal(422, "unauthenticated");
-		return readBoard(db, {
-			actor,
+	return answer(c, (db) =>
+		readBoard(db, {
+			actor: c.get("partner").slug,
 			workspace: workspace ?? null,
 			account_client_id: c.req.query("account_client_id") ?? null,
-		});
-	});
+		}),
+	);
 });
 
 deals.get("/deals/", (c) =>
@@ -115,15 +119,9 @@ deals.get("/deals/", (c) =>
 
 deals.get("/deals/:deal{.+}", (c) =>
 	answer(c, async (db) => {
-		const detail = await readDealDetail(
-			db,
-			c.req.param("deal"),
-			c.get("partner").slug,
-		);
+		const detail = await readDealDetail(db, c.req.param("deal"));
 		if (!("error" in detail)) return detail;
 		switch (detail.error) {
-			case "unauthenticated":
-				return new Refusal(422, "unauthenticated");
 			// Not one of the old system's public errors, so it answered generically.
 			case "subject_not_found":
 				return new Refusal(404, "unhandled_verb_failure");
