@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { answer, Refusal, refuse, unregisteredFields } from "../answer.ts";
+import { answer, checkFields, Refusal, refuse } from "../answer.ts";
 import { PARTNERS } from "../clients/read.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isMarketName, readVendorMarkets } from "./markets.ts";
@@ -13,8 +13,8 @@ export const vendorMarkets = new Hono<DatabaseEnv>();
 // each one generically.
 vendorMarkets.get("/vendor-markets", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const unregistered = unregisteredFields(params, ["market"]);
-	if (unregistered) return refuse(c, unregistered);
+	const refused = checkFields(params, ["market"]);
+	if (refused) return refuse(c, refused);
 	// A repeated market stands for the old input's non-string value.
 	const [market = null, ...more] = params.getAll("market");
 	if (more.length > 0 || (market !== null && !isMarketName(market)))

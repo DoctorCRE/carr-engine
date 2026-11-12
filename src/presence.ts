@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { sql } from "kysely";
 import { hasToolCallMarkup } from "./activity/read.ts";
-import { isoMillis, Refusal, refuse, unregisteredFields } from "./answer.ts";
+import { checkFields, isoMillis, Refusal, refuse } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { resolveSubject } from "./deals/resolve.ts";
 import {
@@ -23,11 +23,11 @@ export const presence = new Hono<WriterEnv>();
 presence.post("/presence", async (c) => {
 	const args: unknown = await c.req.json().catch(() => undefined);
 	if (!isArguments(args)) return c.json({ error: "invalid_json" }, 400);
-	const unregistered = unregisteredFields(
+	const refused = checkFields(
 		new URLSearchParams(Object.keys(args).map((key) => [key, ""])),
 		FIELDS,
 	);
-	if (unregistered) return refuse(c, unregistered);
+	if (refused) return refuse(c, refused);
 	const marked = FIELDS.find((field) => {
 		const value = args[field];
 		return typeof value === "string" && hasToolCallMarkup(field, value);
