@@ -1,5 +1,6 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
+import { readChecklist } from "./checklist.ts";
 import { resolveSubject } from "./detail/resolve.ts";
 import {
 	asText,
@@ -211,9 +212,16 @@ export async function readDealDetail(
 		])
 		.where("deal_id", "=", id)
 		.executeTakeFirst();
+	const checklist = await readChecklist(
+		db,
+		{ ...record, id },
+		lease ?? null,
+		criticalDates,
+	);
 
 	return stripPlaceholders({
 		schema_version: "deal-timeline.v1",
+		checklist,
 		lease: lease ?? null,
 		deal_id: id,
 		...record,

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { sql, type Transaction } from "kysely";
 import type { DB } from "../database.d.ts";
 import { withRollback } from "../test-rollback.ts";
+import { SOURCES } from "./checklist.ts";
 import { readDealDetail } from "./detail.ts";
 
 async function seed(tx: Transaction<DB>, deal: { invoiced_on?: string } = {}) {
@@ -652,6 +653,102 @@ test("an invoiced deal reads through the archived shape", async () => {
 		assert.equal("next_step" in detail, false);
 		assert.equal("phase_change" in detail, false);
 		assert.deepEqual(detail.vendors, []);
+	});
+});
+
+test("the checklist reads its sources, commissions and requests", async () => {
+	await withRollback(async (tx) => {
+		const { actor, deal } = await seed(tx, { invoiced_on: "2030-04-30" });
+		const document = await tx
+			.insertInto("doctrine_document")
+			.values({ slug: "example-kit", title: "Example", content_class: "sop" })
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		await tx
+			.insertInto("doctrine_section")
+			.values(
+				SOURCES.map((s) => ({
+					id: s.section_id,
+					document_id: document.id,
+					section_key: s.section_id,
+					body_hash: s.content_hash,
+				})),
+			)
+			.execute();
+		const commission = await tx
+			.insertInto("commission")
+			.values({
+				deal_id: deal,
+				gross_amount: "100.00",
+				status: "received",
+				received_on: "2030-05-02",
+				created_by: actor,
+			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		const attachment = await tx
+			.insertInto("attachment")
+			.values({
+				subject_type: "deal",
+				subject_id: deal,
+				r2_key: "example/agreement.pdf",
+				filename: "example-agreement.pdf",
+				mime: "application/pdf",
+				sha256: "b".repeat(64),
+				bytes: 10,
+				created_by: actor,
+			})
+			.returning("id")
+			.executeTakeFirstOrThrow();
+		await sql`insert into ops.requirement_request
+				(organization_tenant_id, deal_id, row_key, owner, due_on, document_type,
+				source, created_by, fulfilled_at, fulfilled_by, evidence_attachment_id)
+				values ('example-tenant', ${deal}, 'representation', 'Example Owner',
+				'2030-04-01', 'representation', '{}', ${actor},
+				'2030-04-02T03:04:05.678901Z', ${actor}, ${attachment.id})`.execute(tx);
+
+		const detail = await readDealDetail(tx, deal, "detail-agent");
+		assert.ok(!("error" in detail));
+		const { checklist } = detail;
+		const today = await sql<{
+			today: string;
+		}>`select to_jsonb(carr_business_date())#>>'{}' as today`.execute(tx);
+		assert.equal(checklist.observed_on, today.rows[0]?.today);
+		assert.equal(checklist.template_state, "deal_type_unknown");
+		const items = checklist.phases.flatMap((p) => p.items);
+		const item = (id: string) => items.find((i) => i.id === id);
+		assert.equal(
+			item("commission_received")?.evidence_ref,
+			`commission:${commission.id}`,
+		);
+		assert.equal(
+			item("invoice_recorded")?.evidence_ref,
+			`deal:${deal}:invoiced_on:2030-04-30`,
+		);
+		assert.deepEqual(item("representation"), {
+			id: "representation",
+			label: "Signed representation agreement",
+			status: "received",
+			due_on: "2030-04-01",
+			evidence_ref: "example-agreement.pdf",
+			owner: "Example Owner",
+			document_type: "representation",
+			source: SOURCES[0],
+			request: {
+				id: item("representation")?.request?.id,
+				row_key: "representation",
+				owner: "Example Owner",
+				due_on: "2030-04-01",
+				document_type: "representation",
+				satisfied: false,
+				receipts: [],
+				status: "fulfilled",
+				fulfilled_at: "2030-04-02T03:04:05.678Z",
+				fulfilled_by: actor,
+				evidence_attachment_id: attachment.id,
+				evidence_filename: "example-agreement.pdf",
+			},
+		});
 	});
 });
 
