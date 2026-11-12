@@ -2,22 +2,21 @@ import { createHash } from "node:crypto";
 import type { Context } from "hono";
 import { type InsertObject, sql, type Transaction } from "kysely";
 import pg from "pg";
-import { checkFields, hasToolCallMarkup, Refusal, refuse } from "./answer.ts";
+import { Refusal, refuse } from "./answer.ts";
 import type { DB, JsonObject, JsonValue } from "./database.d.ts";
 import { failureKind } from "./failure.ts";
 import { connect, type DatabaseEnv } from "./reader.ts";
+import {
+	checkDoor,
+	type Door,
+	declaredNames,
+	type Fields,
+	isArguments,
+} from "./save-door.ts";
 import { UUID } from "./uuid.ts";
 
 export type WriterEnv = DatabaseEnv & {
 	Bindings: { DATABASE_WRITER?: { connectionString: string } };
-};
-
-// A save's input as the old door declared it.
-// Both lists keep the old schema's order, which picks the refusal, so never sort them.
-type Door = {
-	verb: string;
-	fields: readonly string[];
-	required: readonly string[];
 };
 
 export type Save = {
@@ -46,7 +45,11 @@ export type Saving = {
 	record(entry: HistoryEntry): Promise<void>;
 };
 
-export type Change = (saving: Saving, args: JsonObject) => Promise<JsonObject>;
+// A timestamp the old driver read from the database is a Date here too, since
+// the old receipt dropped a Date and kept a string.
+type Answer = { [key: string]: JsonValue | Date };
+
+export type Change = (saving: Saving, args: JsonObject) => Promise<Answer>;
 
 export class SaveRefusal extends Error {
 	readonly refusal: Refusal;
@@ -77,7 +80,7 @@ export async function runSave(
 	connectionString: string,
 	save: Save,
 	change: Change,
-): Promise<JsonObject> {
+): Promise<Answer> {
 	const key = idempotencyKey(save.args);
 	const db = connect(connectionString);
 	try {
@@ -137,15 +140,12 @@ export async function runSave(
 	}
 }
 
-const isArguments = (value: unknown): value is JsonObject =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
 // A save's answer to the signed-in partner: its JSON answer, or the old
 // system's public refusal body. The answer, its receipt and the failure log
 // share one correlation id, as the old Worker's did.
-export async function answerSave(
+export async function answerSave<F extends Fields>(
 	c: Context<WriterEnv>,
-	door: Door,
+	door: Door<F>,
 	change: Change,
 ): Promise<Response> {
 	const given = c.req.header("x-correlation-id");
@@ -157,43 +157,20 @@ export async function answerSave(
 		refused(new Refusal(status, "unhandled_verb_failure", { verb: door.verb }));
 	const args: unknown = await c.req.json().catch(() => undefined);
 	if (!isArguments(args)) return c.json({ error: "invalid_json" }, 400);
-	const invalid = inputRefusal(args, door);
-	if (invalid) return refused(invalid);
+	const checked = checkDoor(args, door);
+	if (checked instanceof Refusal) return refused(checked);
 	const writer = c.env.DATABASE_WRITER;
 	if (!writer) return failed(503);
 	try {
 		const partner = c.get("partner").slug;
-		const save = { partner, verb: door.verb, args, correlation_id };
+		const save = { partner, verb: door.verb, args: checked, correlation_id };
 		return c.json(await runSave(writer.connectionString, save, change));
 	} catch (error) {
 		if (error instanceof SaveRefusal) return refused(error.refusal);
 		console.warn("save failed:", correlation_id, failureKind(error));
-		const refusal = databaseRefusal(error, door.fields);
+		const refusal = databaseRefusal(error, declaredNames(door.fields));
 		return refusal ? refused(refusal) : failed(500);
 	}
-}
-
-// The old door's checks in its order: reserved and unknown fields, markup,
-// then the required fields. The save checks the key itself.
-function inputRefusal(args: JsonObject, { fields, required }: Door) {
-	const unregistered = checkFields(
-		new URLSearchParams(Object.keys(args).map((key) => [key, ""])),
-		fields,
-	);
-	if (unregistered) return unregistered;
-	const marked = fields.find((field) => {
-		const value = args[field];
-		return typeof value === "string" && hasToolCallMarkup(field, value);
-	});
-	if (marked)
-		return new Refusal(400, "tool_call_markup_in_value", { fields: [marked] });
-	const missing = required.filter((field) => {
-		const value = args[field];
-		return value === undefined || value === null || value === "";
-	});
-	return missing.length === 0
-		? undefined
-		: new Refusal(400, "missing_required", { fields: missing });
 }
 
 function idempotencyKey(args: JsonObject): string {
@@ -212,22 +189,24 @@ function idempotencyKey(args: JsonObject): string {
 // values and a note, so its replay does too.
 const REPLAY_LIMIT = 16_384;
 
-// isoMillis's text stands for a driver Date, which the old receipt dropped.
-const OLD_DATE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+const isShort = (
+	entry: [string, JsonValue | Date],
+): entry is [string, null | boolean | number | string] => {
+	const value = entry[1];
+	return (
+		value === null ||
+		typeof value === "boolean" ||
+		typeof value === "number" ||
+		(typeof value === "string" && value.length <= 200)
+	);
+};
 
-const isShort = (value: JsonValue | undefined) =>
-	value === null ||
-	typeof value === "boolean" ||
-	typeof value === "number" ||
-	(typeof value === "string" && value.length <= 200 && !OLD_DATE.test(value));
-
-function receipt(answer: JsonObject): JsonObject {
-	const chars = JSON.stringify(answer).length;
-	if (chars <= REPLAY_LIMIT) return answer;
+function receipt(answer: Answer): JsonObject {
+	const text = JSON.stringify(answer);
+	const chars = text.length;
+	if (chars <= REPLAY_LIMIT) return JSON.parse(text);
 	return {
-		...Object.fromEntries(
-			Object.entries(answer).filter(([, value]) => isShort(value)),
-		),
+		...Object.fromEntries(Object.entries(answer).filter(isShort)),
 		response_omitted: {
 			chars,
 			reread: "the write already ran; read the record for its current state",

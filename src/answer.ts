@@ -23,6 +23,7 @@ const HINTS = {
 		"Supply the named required fields from the tool's documented input.",
 	unregistered_operation_fields: "Remove fields outside the documented input.",
 	caller_authority_field_forbidden: "Remove caller-supplied authority fields.",
+	invalid_boolean: "Supply a boolean value for the named fields.",
 	invalid_number: "Supply a numeric value for the named fields.",
 	tool_call_markup_in_value: "Remove tool-call markup from the named fields.",
 	database_unavailable:
@@ -99,12 +100,31 @@ const RESERVED_FIELDS = new Set([
 	"call_models",
 ]);
 
+export function reservedFields(names: readonly string[]) {
+	const reserved = names.filter((name) => RESERVED_FIELDS.has(name)).sort();
+	if (reserved.length > 0)
+		return new Refusal(403, "caller_authority_field_forbidden", {
+			fields: reserved.slice(0, 20),
+		});
+}
+
+export function unregisteredFields(
+	names: readonly string[],
+	fields: readonly string[],
+) {
+	const extra = names.filter((name) => !fields.includes(name)).sort();
+	if (extra.length > 0)
+		return new Refusal(400, "unregistered_operation_fields", {
+			fields: extra.filter((name) => ECHOED_FIELD.test(name)).slice(0, 20),
+		});
+}
+
 const TOOL_CALL_MARKERS = ["<parameter", "</parameter", "<invoke", "</invoke"];
 
 // The old door refused a value carrying its own closing tag, or a marker
-// outside a backtick pair on one line.
+// outside a backtick pair on one line. A close_ field's own tag drops that prefix.
 export function hasToolCallMarkup(field: string, value: string) {
-	if (value.includes(`</${field}>`)) return true;
+	if (value.includes(`</${field.replace(/^close_/, "")}>`)) return true;
 	return TOOL_CALL_MARKERS.some((marker) => {
 		for (
 			let at = value.indexOf(marker);
@@ -166,12 +186,9 @@ export function checkFields(
 	fields: readonly string[],
 	{ vocabularies = {}, numbers = [], objects = {} }: Declared = {},
 ) {
-	const names = [...new Set(params.keys())].sort();
-	const reserved = names.filter((name) => RESERVED_FIELDS.has(name));
-	if (reserved.length > 0)
-		return new Refusal(403, "caller_authority_field_forbidden", {
-			fields: reserved.slice(0, 20),
-		});
+	const names = [...new Set(params.keys())];
+	const reserved = reservedFields(names);
+	if (reserved) return reserved;
 	for (const [field, allowed] of Object.entries(vocabularies)) {
 		const [value, ...more] = params.getAll(field);
 		if (value !== undefined && (more.length > 0 || !allowed.includes(value)))
@@ -180,11 +197,8 @@ export function checkFields(
 				fields: [field],
 			});
 	}
-	const extra = names.filter((name) => !fields.includes(name));
-	if (extra.length > 0)
-		return new Refusal(400, "unregistered_operation_fields", {
-			fields: extra.filter((name) => ECHOED_FIELD.test(name)).slice(0, 20),
-		});
+	const extra = unregisteredFields(names, fields);
+	if (extra) return extra;
 	for (const field of fields) {
 		const [value, ...more] = params.getAll(field);
 		if (value === undefined) continue;
