@@ -4,6 +4,7 @@ import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard } from "./board.ts";
 import { readQuietFollowUps } from "./quiet-follow-ups.ts";
 import { readReasonsToReachOut } from "./reasons-to-reach-out.ts";
+import { readTerritory } from "./territory.ts";
 
 // The old input also took `lead_id` to open one lead, which the engine does
 // not serve yet.
@@ -15,6 +16,7 @@ const BOARD_FIELDS = [
 const QUIET_FIELDS = ["lead_days", "vendor_days", "owner_slug"];
 const REASON_FIELDS = ["limit", "before_id"];
 const BEFORE_ID = /^[1-9][0-9]{0,18}$/u;
+const TERRITORY_FIELDS = ["vertical", "city", "state"];
 
 // The old system turned a numeric string into a number before the read's own
 // checks. Quiet follow-ups checked neither whole numbers nor their 1 to 365 range.
@@ -82,6 +84,25 @@ leads.get("/quiet-follow-ups", async (c) => {
 		return "error" in quiet
 			? new Refusal(422, "unhandled_verb_failure")
 			: quiet;
+	});
+});
+
+// The old schema declared lengths and a two-letter state but nothing checked
+// them: an empty value meant no filter and any other value filtered exactly.
+leads.get("/territory-state-board", async (c) => {
+	const params = new URL(c.req.url).searchParams;
+	const unregistered = unregisteredFields(params, TERRITORY_FIELDS);
+	if (unregistered) return refuse(c, unregistered);
+	return answer(c, "territory-state-board", async (db) => {
+		const territory = await readTerritory(db, {
+			vertical: params.get("vertical") || null,
+			city: params.get("city") || null,
+			state: params.get("state") || null,
+		});
+		// Its own error code was not public, so the old system answered generically.
+		return "error" in territory
+			? new Refusal(422, "unhandled_verb_failure")
+			: territory;
 	});
 });
 
