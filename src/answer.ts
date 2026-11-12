@@ -15,6 +15,8 @@ const HINTS = {
 		"Use a value from the field's documented vocabulary.",
 	unhandled_verb_failure:
 		"The operation failed. Quote the correlation_id when reporting it.",
+	invalid_field_value:
+		"Check the named fields against the tool's documented input.",
 	database_refused_the_statement:
 		"The operation could not be completed. Quote the correlation_id when reporting it.",
 	missing_required:
@@ -49,11 +51,15 @@ export class Refusal {
 	}
 }
 
-export const refuse = (c: Context<DatabaseEnv>, refusal: Refusal) =>
+export const refuse = (
+	c: Context<DatabaseEnv>,
+	refusal: Refusal,
+	correlation_id = crypto.randomUUID(),
+) =>
 	c.json(
 		{
 			error: refusal.error,
-			correlation_id: crypto.randomUUID(),
+			correlation_id,
 			hint: HINTS[refusal.error],
 			...refusal.extra,
 		},

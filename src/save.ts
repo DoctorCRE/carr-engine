@@ -1,14 +1,24 @@
 import { createHash } from "node:crypto";
 import type { Context } from "hono";
 import { type InsertObject, sql, type Transaction } from "kysely";
-import { Refusal, refuse } from "./answer.ts";
-import type { DB, JsonObject } from "./database.d.ts";
+import pg from "pg";
+import { hasToolCallMarkup } from "./activity/read.ts";
+import { checkFields, Refusal, refuse } from "./answer.ts";
+import type { DB, JsonObject, JsonValue } from "./database.d.ts";
 import { failureKind } from "./failure.ts";
 import { connect, type DatabaseEnv } from "./reader.ts";
 import { UUID } from "./uuid.ts";
 
 export type WriterEnv = DatabaseEnv & {
 	Bindings: { DATABASE_WRITER?: { connectionString: string } };
+};
+
+// A save's input as the old door declared it.
+// Both lists keep the old schema's order, which picks the refusal, so never sort them.
+type Door = {
+	verb: string;
+	fields: readonly string[];
+	required: readonly string[];
 };
 
 export type Save = {
@@ -37,7 +47,7 @@ export type Saving = {
 	record(entry: HistoryEntry): Promise<void>;
 };
 
-export type Change = (saving: Saving) => Promise<JsonObject>;
+export type Change = (saving: Saving, args: JsonObject) => Promise<JsonObject>;
 
 export class SaveRefusal extends Error {
 	readonly refusal: Refusal;
@@ -104,19 +114,22 @@ export async function runSave(
 						throw new SaveRefusal(new Refusal(409, "key_reuse"));
 					return { replayed: true, ...prior.response };
 				}
-				const answer = await change({
-					tx,
-					actor_id: actor.id,
-					record: async (entry) => {
-						await tx
-							.insertInto("event")
-							.values(historyRow(entry, stamped))
-							.execute();
+				const answer = await change(
+					{
+						tx,
+						actor_id: actor.id,
+						record: async (entry) => {
+							await tx
+								.insertInto("event")
+								.values(historyRow(entry, stamped))
+								.execute();
+						},
 					},
-				});
+					save.args,
+				);
 				await tx
 					.insertInto("tool_call")
-					.values({ ...stamped, request_hash: hash, response: answer })
+					.values({ ...stamped, request_hash: hash, response: receipt(answer) })
 					.execute();
 				return answer;
 			});
@@ -125,35 +138,63 @@ export async function runSave(
 	}
 }
 
+const isArguments = (value: unknown): value is JsonObject =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
 // A save's answer to the signed-in partner: its JSON answer, or the old
-// system's public refusal body.
+// system's public refusal body. The answer, its receipt and the failure log
+// share one correlation id, as the old Worker's did.
 export async function answerSave(
 	c: Context<WriterEnv>,
-	verb: string,
-	args: JsonObject,
+	door: Door,
 	change: Change,
-) {
+): Promise<Response> {
+	const given = c.req.header("x-correlation-id");
+	const correlation_id =
+		given && UUID.test(given) ? given.toLowerCase() : crypto.randomUUID();
+	c.header("x-correlation-id", correlation_id);
+	const refused = (refusal: Refusal) => refuse(c, refusal, correlation_id);
 	const failed = (status: 500 | 503) =>
-		refuse(c, new Refusal(status, "unhandled_verb_failure", { verb }));
+		refused(new Refusal(status, "unhandled_verb_failure", { verb: door.verb }));
+	const args: unknown = await c.req.json().catch(() => undefined);
+	if (!isArguments(args)) return c.json({ error: "invalid_json" }, 400);
+	const invalid = inputRefusal(args, door);
+	if (invalid) return refused(invalid);
 	const writer = c.env.DATABASE_WRITER;
 	if (!writer) return failed(503);
 	try {
-		const answer: unknown = await runSave(
-			writer.connectionString,
-			{
-				partner: c.get("partner").slug,
-				verb,
-				args,
-				correlation_id: crypto.randomUUID(),
-			},
-			change,
-		);
-		return c.json(answer);
+		const partner = c.get("partner").slug;
+		const save = { partner, verb: door.verb, args, correlation_id };
+		return c.json(await runSave(writer.connectionString, save, change));
 	} catch (error) {
-		if (error instanceof SaveRefusal) return refuse(c, error.refusal);
-		console.warn("save failed:", failureKind(error));
-		return failed(500);
+		if (error instanceof SaveRefusal) return refused(error.refusal);
+		console.warn("save failed:", correlation_id, failureKind(error));
+		const refusal = databaseRefusal(error, door.fields);
+		return refusal ? refused(refusal) : failed(500);
 	}
+}
+
+// The old door's checks in its order: reserved and unknown fields, markup,
+// then the required fields. The save checks the key itself.
+function inputRefusal(args: JsonObject, { fields, required }: Door) {
+	const unregistered = checkFields(
+		new URLSearchParams(Object.keys(args).map((key) => [key, ""])),
+		fields,
+	);
+	if (unregistered) return unregistered;
+	const marked = fields.find((field) => {
+		const value = args[field];
+		return typeof value === "string" && hasToolCallMarkup(field, value);
+	});
+	if (marked)
+		return new Refusal(400, "tool_call_markup_in_value", { fields: [marked] });
+	const missing = required.filter((field) => {
+		const value = args[field];
+		return value === undefined || value === null || value === "";
+	});
+	return missing.length === 0
+		? undefined
+		: new Refusal(400, "missing_required", { fields: missing });
 }
 
 function idempotencyKey(args: JsonObject): string {
@@ -166,6 +207,49 @@ function idempotencyKey(args: JsonObject): string {
 			}),
 		);
 	return key;
+}
+
+// The old receipt kept an answer longer than this as its short top-level
+// values and a note, so its replay does too.
+const REPLAY_LIMIT = 16_384;
+
+// isoMillis's text stands for a driver Date, which the old receipt dropped.
+const OLD_DATE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+
+const isShort = (value: JsonValue | undefined) =>
+	value === null ||
+	typeof value === "boolean" ||
+	typeof value === "number" ||
+	(typeof value === "string" && value.length <= 200 && !OLD_DATE.test(value));
+
+function receipt(answer: JsonObject): JsonObject {
+	const chars = JSON.stringify(answer).length;
+	if (chars <= REPLAY_LIMIT) return answer;
+	return {
+		...Object.fromEntries(
+			Object.entries(answer).filter(([, value]) => isShort(value)),
+		),
+		response_omitted: {
+			chars,
+			reread: "the write already ran; read the record for its current state",
+		},
+	};
+}
+
+// The old system's public answers when PostgreSQL refused a statement. Its
+// driver left the catalog's column list unparsed, so it named a field only
+// when PostgreSQL named the column.
+const VIOLATIONS = new Set(["23502", "23503", "23505", "23514"]);
+const FAULTS = new Set(["22P02", "42501", "42703", "42P01", "42883"]);
+
+function databaseRefusal(error: unknown, fields: readonly string[]) {
+	if (!(error instanceof pg.DatabaseError) || !error.code) return undefined;
+	const { code, column } = error;
+	if (VIOLATIONS.has(code) && column && fields.includes(column))
+		return new Refusal(400, "invalid_field_value", { fields: [column] });
+	return VIOLATIONS.has(code) || FAULTS.has(code)
+		? new Refusal(400, "database_refused_the_statement")
+		: undefined;
 }
 
 // The old hash also covers its registry's digest, which changes with every
