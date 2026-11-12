@@ -229,10 +229,10 @@ CREATE FUNCTION public.org_identity_key(p_name text) RETURNS text
   select case
     when p_name is null                then null
     when btrim(p_name) = ''            then null
-    when btrim(p_name) like '(%'       then null   
+    when btrim(p_name) like '(%'       then null   -- '(TBD)', '(new practice, relocating…)'
     when p_name ~* '\mtbd\M'
       or p_name ~* '\munknown\M'
-      or p_name ~* '\mn/a\M'           then null   
+      or p_name ~* '\mn/a\M'           then null   -- 'Startup dental practice (entity name TBD)'
     else lower(regexp_replace(btrim(p_name), '\s+', ' ', 'g'))
   end
 $$;
@@ -4314,6 +4314,8 @@ CREATE INDEX capture_session_active_idx ON public.capture_session USING btree (e
 
 CREATE INDEX client_merged_idx ON public.client USING btree (merged_into) WHERE (merged_into IS NOT NULL);
 
+CREATE UNIQUE INDEX code_subject_identity_uniq ON public.code_subject USING btree (repo, COALESCE(commit_sha, ''::text));
+
 CREATE INDEX critical_date_deal_due_idx ON public.critical_date USING btree (deal_id, due_on, id);
 
 CREATE INDEX critical_date_open_due_idx ON public.critical_date USING btree (due_on, id) WHERE (status = 'open'::text);
@@ -4742,6 +4744,9 @@ ALTER TABLE ONLY public.client
 
 ALTER TABLE ONLY public.client
     ADD CONSTRAINT client_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.code_subject
+    ADD CONSTRAINT code_subject_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);
 
 ALTER TABLE ONLY public.commission_allocation
     ADD CONSTRAINT commission_allocation_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);
