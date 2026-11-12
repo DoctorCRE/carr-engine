@@ -1,5 +1,4 @@
 import { type Context, Hono } from "hono";
-import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import { readVendorList, VENDOR_SORTS } from "../vendors/read.ts";
@@ -9,14 +8,15 @@ import {
 	CONTRACTS,
 	type Contract,
 	type Dataset,
-	type Dependency,
 	invalid,
+	isOneOf,
 	type ListQuery,
 	PAGE_SIZE,
 	PARTNERS,
 	PIPELINES,
 	readClient,
 	readClientList,
+	refusalOf,
 	SORTS,
 	type Stamp,
 } from "./read.ts";
@@ -45,29 +45,6 @@ const MAX_PAGE = 200;
 const MAX_SEARCH = 80;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the old refusal of control characters
 const CONTROL = /[\u0000-\u001f\u007f]/;
-// The old reader's SQLSTATE and driver codes for a read it could not run.
-const UNPROVISIONED = new Map<string, Dependency>([
-	["42501", "read_access"],
-	["42P01", "read_source"],
-	["42703", "read_source"],
-	["3F000", "read_source"],
-	["3D000", "read_source"],
-	["28000", "read_credential"],
-	["28P01", "read_credential"],
-]);
-const UNAVAILABLE = new Set([
-	"ECONNRESET",
-	"ECONNREFUSED",
-	"ETIMEDOUT",
-	"ENOTFOUND",
-	"08000",
-	"57P01",
-]);
-
-const isOneOf = <T extends string>(
-	allowed: readonly T[],
-	value: string,
-): value is T => (allowed as readonly string[]).includes(value);
 
 function checkFields(
 	params: URLSearchParams,
@@ -168,24 +145,6 @@ const vendorQuery = (params: URLSearchParams, viewer: string) => ({
 	stage: slug(params, "stage"),
 	disposition: slug(params, "disposition"),
 });
-
-export function refusalOf(error: unknown) {
-	if (error instanceof BusinessRefusal) return error;
-	const code =
-		typeof error === "object" && error !== null && "code" in error
-			? String(error.code)
-			: "";
-	const dependency = UNPROVISIONED.get(code);
-	if (dependency)
-		return new BusinessRefusal({
-			error: "DEPENDENCY_NOT_PROVISIONED",
-			dependency,
-		});
-	if (UNAVAILABLE.has(code))
-		return new BusinessRefusal({ error: "DEPENDENCY_UNAVAILABLE" });
-	console.warn("read failed:", failureKind(error));
-	return new BusinessRefusal({ error: "INTERNAL_ERROR" });
-}
 
 // The old door's correlation id: the caller's own, if it is a UUID.
 function stampOf(c: Context<DatabaseEnv>): Stamp {

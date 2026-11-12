@@ -1,6 +1,10 @@
 import { Hono } from "hono";
-import { BusinessRefusal, PARTNERS } from "../clients/read.ts";
-import { refusalOf } from "../clients/routes.ts";
+import {
+	BusinessRefusal,
+	isOneOf,
+	PARTNERS,
+	refusalOf,
+} from "../clients/read.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
 import { projectNetwork, readNetwork } from "./network.ts";
 
@@ -16,7 +20,7 @@ relationships.get("/relationships", async (c) => {
 	try {
 		if (!database)
 			throw new BusinessRefusal({ error: "DEPENDENCY_UNAVAILABLE" });
-		if (!PARTNERS.some((partner) => partner === c.get("partner").slug))
+		if (!isOneOf(PARTNERS, c.get("partner").slug))
 			throw new BusinessRefusal({ error: "AUTHORIZATION_REFUSED" });
 		if ([...params].length !== 1 || params.get("contract") !== CONTRACT)
 			throw new BusinessRefusal({ error: "QUERY_INVALID" });

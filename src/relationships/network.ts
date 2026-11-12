@@ -32,7 +32,7 @@ const INTRODUCED = ["introduced", "intro", "intro_received", "intro_requested"];
 
 // Built as jsonb, as the old read was, so keys print in jsonb's order. A
 // person or company takes each field from its first vendor row, else client
-// row, else lead row, one field at a time. Its columns are its node's keys.
+// row, else lead row, one field at a time.
 const network = sql<Snapshot>`(with live as (
 	select p.id, coalesce(v.id, c.id, l.id, p.id) as record_id,
 		coalesce(v.vendor_ref, c.roster_ref, l.registry_ref, p.ref) as ref, p.name,
@@ -62,13 +62,16 @@ const network = sql<Snapshot>`(with live as (
 	where (l.via_party is null or b.id is not null) and l.kind in ('knows', 'works_with',
 		'can_introduce', 'intro_requested', 'introduced', 'intro', 'intro_received', 'referral', 'referred')
 ), deals as (
-	select d.*, c.party_id, c.vertical from deal d
+	select d.id, d.name, d.city, d.owner, d.phase, d.outcome, c.party_id, c.vertical from deal d
 	join client c on c.id = d.client_id and c.merged_into is null
 	join live p on p.id = c.party_id
 ), credited as (
 	select a.* from ${associations} a join live p on p.id = a.party_id
 ), nodes as (
-	select to_jsonb(p) || jsonb_build_object('id', 'party:' || p.id) as item
+	select jsonb_build_object('id', 'party:' || p.id, 'record_id', p.record_id, 'ref', p.ref,
+		'name', p.name, 'kind', p.kind, 'territory', p.territory, 'verticals', p.verticals,
+		'owner', p.owner, 'summary', p.summary, 'contact_state', p.contact_state,
+		'contact_state_until', p.contact_state_until, 'restricted', p.restricted) as item
 		from live p where p.kind <> 'contact'
 		or exists (select from links l where p.id in (l.from_party, l.to_party, l.via_party))
 	union all
@@ -91,11 +94,10 @@ const network = sql<Snapshot>`(with live as (
 	from credited a group by a.party_id, a.deal_id, a.role
 ), referrals as (
 	select jsonb_build_object('node_id', 'party:' || p.id, 'deals', count(distinct a.deal_id),
-		'won', count(distinct a.deal_id) filter (where d.outcome = 'won'),
-		'lost', count(distinct a.deal_id) filter (where d.outcome = 'lost')) as item
+		'won', count(distinct a.deal_id) filter (where a.outcome = 'won'),
+		'lost', count(distinct a.deal_id) filter (where a.outcome = 'lost')) as item
 	from live p
 	join credited a on a.party_id = p.id and a.role = 'referred'
-	join deals d on d.id = a.deal_id
 	where p.kind in ('vendor', 'client') group by p.id
 )
 select jsonb_build_object(
