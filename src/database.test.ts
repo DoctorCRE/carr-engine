@@ -186,7 +186,10 @@ test("drift compares catalogs read-only and prints object names", () =>
 			CREATE INDEX example_drift_index ON public.party(example_drift);
 			ALTER TABLE public.party DISABLE TRIGGER party_touch;
 			DROP INDEX ops.client_portal_one_active_per_deal;
-			CREATE OR REPLACE FUNCTION public.trg_touch_row() RETURNS trigger LANGUAGE plpgsql AS $$ begin return new; end $$;`,
+			CREATE OR REPLACE FUNCTION public.trg_touch_row() RETURNS trigger LANGUAGE plpgsql AS $$ begin return new; end $$;
+			CREATE FUNCTION ops.example_outside() RETURNS trigger LANGUAGE plpgsql AS $$ begin return null; end $$;
+			CREATE CONSTRAINT TRIGGER example_outside AFTER INSERT ON public.rule FOR EACH ROW EXECUTE FUNCTION ops.example_outside();
+			CREATE CONSTRAINT TRIGGER example_inside AFTER INSERT ON public.vendor FOR EACH ROW EXECUTE FUNCTION public.trg_touch_row();`,
 			);
 		} finally {
 			await target.end();
@@ -202,6 +205,7 @@ test("drift compares catalogs read-only and prints object names", () =>
 				"public.party",
 				"public.trg_touch_row()",
 				"public.v_lead_prospect_engagement",
+				"public.vendor",
 				"",
 			].join("\n"),
 		);
