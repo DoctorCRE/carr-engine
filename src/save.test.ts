@@ -1,18 +1,22 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { sql } from "kysely";
+import { Hono } from "hono";
+import { type RawBuilder, sql } from "kysely";
 import { withSnapshot } from "../scripts/test-database.ts";
 import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { connect } from "./reader.ts";
 import {
+	answerSave,
 	type Change,
 	runSave,
 	type Save,
 	SaveRefusal,
 	type Saving,
+	type WriterEnv,
 } from "./save.ts";
+import { UUID } from "./uuid.ts";
 
 const save = (args: JsonObject, partner = "partner_one"): Save => ({
 	partner,
@@ -202,6 +206,47 @@ test("saves", (t) =>
 			assert.deepEqual(await stored(key), { events: 0, receipts: 0 });
 		});
 
+		await t.test(
+			"a replay leaves out an answer over 16,384 characters",
+			async () => {
+				const whole = { ok: true, note: "x".repeat(16_363) };
+				const long = {
+					ok: true,
+					count: 2,
+					gone: null,
+					deal_id: "y".repeat(200),
+					summary: "y".repeat(201),
+					expires_at: "2030-01-15T18:00:00.000Z",
+					nested: {},
+					note: "x".repeat(16_400),
+				};
+				for (const [answer, replay] of [
+					[whole, whole],
+					[
+						long,
+						{
+							ok: true,
+							count: 2,
+							gone: null,
+							deal_id: long.deal_id,
+							response_omitted: {
+								chars: JSON.stringify(long).length,
+								reread:
+									"the write already ran; read the record for its current state",
+							},
+						},
+					],
+				] as const) {
+					const request = save({ idempotency_key: randomUUID() });
+					assert.deepEqual(await run(request, async () => answer), answer);
+					assert.deepEqual(await run(request, unreachable), {
+						replayed: true,
+						...replay,
+					});
+				}
+			},
+		);
+
 		await t.test("a concurrent retry waits, then replays", async () => {
 			const request = save({ idempotency_key: randomUUID() });
 			let started = () => {};
@@ -254,5 +299,146 @@ test("saves", (t) =>
 				{ ok: true },
 			);
 			assert.deepEqual(await stored(key), { events: 0, receipts: 1 });
+		});
+	}));
+
+const DOOR = {
+	verb: "example-save",
+	fields: ["idempotency_key", "slug", "note"],
+	required: ["idempotency_key", "slug"],
+};
+
+test("a save checks its door and keeps one correlation id", (t) =>
+	withSnapshot(async (database) => {
+		const db = connect(database);
+		t.after(() => db.destroy());
+		await db
+			.insertInto("actor")
+			.values({ slug: "partner_one", kind: "human", display_name: "Example" })
+			.execute();
+		const post = (body: unknown, change: Change, correlation?: string) => {
+			const app = new Hono<WriterEnv>();
+			app.use(async (c, next) => {
+				c.set("partner", { slug: "partner_one", display: "Example" });
+				await next();
+			});
+			app.post("/", (c) => answerSave(c, DOOR, change));
+			return app.request(
+				"/",
+				{
+					method: "POST",
+					headers: correlation ? { "x-correlation-id": correlation } : {},
+					body: JSON.stringify(body),
+				},
+				{ DATABASE_WRITER: { connectionString: database } },
+			);
+		};
+		const answered = async (pending: Response | Promise<Response>) => {
+			const response = await pending;
+			const id = response.headers.get("x-correlation-id");
+			assert.match(id ?? "", UUID);
+			const body: JsonObject = JSON.parse(await response.text());
+			return { id, status: response.status, body };
+		};
+		const saved = async () => ({ ok: true });
+		const statement =
+			(query: RawBuilder<unknown>): Change =>
+			async ({ tx }) => {
+				await query.execute(tx);
+				return {};
+			};
+		const actor = (slug: string | null, kind: string | null) =>
+			statement(sql`insert into actor (slug, kind, display_name)
+				values (${slug}, ${kind}, 'Example')`);
+
+		await t.test("in the old door's order", async () => {
+			for (const [body, error, fields] of [
+				[{ slug: "x", other: 1 }, "unregistered_operation_fields", ["other"]],
+				[{ note: "</note>" }, "tool_call_markup_in_value", ["note"]],
+				[{ note: "x" }, "missing_required", ["idempotency_key", "slug"]],
+				[
+					{ idempotency_key: "example", slug: "x" },
+					"invalid_idempotency_key",
+					["idempotency_key"],
+				],
+			] as const) {
+				const answer = await answered(post(body, saved));
+				const { correlation_id, hint, ...rest } = answer.body;
+				assert.deepEqual([answer.status, rest], [400, { error, fields }]);
+				assert.equal(correlation_id, answer.id);
+			}
+			const empty = await answered(post([], saved));
+			assert.deepEqual(
+				[empty.status, empty.body],
+				[400, { error: "invalid_json" }],
+			);
+		});
+
+		await t.test(
+			"a statement the database refuses gets the old named refusal",
+			async () => {
+				t.mock.method(console, "warn", () => {});
+				const key = randomUUID();
+				const named = { error: "invalid_field_value", fields: ["slug"] };
+				const refusedStatement = { error: "database_refused_the_statement" };
+				for (const [change, status, expected] of [
+					[actor(null, "human"), 400, named],
+					[actor("partner_two", null), 400, refusedStatement],
+					[actor("partner_one", "human"), 400, refusedStatement],
+					[actor("partner_two", "robot"), 400, refusedStatement],
+					[statement(sql`select 'example'::uuid`), 400, refusedStatement],
+					[
+						statement(sql`select 1 / 0`),
+						500,
+						{ error: "unhandled_verb_failure", verb: "example-save" },
+					],
+				] as const) {
+					const answer = await answered(
+						post({ idempotency_key: key, slug: "x" }, change),
+					);
+					const { correlation_id, hint, ...rest } = answer.body;
+					assert.deepEqual([answer.status, rest], [status, expected]);
+				}
+				assert.deepEqual(
+					await db
+						.selectFrom("tool_call")
+						.select("verb")
+						.where("idempotency_key", "=", key)
+						.execute(),
+					[],
+				);
+			},
+		);
+
+		await t.test("on the answer, its receipt and the failure log", async () => {
+			const given = randomUUID();
+			const key = randomUUID();
+			const answer = await answered(
+				post({ idempotency_key: key, slug: "x" }, saved, given.toUpperCase()),
+			);
+			assert.deepEqual(answer, { id: given, status: 200, body: { ok: true } });
+			const { correlation_id } = await db
+				.selectFrom("tool_call")
+				.select("correlation_id")
+				.where("idempotency_key", "=", key)
+				.executeTakeFirstOrThrow();
+			assert.equal(correlation_id, given);
+			const warn = t.mock.method(console, "warn", () => {});
+			const failed = await answered(
+				post(
+					{ idempotency_key: randomUUID(), slug: "x" },
+					async () => {
+						throw new Error("example");
+					},
+					"example",
+				),
+			);
+			assert.equal(failed.status, 500);
+			assert.equal(failed.body.correlation_id, failed.id);
+			assert.notEqual(failed.id, "example");
+			assert.deepEqual(
+				warn.mock.calls.map((call) => call.arguments),
+				[["save failed:", failed.id, "Error"]],
+			);
 		});
 	}));
