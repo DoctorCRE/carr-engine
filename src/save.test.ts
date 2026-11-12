@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { sql } from "kysely";
 import { withSnapshot } from "../scripts/test-database.ts";
+import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { connect } from "./reader.ts";
 import {
@@ -20,7 +21,7 @@ const save = (args: JsonObject, partner = "partner_one"): Save => ({
 	correlation_id: randomUUID(),
 });
 const refused = (error: string) => (thrown: unknown) =>
-	thrown instanceof SaveRefusal && thrown.answer.error === error;
+	thrown instanceof SaveRefusal && thrown.refusal.error === error;
 const unreachable = () => assert.fail("the change ran");
 const subject = (saving: Saving) => ({
 	subject_type: "actor",
@@ -173,21 +174,22 @@ test("saves", (t) =>
 
 		await t.test("a refusal or failure keeps nothing", async () => {
 			const key = randomUUID();
-			for (const [request, error] of [
-				[save({}), "missing_idempotency_key"],
-				[save({ idempotency_key: "example" }), "invalid_idempotency_key"],
-				[save({ idempotency_key: key }, "nobody"), "actor_not_provisioned"],
+			for (const [request, refusal] of [
+				[save({}), new Refusal(400, "missing_idempotency_key")],
+				[
+					save({ idempotency_key: "example" }),
+					new Refusal(400, "invalid_idempotency_key", {
+						fields: ["idempotency_key"],
+					}),
+				],
+				[
+					save({ idempotency_key: key }, "nobody"),
+					new Refusal(422, "actor_not_provisioned"),
+				],
 			] as const)
-				await assert.rejects(run(request, unreachable), refused(error));
-			await assert.rejects(
-				run(save({ idempotency_key: key }, "nobody"), unreachable),
-				(thrown) =>
-					thrown instanceof SaveRefusal &&
-					thrown.answer.hint ===
-						"the token authenticates as this actor but no row exists in the actor table — provision the actor before any write verb will run",
-			);
+				await assert.rejects(run(request, unreachable), { refusal });
 			for (const failure of [
-				new SaveRefusal({ error: "example" }),
+				new SaveRefusal(new Refusal(400, "field_required")),
 				new Error("example"),
 			])
 				await assert.rejects(
