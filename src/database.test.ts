@@ -23,7 +23,7 @@ test("business rows use the copied constraints and touch triggers", () =>
 			(select 1 from pg_depend d where d.classid='pg_class'::regclass and d.objid=c.oid and d.deptype='e')
 		`.execute(tx);
 		assert.deepEqual(inventory.rows, [
-			{ tables: 106, views: 54, sequences: 6, triggers: 32 },
+			{ tables: 107, views: 54, sequences: 6, triggers: 33 },
 		]);
 		const actor = await tx
 			.insertInto("actor")

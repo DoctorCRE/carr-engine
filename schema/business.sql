@@ -305,6 +305,26 @@ begin
 end
 $$;
 
+CREATE FUNCTION public.tool_call_expire() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'pg_temp'
+    AS $$
+begin
+  delete from public.tool_call t
+   where t.idempotency_key = new.idempotency_key
+     and not (t.verb in ('review-and-triage', 'accept-ready-plan', 'accept-outcome-feedback')
+       or t.idempotency_key like 'rw02-%' or t.idempotency_key like 'calcap-%')
+     and t.created_at < now() - interval '30 days';
+  delete from public.tool_call t where t.idempotency_key in (
+    select o.idempotency_key from public.tool_call o
+     where not (o.verb in ('review-and-triage', 'accept-ready-plan', 'accept-outcome-feedback')
+       or o.idempotency_key like 'rw02-%' or o.idempotency_key like 'calcap-%')
+       and o.created_at < now() - interval '30 days'
+     order by o.created_at limit 20 for update skip locked);
+  return new;
+end
+$$;
+
 CREATE FUNCTION public.trg_touch_row() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -1940,6 +1960,24 @@ CREATE TABLE public.system_config (
     note text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_by uuid
+);
+
+CREATE TABLE public.tool_call (
+    idempotency_key text NOT NULL,
+    verb text NOT NULL,
+    actor_id uuid NOT NULL,
+    request_hash text NOT NULL,
+    response jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    via text,
+    client_id text,
+    sponsoring_human_slug text,
+    personal_scope text,
+    authorization_class text,
+    organization_tenant_id text,
+    correlation_id uuid,
+    CONSTRAINT tool_call_personal_scope_check CHECK (((personal_scope IS NULL) OR (personal_scope = ANY (ARRAY['partner_one-personal'::text, 'partner_two-personal'::text, 'none'::text])))),
+    CONSTRAINT tool_call_sponsoring_human_slug_check CHECK (((sponsoring_human_slug IS NULL) OR (sponsoring_human_slug = ANY (ARRAY['partner_one'::text, 'partner_two'::text]))))
 );
 
 CREATE VIEW public.v_last_touch AS
@@ -3945,6 +3983,9 @@ ALTER TABLE ONLY public.submarket_condition
 ALTER TABLE ONLY public.system_config
     ADD CONSTRAINT system_config_pkey PRIMARY KEY (key);
 
+ALTER TABLE ONLY public.tool_call
+    ADD CONSTRAINT tool_call_pkey PRIMARY KEY (idempotency_key);
+
 ALTER TABLE ONLY public.vendor_category
     ADD CONSTRAINT vendor_category_pkey PRIMARY KEY (slug);
 
@@ -4184,6 +4225,10 @@ CREATE INDEX signal_event_queue_idx ON public.signal_event USING btree (status, 
 
 CREATE INDEX signal_event_subject_idx ON public.signal_event USING btree (subject_type, subject_ref, detected_at DESC);
 
+CREATE INDEX tool_call_correlation_idx ON public.tool_call USING btree (correlation_id) WHERE (correlation_id IS NOT NULL);
+
+CREATE INDEX tool_call_expiry_idx ON public.tool_call USING btree (created_at) WHERE (NOT ((verb = ANY (ARRAY['review-and-triage'::text, 'accept-ready-plan'::text, 'accept-outcome-feedback'::text])) OR (idempotency_key ~~ 'rw02-%'::text) OR (idempotency_key ~~ 'calcap-%'::text)));
+
 CREATE INDEX vendor_category_slug_idx ON public.vendor USING btree (category_slug);
 
 CREATE INDEX vendor_live_party_idx ON public.vendor USING btree (party_id, id) WHERE (merged_into IS NULL);
@@ -4271,6 +4316,8 @@ CREATE TRIGGER prospect_pool_touch BEFORE UPDATE ON public.candidate_pool FOR EA
 CREATE TRIGGER rule_touch BEFORE UPDATE ON public.rule FOR EACH ROW EXECUTE FUNCTION public.trg_touch_row();
 
 CREATE TRIGGER space_touch BEFORE UPDATE ON public.space FOR EACH ROW EXECUTE FUNCTION public.trg_touch_row();
+
+CREATE TRIGGER tool_call_expire BEFORE INSERT ON public.tool_call FOR EACH ROW EXECUTE FUNCTION public.tool_call_expire();
 
 CREATE TRIGGER vendor_market_canonical_key AFTER INSERT ON public.vendor_market FOR EACH ROW EXECUTE FUNCTION public.vendor_market_canonical_key();
 
@@ -5022,6 +5069,9 @@ ALTER TABLE ONLY public.space
 
 ALTER TABLE ONLY public.system_config
     ADD CONSTRAINT system_config_updated_by_fk FOREIGN KEY (updated_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.tool_call
+    ADD CONSTRAINT tool_call_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);
 
 ALTER TABLE ONLY public.vendor
     ADD CONSTRAINT vendor_category_slug_fkey FOREIGN KEY (category_slug) REFERENCES public.vendor_category(slug);
