@@ -381,6 +381,135 @@ test("the deals routes answer from one snapshot and refuse like the old system",
 	});
 });
 
+// Out of order, so the refusal must sort them.
+const RESERVED = [
+	"writes_records",
+	"tenant",
+	"actor",
+	"call_models",
+	"sponsoring_human_slug",
+	"action_authority",
+	"tenant_id",
+	"profile",
+	"organization_tenant_id",
+	"capability",
+	"write",
+	"sponsor",
+	"actions",
+	"audience",
+	"calls_models",
+	"authorization_class",
+	"human_slug",
+	"identity",
+	"runtime_principal",
+	"action",
+	"capabilities",
+	"allowed_actions",
+	"sponsoring_human_id",
+	"authorization",
+	"action_authorities",
+];
+
+test("the deal reads refuse reserved fields, then a bad workspace, then unknown fields, before any read", async () => {
+	const warnings = mock.method(console, "warn", () => {});
+	const get = (path: string) =>
+		worker.request(
+			`https://app.example.test/api/engine${path}`,
+			{ headers: { Cookie: cookie } },
+			{
+				CARR: signedIn("routes-agent"),
+				DATABASE: { connectionString: "postgres://made-up@127.0.0.1:1/none" },
+			},
+		);
+	const reserved = {
+		error: "caller_authority_field_forbidden",
+		hint: "Remove caller-supplied authority fields.",
+	};
+	const unknown = {
+		error: "unregistered_operation_fields",
+		hint: "Remove fields outside the documented input.",
+	};
+	const missingDeal = {
+		error: "missing_required",
+		hint: "Supply the named required fields from the tool's documented input.",
+		fields: ["deal"],
+	};
+	const everyReserved = RESERVED.map((name) => `${name}=x`).join("&");
+	try {
+		for (const [path, documented, read] of [
+			[
+				"/deals",
+				"workspace=team&account_client_id=x",
+				failedRead("deal-room-board"),
+			],
+			["/deals/Example", "deal=x", failedRead("get-deal-room")],
+			["/deals/", "deal=x", missingDeal],
+			[
+				"/client-fit",
+				"vertical=x&city=x&state=x",
+				failedRead("ideal-client-profile"),
+			],
+			["/capture-queue", "", failedRead("capture-queue")],
+		] as const) {
+			await refused(
+				await get(`${path}?${documented}&b=1&a=2&a=3&%24bad=4`),
+				400,
+				{
+					...unknown,
+					fields: ["a", "b"],
+				},
+			);
+			await refused(await get(`${path}?%24bad=1`), 400, {
+				...unknown,
+				fields: [],
+			});
+			await refused(await get(`${path}?b=1&tenant=x&actor=y&actor=z`), 403, {
+				...reserved,
+				fields: ["actor", "tenant"],
+			});
+			await refused(await get(`${path}?${everyReserved}`), 403, {
+				...reserved,
+				fields: [
+					"action",
+					"action_authorities",
+					"action_authority",
+					"actions",
+					"actor",
+					"allowed_actions",
+					"audience",
+					"authorization",
+					"authorization_class",
+					"call_models",
+					"calls_models",
+					"capabilities",
+					"capability",
+					"human_slug",
+					"identity",
+					"organization_tenant_id",
+					"profile",
+					"runtime_principal",
+					"sponsor",
+					"sponsoring_human_id",
+				],
+			});
+			const passed = await get(`${path}?${documented}`);
+			await refused(passed, path === "/deals/" ? 400 : 500, read);
+		}
+		await refused(await get("/deals?workspace=everyone&b=1&profile=x"), 403, {
+			...reserved,
+			fields: ["profile"],
+		});
+		await refused(await get("/deals?workspace=everyone&b=1"), 400, {
+			error: "value_not_in_declared_vocabulary",
+			hint: "Use a value from the field's documented vocabulary.",
+			allowed_values: ["team", "national_account", "all"],
+			fields: ["workspace"],
+		});
+	} finally {
+		warnings.mock.restore();
+	}
+});
+
 test("without a database binding every read answers 503", async () => {
 	for (const [path, verb] of reads) {
 		const response = await worker.request(

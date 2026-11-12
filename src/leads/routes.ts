@@ -1,12 +1,5 @@
 import { Hono } from "hono";
-import {
-	answer,
-	asNumber,
-	Refusal,
-	refuse,
-	reservedFields,
-	unregisteredFields,
-} from "../answer.ts";
+import { answer, asNumber, checkFields, Refusal, refuse } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readLeadBoard } from "./board.ts";
 import { historyCursors, readLeadDetail } from "./detail.ts";
@@ -29,19 +22,8 @@ export const leads = new Hono<DatabaseEnv>();
 
 leads.get("/leads", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const reserved = reservedFields(params);
-	if (reserved) return refuse(c, reserved);
-	const workspace = params.get("workspace");
-	if (workspace !== null && workspace !== "leads")
-		return refuse(
-			c,
-			new Refusal(400, "value_not_in_declared_vocabulary", {
-				allowed_values: ["leads"],
-				fields: ["workspace"],
-			}),
-		);
-	const unregistered = unregisteredFields(params, BOARD_FIELDS);
-	if (unregistered) return refuse(c, unregistered);
+	const refused = checkFields(params, BOARD_FIELDS, { workspace: ["leads"] });
+	if (refused) return refuse(c, refused);
 	const cursors = historyCursors(params);
 	// The old refusal of a cursor was not public, so it answered generically.
 	if (!cursors) return refuse(c, new Refusal(400, "unhandled_verb_failure"));
@@ -58,8 +40,8 @@ leads.get("/leads", async (c) => {
 
 leads.get("/quiet-follow-ups", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const unregistered = unregisteredFields(params, QUIET_FIELDS);
-	if (unregistered) return refuse(c, unregistered);
+	const refused = checkFields(params, QUIET_FIELDS);
+	if (refused) return refuse(c, refused);
 	// The old read checked neither whole numbers nor their 1 to 365 range.
 	const lead_days = asNumber(params.get("lead_days"), 45);
 	if (lead_days === undefined)
@@ -93,8 +75,8 @@ leads.get("/quiet-follow-ups", async (c) => {
 // them: an empty value meant no filter and any other value filtered exactly.
 leads.get("/territory-state-board", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const unregistered = unregisteredFields(params, TERRITORY_FIELDS);
-	if (unregistered) return refuse(c, unregistered);
+	const refused = checkFields(params, TERRITORY_FIELDS);
+	if (refused) return refuse(c, refused);
 	return answer(c, "territory-state-board", async (db) => {
 		const territory = await readTerritory(db, {
 			vertical: params.get("vertical") || null,
@@ -110,8 +92,8 @@ leads.get("/territory-state-board", async (c) => {
 
 leads.get("/reasons-to-reach-out", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const unregistered = unregisteredFields(params, REASON_FIELDS);
-	if (unregistered) return refuse(c, unregistered);
+	const refused = checkFields(params, REASON_FIELDS);
+	if (refused) return refuse(c, refused);
 	const limit = asNumber(params.get("limit"), 25);
 	if (limit === undefined)
 		return refuse(c, new Refusal(400, "invalid_number", { fields: ["limit"] }));

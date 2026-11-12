@@ -1,11 +1,5 @@
 import { Hono } from "hono";
-import {
-	answer,
-	asNumber,
-	Refusal,
-	refuse,
-	unregisteredFields,
-} from "../answer.ts";
+import { answer, asNumber, checkFields, Refusal, refuse } from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { hasToolCallMarkup, readRecentActivity } from "./read.ts";
 
@@ -22,8 +16,8 @@ export const activity = new Hono<DatabaseEnv>();
 // required query, then the read's own checks on the trimmed query and limit.
 activity.get("/recent-activity", async (c) => {
 	const params = new URL(c.req.url).searchParams;
-	const unregistered = unregisteredFields(params, FIELDS);
-	if (unregistered) return refuse(c, unregistered);
+	const refused = checkFields(params, FIELDS);
+	if (refused) return refuse(c, refused);
 	for (const field of FIELDS) {
 		const value = params.get(field);
 		if (value !== null && hasToolCallMarkup(field, value))
