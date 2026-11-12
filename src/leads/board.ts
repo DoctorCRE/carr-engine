@@ -1,14 +1,20 @@
 import { sql } from "kysely";
 import type { Reader } from "../reader.ts";
 import {
+	isServable,
+	type OpportunityTiming,
+	opportunityTiming,
+	timingEvents,
+} from "./opportunity-timing.ts";
+import {
 	type ContactInputs,
 	EVIDENCE_LIMIT,
 	type Finding,
 	reachability,
 } from "./reachability.ts";
 
-// One `v_lead_workspace` row with its prospect fields, as the old system
-// serialized it. Only the fields the advice reads are named.
+// One `v_lead_workspace` row with its prospect fields and timing, as the old
+// system serialized it. Only the fields the engine reads are named.
 type WorkspaceLead = {
 	[key: string]: unknown;
 	id: string;
@@ -18,6 +24,7 @@ type WorkspaceLead = {
 	est_lease_event: string | null;
 	event_confidence: string | null;
 	next_action_date: string | null;
+	opportunity_timing: OpportunityTiming;
 };
 type Hold = { reason: "contact_ineligible" | "unsupported_stage" };
 
@@ -92,11 +99,13 @@ const leadsInBoardOrder = (db: Reader) =>
 			eb
 				.selectFrom("v_lead_workspace as w")
 				.leftJoin("v_lead_prospect_engagement as p", "p.lead_id", "w.id")
+				.leftJoin(timingEvents.as("timing"), "timing.party_id", "w.party_id")
 				.selectAll("w")
 				.select([
 					"p.prospect_client_id",
 					"p.prospect_client_version",
 					"p.prospect_engagement_status",
+					opportunityTiming.as("opportunity_timing"),
 				])
 				.as("b"),
 		)
@@ -149,8 +158,19 @@ function advise(lead: WorkspaceLead) {
 	};
 }
 
-// The first lead past either limit, in board order, refuses the whole board.
-function overflow(rows: { findings: Finding[]; contact: ContactInputs }[]) {
+type Row = Awaited<ReturnType<typeof leadsInBoardOrder>>[number];
+
+// The served lead: the row as `to_jsonb` printed it, then the old projection.
+type BoardLead = WorkspaceLead &
+	ReturnType<typeof advise> & {
+		reachability: Awaited<ReturnType<typeof reachability>>;
+	};
+
+// The old projection threw on bad timing at once but on a limit only after an
+// await, so bad timing on any lead beat a limit on an earlier one.
+function refusal(rows: Row[]) {
+	if (!rows.every(({ lead }) => isServable(lead.opportunity_timing)))
+		return "invalid_lead_opportunity_timing";
 	for (const { findings, contact } of rows) {
 		if (findings.length > EVIDENCE_LIMIT)
 			return "research_evidence_limit_exceeded";
@@ -160,17 +180,16 @@ function overflow(rows: { findings: Finding[]; contact: ContactInputs }[]) {
 	return null;
 }
 
-// Each lead still lacks the old `opportunity_timing` key.
 export async function readLeadBoard(db: Reader) {
 	const rows = await leadsInBoardOrder(db);
-	const error = overflow(rows);
+	const error = refusal(rows);
 	if (error) return { error } as const;
 	const now = Date.now();
 	return {
 		schema_version: "lead-workspace.v1",
 		generated_at: new Date(now).toISOString(),
 		leads: await Promise.all(
-			rows.map(async ({ lead, findings, contact }) => {
+			rows.map(async ({ lead, findings, contact }): Promise<BoardLead> => {
 				const advised = advise(lead);
 				return {
 					...advised,
