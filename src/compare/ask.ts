@@ -21,10 +21,15 @@ const REFUSALS = new Set([400, 404, 409, 422]);
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
-// A board for a listed workspace, the invoices and the client list have no
+// A board for a listed workspace, the invoices and the directory lists have no
 // refusal to compare. Comparing one would match two empty answers, and an
 // empty board or list samples no records.
-const UNREFUSED = new Set<Ask["read"]>(["board", "invoices", "client list"]);
+const UNREFUSED = new Set<Ask["read"]>([
+	"board",
+	"invoices",
+	"client list",
+	"vendor list",
+]);
 
 function refusal(ask: ToolAsk, body: unknown) {
 	if (UNREFUSED.has(ask.read)) throw new Error("read refused");
@@ -66,7 +71,7 @@ function mirrored(
 	};
 }
 
-// The old door served the directory over HTTP.
+// The old door served the directory and the Relationships map over HTTP.
 const business = (path: string): Request => ({
 	path: `/api/engine${path}`,
 	oldPath: `/api/v1/business${path}`,
@@ -124,6 +129,17 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" }>): Request {
 			return business(
 				`/clients/${encodeURIComponent(ask.client)}?${DIRECTORY}`,
 			);
+		case "vendor list":
+			return business(`/vendors?${DIRECTORY}`);
+		// Only a vendor's details carry its people.
+		case "vendor":
+			return business(
+				`/vendors/${encodeURIComponent(ask.vendor)}?contract=vendor-directory.v2`,
+			);
+		case "vendor markets":
+			return mirrored("/api/engine/vendor-markets", "read-vendor-markets-v1");
+		case "relationships":
+			return business("/relationships?contract=relationship-network.v1");
 		case "recent activity":
 			return mirrored("/api/engine/recent-activity", "find-and-catch-up", {
 				query: ask.name,

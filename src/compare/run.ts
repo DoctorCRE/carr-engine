@@ -12,6 +12,10 @@ import {
 	activityShape,
 	clientListShape,
 	clientShape,
+	marketsShape,
+	networkShape,
+	vendorListShape,
+	vendorShape,
 } from "./directory-shapes.ts";
 import { invoicesShape } from "./invoices-shape.ts";
 import {
@@ -40,7 +44,11 @@ export type Ask =
 	| { read: "invoices" }
 	| { read: "client list" }
 	| { read: "client"; client: string }
-	// `record` is the listed client whose name is asked.
+	| { read: "vendor list" }
+	| { read: "vendor"; vendor: string }
+	| { read: "vendor markets" }
+	| { read: "relationships" }
+	// `record` is the listed client or vendor whose name is asked.
 	| { read: "recent activity"; name: string; record: string };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
@@ -81,6 +89,10 @@ const SHAPES = {
 	invoices: invoicesShape,
 	"client list": clientListShape,
 	client: clientShape,
+	"vendor list": vendorListShape,
+	vendor: vendorShape,
+	"vendor markets": marketsShape,
+	relationships: networkShape,
 	"recent activity": activityShape,
 };
 
@@ -158,6 +170,10 @@ export async function compareDeals(
 		{ read: "reasons to reach out" },
 		{ read: "invoices" },
 		{ read: "client list" },
+		{ read: "vendor list" },
+		// The app's first asks: every market, and the whole map.
+		{ read: "vendor markets" },
+		{ read: "relationships" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
@@ -199,10 +215,14 @@ export async function compareDeals(
 			}
 		if (ask.read === "lead board")
 			for (const lead of leadsOn(old)) enqueue({ read: "lead", lead });
-		if (ask.read === "client list") {
+		if (ask.read === "client list" || ask.read === "vendor list") {
 			let asked = 0;
 			for (const { id, name } of listed(old)) {
-				enqueue({ read: "client", client: id });
+				enqueue(
+					ask.read === "client list"
+						? { read: "client", client: id }
+						: { read: "vendor", vendor: id },
+				);
 				if (
 					name !== null &&
 					asked < ACTIVITY_NAMES &&

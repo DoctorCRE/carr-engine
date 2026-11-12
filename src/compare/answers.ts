@@ -63,8 +63,11 @@ const sameFormat = (a: unknown, b: unknown) =>
 
 export const strict = (id: string) => ({ id, sortedBy: [] });
 
+// A dotted name reaches into a nested object, such as `contact.id`.
 const fieldOf = (value: unknown, name?: string) =>
-	isRecord(value) && name ? value[name] : undefined;
+	name
+		?.split(".")
+		.reduce<unknown>((at, key) => (isRecord(at) ? at[key] : undefined), value);
 
 function baseOf(value: unknown, rows: Rows): string {
 	const id = fieldOf(value, rows.id);
