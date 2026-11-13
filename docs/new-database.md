@@ -59,8 +59,11 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 24. A post is scheduled, or claimed for publishing, only when its account's `engine_publishes_from` is at or before its time. None means never. The account's time cannot change while a claim is being saved.
 25. A sign-in is as its account's own platform account id, ends after it starts, and is never rewritten or removed.
 26. Each platform's formats come from the known platforms and formats, each once, and only a schema change adds one.
-27. A record or link keeps when it was stored.
-28. The engine empties no table, removes no history, and changes only the columns that may change.
+27. A post's text versions count from 1. A later version is an edit by a partner, written while the post is scheduled and before its review closes, an hour before its time. Text is never blank, rewritten or removed.
+28. A post's media are documents in order, from 1 to 20. A text post has none, and only a photo set has more than one. Each medium is in its post's format and is never changed or removed.
+29. A review is an edit, a cancel or no response. An edit names its text version and a cancel is of a cancelled post; both name a partner and come before review closes. No response names no one, comes at or after the close, and only for a post with no other review. Each version is reviewed once, a post is cancelled and gets no response at most once, and a review is never rewritten or removed.
+30. A record or link keeps when it was stored.
+31. The engine empties no table, removes no history, and changes only the columns that may change.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -79,7 +82,7 @@ The role reads rows in every table, adds rows in every table except `platform_me
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post`, `measurement` and `social_sign_in`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, and a reading of a published post.
+History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement` and `social_sign_in`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, and a reading of a published post.
 
 The owner's own login can still change anything. That path is not the engine's concern.
 
@@ -141,9 +144,12 @@ The owner's automation keeps posting as it does today. These tables record what 
 - **`design_template`**: a reusable look that a post's image is made from.
 - **`platform_metric`**: the metrics each platform reports, one row each. LinkedIn and X do not report saves, for example. The rows are a guess, to be confirmed against each platform's API. Each row says from when posts must have the metric. The first rows hold from the start, and a row added later holds from when it is added, so older posts, which have no reading of it, stay in the day-7 comparison. Only a schema change adds one.
 - **`post`**: one post on one account, with its format, idea, design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
+- **`post_text`**: a post's words, one row per version. The weekly batch writes version 1. A partner's edit is the next version, with its author and time, so nothing is overwritten. The latest version is the one posted.
+- **`post_media`**: a post's files in order, each a `document` in R2.
+- **`post_review`**: what happened in review: a partner's edit, naming its text version, a partner's cancel, or no response, written when review closes on a post nobody touched.
 - **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading of a metric the post's platform does not report is refused, and so is a reading before the post is published. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
 
-A post goes out unless a partner cancels it. `scheduled` means the engine will publish it. At its time the publisher claims it by moving it to `publishing` with `where status = 'scheduled'`, so only one run can send it. It then becomes `published`, with the platform's id and time, or `failed`, with the platform's error as its reason. A post stuck in `publishing` is resolved by a partner to one or the other, never sent again. A cancelled post keeps its reason. A post another publisher sent, such as Blotato, is stored as `published` or `failed` from the start.
+A post goes out unless a partner cancels it. `scheduled` means the engine will publish it. At its time the publisher claims it by moving it to `publishing` with `where status = 'scheduled'`, so only one run can send it. It then becomes `published`, with the platform's id and time, or `failed`, with the platform's error as its reason. A post stuck in `publishing` is resolved by a partner to one or the other, never sent again. A cancelled post keeps its reason. Partners edit or cancel until review closes, an hour before the post's time, and each edit or cancel is a review row. A post another publisher sent, such as Blotato, is stored as `published` or `failed` from the start.
 
 One publisher holds each account at each minute. The database refuses a scheduled post, or a claim, before its account's `engine_publishes_from`, and an account without one never gets an engine post. The weekly batch sends earlier posts elsewhere. Moving the time later stops new claims at once, and the engine cancels the posts it no longer holds. The engine's role cannot change the time; the owner sets it at each cut-over.
 
@@ -161,4 +167,4 @@ Pillars and hooks are text for now. They become lists, like roles and phases, wi
 
 ## Later slices
 
-Partners as people, and who changed what. Deal type, owner and dates. Emails and phone numbers per person. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: each post's text versions, media and review (#218), rotation rules, lead attribution and the weekly agent loop.
+Partners as people, and who changed what. Deal type, owner and dates. Emails and phone numbers per person. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
