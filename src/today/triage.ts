@@ -1,7 +1,9 @@
 import { type Expression, type QueryCreator, sql } from "kysely";
-import { isOneOf } from "../clients/read.ts";
+import { isCalendarDate } from "../calendar-date.ts";
+import { isOneOf, PARTNERS } from "../clients/read.ts";
 import type { DB } from "../database.d.ts";
 import type { Reader } from "../reader.ts";
+import { UUID } from "../uuid.ts";
 
 export const OWNERS = ["all", "partners"] as const;
 type Owners = (typeof OWNERS)[number];
@@ -21,7 +23,10 @@ type After = {
 };
 
 // The owner slugs the old system counted as a partner's, local seats included.
-const PARTNER_OWNERS = ["joe", "joe-local", "dell", "dell-local"];
+const PARTNER_OWNERS = PARTNERS.flatMap((partner) => [
+	partner,
+	`${partner}-local`,
+]);
 // The view's columns in its order, which the old answer kept.
 const COLUMNS = [
 	"item_kind",
@@ -35,23 +40,13 @@ const COLUMNS = [
 	"subject_ref",
 	"business_days_overdue",
 ] as const;
-const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 const isRank = (value: unknown): value is Rank =>
 	value === 0 || value === 1 || value === 2;
 
-const isDay = (value: unknown): value is string => {
-	if (
-		typeof value !== "string" ||
-		!/^\d{4}-\d{2}-\d{2}$/.test(value) ||
-		value < "0001-01-01"
-	)
-		return false;
-	const time = Date.parse(`${value}T00:00:00Z`);
-	return (
-		Number.isFinite(time) && new Date(time).toISOString().startsWith(value)
-	);
-};
+// Postgres has no year zero.
+const isDay = (value: unknown): value is string =>
+	isCalendarDate(value) && value >= "0001-01-01";
 
 // The old cursor is base64 JSON naming the page's day and its last row.
 export function parseCursor(text: string, owners: Owners): After | undefined {

@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { isCalendarDate } from "../calendar-date.ts";
 import type { Reader } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import { readLeadBoard } from "./board.ts";
@@ -58,11 +59,6 @@ const NEXT_STEP: Record<BoardLead["reachability"]["research_state"], string> = {
 		"Read the cited sources and confirm the practice decision before drafting outreach.",
 	needs_research:
 		"Check practice website, professional registry and public filings; record sourced findings with record-finding, including nothing found.",
-};
-
-const isCalendarDate = (day: string) => {
-	const at = Date.parse(`${day}T00:00:00Z`);
-	return Number.isFinite(at) && new Date(at).toISOString().startsWith(day);
 };
 
 function correspondenceCursor(text: string) {
