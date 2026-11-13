@@ -6,11 +6,10 @@ const TENANT = "carr-internal";
 const BOARD = "calendar-agenda";
 const SHOWN = 1000;
 
-type Checked<T> = {
-	state: "ready" | "partial" | "unavailable";
-	note?: string;
-	value: T;
-};
+type Checked<T> = { value: T } & (
+	| { state: "ready"; note?: never }
+	| { state: "partial" | "unavailable"; note: string }
+);
 type Match = Record<"email" | "id", string> &
 	Record<"name" | "client_ref", string | null>;
 type Prep = { state: "ready" } & Record<
@@ -129,8 +128,7 @@ export async function readMeetingPrep(db: Reader, partner: string) {
 	);
 	const section =
 		stored && meetingsFromSnapshot(stored[0]?.snapshot_json, new Date());
-	if (!section) return UNAVAILABLE;
-	if (section.state === "unavailable") return section;
+	if (!section || section.state === "unavailable") return UNAVAILABLE;
 
 	const addresses = [...new Set(section.items.flatMap(emailsOf))];
 	const matched = addresses.length
@@ -141,7 +139,9 @@ export async function readMeetingPrep(db: Reader, partner: string) {
 	const prepared = ids.length
 		? await prepareDeals(db, ids, partner)
 		: undefined;
-	const notes = [matched?.note, prepared?.note].filter((note) => !!note);
+	const notes = [matched?.note, prepared?.note].filter(
+		(note) => note !== undefined,
+	);
 
 	return {
 		...section,
@@ -154,17 +154,16 @@ export async function readMeetingPrep(db: Reader, partner: string) {
 		},
 		items: section.items.map((meeting) => {
 			const emails = new Set(emailsOf(meeting));
-			const deals = new Map(
-				matches
-					.filter((match) => emails.has(match.email))
-					.map(({ id, name, client_ref }) => [id, { id, name, client_ref }]),
-			);
 			return {
 				...meeting,
-				possible_deals: [...deals.values()].map((deal) => ({
-					...deal,
-					prep: prepared?.value.get(deal.id) ?? { state: "unavailable" },
-				})),
+				possible_deals: matches
+					.filter((match) => emails.has(match.email))
+					.map(({ id, name, client_ref }) => ({
+						id,
+						name,
+						client_ref,
+						prep: prepared?.value.get(id) ?? { state: "unavailable" },
+					})),
 			};
 		}),
 		match_basis: "attendee_email_possible_match",
