@@ -17,6 +17,7 @@
 	"dependencies": {
 		"aws4fetch": "1.0.20",
 		"hono": "4.13.18",
+		"jose": "6.2.17",
 		"kysely": "0.29.8",
 		"pg": "8.23.1"
 	},

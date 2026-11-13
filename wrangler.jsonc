@@ -13,7 +13,14 @@
 	"workers_dev": true,
 	"preview_urls": true,
 	"version_metadata": { "binding": "CF_VERSION_METADATA" },
-	"services": [{ "binding": "CARR", "service": "carr-mcp" }],
+	"services": [
+		{ "binding": "CARR", "service": "carr-mcp" },
+		{
+			"binding": "CARR_READS",
+			"service": "carr-mcp",
+			"entrypoint": "ComparisonReads"
+		}
+	],
 	"hyperdrive": [
 		{ "binding": "DATABASE", "id": "371e07c33382489c9ffc401a05f2358e" }
 	],
@@ -25,7 +32,14 @@
 		"staging": {
 			"name": "doctorcre-engine-staging",
 			"version_metadata": { "binding": "CF_VERSION_METADATA" },
-			"services": [{ "binding": "CARR", "service": "carr-mcp-staging" }],
+			"services": [
+				{ "binding": "CARR", "service": "carr-mcp-staging" },
+				{
+					"binding": "CARR_READS",
+					"service": "carr-mcp-staging",
+					"entrypoint": "ComparisonReads"
+				}
+			],
 			"hyperdrive": [
 				{ "binding": "DATABASE", "id": "2894a20af7164fb9ac49d8101bdc1d7f" },
 				{
