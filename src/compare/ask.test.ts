@@ -538,3 +538,103 @@ test("a refused client or vendor compares as its refusal without the correlation
 			);
 	}
 });
+
+const everyOwner: Ask = { read: "today's reminders" };
+const reminders: Ask[] = [
+	everyOwner,
+	{ read: "today's reminders", owners: "partners" },
+];
+const prep: Ask = { read: "meeting prep" };
+const triage = (cursor: string | null) => ({
+	items: [{ id: cursor ?? "first" }],
+	has_more: cursor !== "b",
+	next_cursor: cursor === null ? "a" : cursor === "a" ? "b" : null,
+});
+
+test("today's reminders ask the default and the partners' queues and follow each side's next_cursor to the last page", async () => {
+	const expected = { pages: [triage(null), triage("a"), triage("b")] };
+	const engine = fake(({ url }) =>
+		json(triage(url.searchParams.get("cursor"))),
+	);
+	for (const read of reminders)
+		assert.deepEqual(await engine.askEngine(read), expected);
+	assert.deepEqual(
+		engine.sent.map((s) => s.url.pathname + s.url.search),
+		[
+			"/api/engine/today-triage",
+			"/api/engine/today-triage?cursor=a",
+			"/api/engine/today-triage?cursor=b",
+			"/api/engine/today-triage?owners=partners",
+			"/api/engine/today-triage?owners=partners&cursor=a",
+			"/api/engine/today-triage?owners=partners&cursor=b",
+		],
+	);
+	const old = fake(({ init }) =>
+		content(
+			triage(JSON.parse(String(init.body)).params.arguments.cursor ?? null),
+		),
+	);
+	for (const read of reminders)
+		assert.deepEqual(await old.askOld(read), expected);
+	assert.deepEqual(
+		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		[
+			{},
+			{ cursor: "a" },
+			{ cursor: "b" },
+			{ owners: "partners" },
+			{ owners: "partners", cursor: "a" },
+			{ owners: "partners", cursor: "b" },
+		].map((args) => ({ name: "today-triage", arguments: args })),
+	);
+	assert.deepEqual(old.waits, [1, 2, 4, 5]);
+});
+
+test("today's reminders compare only the first five pages of a longer queue", async () => {
+	const page = { items: [], has_more: true, next_cursor: "1" };
+	const long = fake(() => json(page));
+	assert.deepEqual(await long.askEngine(everyOwner), {
+		pages: Array(5).fill(page),
+	});
+	assert.equal(long.sent.length, 5);
+});
+
+test("meeting prep asks with no input on both sides", async () => {
+	const engine = fake(() => json({ state: "ready", items: [] }));
+	assert.deepEqual(await engine.askEngine(prep), { state: "ready", items: [] });
+	assert.deepEqual(
+		engine.sent.map((s) => s.url.href),
+		["https://app.example.test/api/engine/calendar-meeting-prep"],
+	);
+	const old = fake(() => content({ state: "ready", items: [] }));
+	await old.askOld(prep);
+	assert.deepEqual(
+		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		[{ name: "calendar-meeting-prep", arguments: {} }],
+	);
+});
+
+test("an unavailable calendar, a refusal or a server error fails today's reminders or meeting prep instead of comparing, on either side", async () => {
+	const refused = { error: "made-up", correlation_id: "made-up" };
+	const unavailable = {
+		state: "unavailable",
+		reason: "source_unavailable",
+		items: [],
+	};
+	const failures = [
+		[prep, fake(() => json(unavailable)).askEngine],
+		[prep, fake(() => content(unavailable)).askOld],
+		...[prep, ...reminders].flatMap((read) =>
+			[
+				fake(() => json(refused, 422)).askEngine,
+				fake(() => content(refused, true)).askOld,
+				fake(() => json(failedRead("made-up"), 500)).askEngine,
+			].map((ask) => [read, ask] as const),
+		),
+	] as const;
+	for (const [read, ask] of failures)
+		await assert.rejects(
+			ask(read),
+			(error: Error) => !(error instanceof StopRun),
+		);
+});

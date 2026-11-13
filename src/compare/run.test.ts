@@ -50,6 +50,10 @@ const fixed = {
 	"vendor list": directory(),
 	"vendor markets": { markets: [], vendors: [] },
 	relationships: network,
+	"today's reminders": {
+		pages: [{ items: [], total: 0, has_more: false, next_cursor: null }],
+	},
+	"meeting prep": { state: "empty", observed_at: clock, items: [] },
 };
 const [l1, l2] = [uuid(31), uuid(32)];
 const [c1, c2, v1] = [uuid(51), uuid(52), uuid(53)];
@@ -183,6 +187,9 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"vendor list",
 		"vendor markets",
 		"relationships",
+		"today's reminders",
+		"today's reminders",
+		"meeting prep",
 		d1,
 		d2,
 		d3,
@@ -196,8 +203,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 22);
-	assert.deepEqual([run.oldReads, run.engineReads], [23, 46]);
+	assert.equal(pauses, 25);
+	assert.deepEqual([run.oldReads, run.engineReads], [26, 52]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -279,6 +286,9 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"vendor list matched",
 			"vendor markets matched",
 			"relationships matched",
+			"today's reminders matched",
+			"today's reminders matched",
+			"meeting prep matched",
 			`${d1} matched`,
 			`${d2} matched`,
 			`${d3} matched`,
@@ -351,7 +361,7 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 23, engine reads made: 46
+old reads made: 26, engine reads made: 52
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
@@ -370,6 +380,8 @@ client list                                      1         1         0         0
 vendor list                                      1         1         0         0         0         0         0
 vendor markets                                   1         1         0         0         0         0         0
 relationships                                    1         1         0         0         0         0         0
+today's reminders                                2         2         0         0         0         0         0
+meeting prep                                     1         1         0         0         0         0         0
 deal detail                                      3         0         0         0         3         0         0
 lead detail                                      2         2         0         0         0         0         0
 
@@ -636,10 +648,36 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 				},
 			},
 		},
+		today: {
+			"today's reminders": {
+				pages: [{ items: [{ id: uuid(48), what: m(s) }], next_cursor: m(s) }],
+			},
+			"meeting prep": {
+				notes: [m(s)],
+				items: [
+					{
+						start: m(s),
+						title: m(s),
+						attendees: [{ email: m(s) }],
+						possible_deals: [{ id: uuid(49), name: m(s) }],
+					},
+				],
+				follow_up_reviews: [{ key: m(s), prompt: m(s) }],
+			},
+		},
 	});
 	const answers = (s: string) => {
-		const { board, detail, fixed, feed, find, leads, invoices, directory } =
-			side(s);
+		const {
+			board,
+			detail,
+			fixed,
+			feed,
+			find,
+			leads,
+			invoices,
+			directory,
+			today,
+		} = side(s);
 		const details = new Map([d1, d2, d3].map((deal) => [deal, detail(deal)]));
 		return (ask: Ask) =>
 			ask.read === "board"
@@ -660,7 +698,10 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 											ask.read === "territory" ||
 											ask.read === "reasons to reach out"
 										? leads[ask.read]
-										: directory[ask.read];
+										: ask.read === "today's reminders" ||
+												ask.read === "meeting prep"
+											? today[ask.read]
+											: directory[ask.read];
 	};
 	const { run } = await runWith(answers("new"), answers("old"));
 	assert.ok(
@@ -1142,5 +1183,80 @@ test("directory reads that fail are recorded as failed, a failed record read ask
 				"",
 			].join("\\n")}$`,
 		),
+	);
+});
+
+const reminders = (due_on: string) => ({
+	pages: [
+		{
+			items: [
+				{ item_kind: "next_action", id: uuid(60), due_on: "2030-01-01" },
+				{ item_kind: "critical_date", id: uuid(62), due_on },
+			],
+			total: 2,
+			has_more: false,
+			next_cursor: null,
+		},
+	],
+});
+const meetingPrep = (phase: string) => ({
+	state: "ready",
+	observed_at: clock,
+	items: [
+		{
+			start: clock,
+			title: "Made-up meeting",
+			possible_deals: [{ id: uuid(61), prep: { state: "ready", phase } }],
+		},
+	],
+});
+const withToday =
+	(due_on: string, phase: string) =>
+	(ask: Ask): unknown =>
+		ask.read === "today's reminders"
+			? reminders(due_on)
+			: ask.read === "meeting prep"
+				? meetingPrep(phase)
+				: answer(ask);
+const todayReads = (run: { outcomes: { ask: Ask; result: string }[] }) =>
+	run.outcomes.flatMap((o) =>
+		o.ask.read === "today's reminders" || o.ask.read === "meeting prep"
+			? [o.result]
+			: [],
+	);
+
+test("today's reminders and meeting prep match alike answers and report a changed reminder or deal preparation by path and record ID", async () => {
+	const alike = await runWith(
+		withToday("2030-01-02", "legal"),
+		withToday("2030-01-02", "legal"),
+	);
+	assert.deepEqual(todayReads(alike.run), ["matched", "matched", "matched"]);
+	const { run } = await runWith(
+		withToday("2030-01-03", "research"),
+		withToday("2030-01-02", "legal"),
+	);
+	assert.deepEqual(todayReads(run), ["different", "different", "different"]);
+	const text = report("production", run);
+	for (const line of [
+		"today's reminders                                2         0         0         0         2         0         0",
+		"meeting prep                                     1         0         0         0         1         0         0",
+		`today.pages[].items[].due_on  value differs  2  ${uuid(62)}`,
+		`prep.items[].possible_deals[].prep.phase  value differs  1  ${uuid(61)}`,
+	])
+		assert.ok(text.includes(`\n${line}\n`), line);
+});
+
+test("today's reminders and meeting prep the engine cannot read fail, and the run goes on", async () => {
+	const { run, calls } = await runWith((ask) => {
+		if (ask.read === "today's reminders" || ask.read === "meeting prep")
+			throw new Error("read failed");
+		return answer(ask);
+	});
+	assert.deepEqual(todayReads(run), ["failed", "failed", "failed"]);
+	assert.equal(calls.at(-1), `engine ${l2}`);
+	assert.equal(exitCode(run), 2);
+	assert.match(
+		report("production", run),
+		/\nnot compared: result, read, record ID\nfailed {2}today's reminders {2}-\nfailed {2}today's reminders {2}-\nfailed {2}meeting prep {2}-\n$/,
 	);
 });

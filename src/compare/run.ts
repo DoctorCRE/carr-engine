@@ -26,6 +26,7 @@ import {
 	territoryShape,
 } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
+import { meetingPrepShape, todayShape } from "./today-shapes.ts";
 
 export class StopRun extends Error {}
 
@@ -49,7 +50,10 @@ export type Ask =
 	| { read: "vendor markets" }
 	| { read: "relationships" }
 	// `record` is the opened client or vendor whose name is asked.
-	| { read: "recent activity"; name: string; record: string };
+	| { read: "recent activity"; name: string; record: string }
+	// With no owners, the old default queue of every owner.
+	| { read: "today's reminders"; owners?: "partners" }
+	| { read: "meeting prep" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -96,6 +100,8 @@ export const READS: Record<Ask["read"], Read> = {
 	"vendor markets": { shape: marketsShape, prefix: "markets" },
 	relationships: { shape: networkShape, prefix: "network" },
 	"recent activity": { shape: activityShape, prefix: "activity" },
+	"today's reminders": { shape: todayShape, prefix: "today" },
+	"meeting prep": { shape: meetingPrepShape, prefix: "prep" },
 };
 
 // Each opened lead re-sends the whole board, so a fixed number spread over the
@@ -185,6 +191,10 @@ export async function compareDeals(
 		// The app's first asks: every market, and the whole map.
 		{ read: "vendor markets" },
 		{ read: "relationships" },
+		{ read: "today's reminders" },
+		{ read: "today's reminders", owners: "partners" },
+		// Both systems read the signed-in partner's own calendar.
+		{ read: "meeting prep" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
