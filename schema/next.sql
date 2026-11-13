@@ -71,10 +71,72 @@ create table deal_party (
 	primary key (deal_id, party_id, role)
 );
 
+create table activity (
+	id uuid primary key default gen_random_uuid(),
+	kind text not null check (kind in ('email', 'call', 'meeting', 'note')),
+	happened_at timestamptz not null,
+	from_party_id uuid references party,
+	summary text,
+	unique (id, kind)
+);
+
+-- Each "about" row points at exactly one record through a checked key, never a type word and a bare id.
+create table activity_about (
+	activity_id uuid not null references activity,
+	deal_id uuid references deal,
+	party_id uuid references party,
+	property_id uuid references property,
+	constraint activity_about_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
+	unique nulls not distinct (activity_id, deal_id, party_id, property_id)
+);
+
+-- Only the new text is kept; the date is the activity's, and the mailbox stays the full record.
+create table email (
+	activity_id uuid primary key,
+	activity_kind text not null generated always as ('email') stored,
+	message_id text not null unique,
+	sender text not null,
+	subject text not null,
+	body text not null,
+	foreign key (activity_id, activity_kind) references activity (id, kind)
+);
+
+create function email_about_a_record() returns trigger
+language plpgsql as $$
+declare
+	wanted uuid := case tg_table_name when 'email' then new.activity_id else old.activity_id end;
+begin
+	if exists (select from email where activity_id = wanted)
+		and not exists (select from activity_about where activity_id = wanted) then
+		raise exception 'an email is stored only when it is about a record'
+			using errcode = 'check_violation', constraint = 'email_about_a_record';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, because an email is saved before the rows that say what it is about.
+create constraint trigger email_about_a_record after insert or update of activity_id on email
+	initially deferred for each row execute function email_about_a_record();
+create constraint trigger email_about_a_record after delete or update of activity_id on activity_about
+	initially deferred for each row execute function email_about_a_record();
+
+create table next_step (
+	id uuid primary key default gen_random_uuid(),
+	what text not null,
+	owner_party_id uuid references party,
+	due_on date,
+	done_at timestamptz,
+	deal_id uuid references deal,
+	party_id uuid references party,
+	property_id uuid references property,
+	constraint next_step_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1)
+);
+
 create table document (
 	id uuid primary key default gen_random_uuid(),
 	name text not null,
-	r2_key text not null
+	r2_key text not null,
+	email_activity_id uuid references email
 );
 
 create table offer (
@@ -200,6 +262,25 @@ begin atomic
 			)) order by o.round), '[]')
 			from offer o
 			where o.deal_id = d.id
+		),
+		'activity', (
+			select coalesce(jsonb_agg(to_jsonb(a) || jsonb_build_object('email', (
+				select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
+					select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
+					from document doc
+					where doc.email_activity_id = e.activity_id
+				))
+				from email e
+				where e.activity_id = a.id
+			)) order by a.happened_at, a.id), '[]')
+			from activity_about aa join activity a on a.id = aa.activity_id
+			where aa.deal_id = d.id
+		),
+		'next_steps', (
+			select coalesce(jsonb_agg(to_jsonb(s) - 'deal_id' - 'party_id' - 'property_id'
+				order by s.due_on nulls last, s.id), '[]')
+			from next_step s
+			where s.deal_id = d.id
 		)
 	)
 	from deal d

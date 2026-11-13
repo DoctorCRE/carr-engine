@@ -16,6 +16,9 @@ const MISSING = id(99);
 const LENDERS = [id(6), id(7)];
 const LENDER_DEAL = id(8);
 const BROKERAGES = [id(9), id(10)];
+const EMAIL = id(300);
+const CALL = id(301);
+const NOTE = id(302);
 
 const SEED = `
 insert into role (slug, label) values
@@ -38,6 +41,19 @@ insert into deal_party values ('${DEAL}', '${CLIENT}', 'client'), ('${DEAL}', '$
 insert into deal_phase_change values
 	('${DEAL}', '2026-03-02T15:00:00+00:00', 'negotiation', null),
 	('${DEAL}', '2026-03-20T15:00:00+00:00', 'legal', 'LOI accepted');
+insert into activity (id, kind, happened_at, from_party_id, summary) values
+	('${EMAIL}', 'email', '2026-03-09T14:00:00+00:00', '${AGENT}', null),
+	('${CALL}', 'call', '2026-03-10T16:00:00+00:00', '${CLIENT}', 'Example asks for a shorter term'),
+	('${NOTE}', 'note', '2026-03-11T16:00:00+00:00', null, 'Example prefers mornings');
+insert into email (activity_id, message_id, sender, subject, body) values
+	('${EMAIL}', '<counter-2@example.com>', 'avery@example.com', 'Counter to your LOI', 'Our counter is attached.');
+insert into activity_about (activity_id, deal_id, party_id) values
+	('${EMAIL}', '${DEAL}', null), ('${EMAIL}', null, '${AGENT}'),
+	('${CALL}', '${DEAL}', null), ('${NOTE}', null, '${CLIENT}');
+insert into next_step (id, what, owner_party_id, due_on, done_at, deal_id, party_id) values
+	('${id(400)}', 'Start the lease draft', null, '2026-03-20', null, '${DEAL}', null),
+	('${id(401)}', 'Send the signed LOI', '${CLIENT}', '2026-03-13', '2026-03-13T18:00:00+00:00', '${DEAL}', null),
+	('${id(402)}', 'Ask about a second location', null, null, null, null, '${CLIENT}');
 `;
 const phases = [
 	{
@@ -99,6 +115,8 @@ const rounds = ROUNDS.map(
 				id: id(200 + i),
 				name: `LOI round ${i + 1}.pdf`,
 				r2_key: `example/loi-${i + 1}.pdf`,
+				// The counter arrived as an attachment to the agent's email.
+				email_activity_id: i === 1 ? EMAIL : null,
 			},
 		],
 	}),
@@ -117,7 +135,14 @@ const offer = (
 };
 const NEXT_ROUND = offer(4, 3, AGENT, "listing_agent");
 // Runs the checks commit would run, inside a transaction the test still rolls back.
+// Later statements in the transaction are then checked as they run.
 const CHECK_AT_COMMIT = "set constraints all immediate";
+const newEmail = (activity: string, messageId = `<${activity}@example.com>`) =>
+	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', now());
+	insert into email (activity_id, message_id, sender, subject, body)
+	values ('${activity}', '${messageId}', 'avery@example.com', 'Example', 'Example')`;
+const linkedEmail = (activity: string) =>
+	`${newEmail(activity)}; insert into activity_about (activity_id, property_id) values ('${activity}', '${PROPERTY}'); ${CHECK_AT_COMMIT}`;
 const TERMS = [
 	"rent_per_sf_yr",
 	"nnn_per_sf_yr",
@@ -228,6 +253,59 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			"offer_commencement_date_or_days",
 		],
 	],
+	"an activity is an email, call, meeting or note, and each about link names one record once":
+		[
+			[
+				"insert into activity (kind, happened_at) values ('fax', now())",
+				"activity_kind_check",
+			],
+			[
+				`insert into activity_about (activity_id, deal_id, party_id) values ('${CALL}', '${DEAL}', '${CLIENT}')`,
+				"activity_about_one_record",
+			],
+			[
+				`insert into activity_about (activity_id) values ('${CALL}')`,
+				"activity_about_one_record",
+			],
+			[
+				`insert into activity_about (activity_id, deal_id) values ('${CALL}', '${DEAL}')`,
+				"activity_about_activity_id_deal_id_party_id_property_id_key",
+			],
+		],
+	"an email is stored once, belongs to an email activity, and is about a record":
+		[
+			[newEmail(id(303), "<counter-2@example.com>"), "email_message_id_key"],
+			[
+				`insert into email (activity_id, message_id, sender, subject, body)
+				values ('${CALL}', '<call@example.com>', 'avery@example.com', 'Example', 'Example')`,
+				"email_activity_id_activity_kind_fkey",
+			],
+			[
+				`insert into document (name, r2_key, email_activity_id) values ('Example.pdf', 'example/x.pdf', '${CALL}')`,
+				"document_email_activity_id_fkey",
+			],
+			[`${newEmail(id(303))}; ${CHECK_AT_COMMIT}`, "email_about_a_record"],
+			[
+				`delete from activity_about where activity_id = '${EMAIL}'; ${CHECK_AT_COMMIT}`,
+				"email_about_a_record",
+			],
+			[
+				`${linkedEmail(id(303))}; update activity_about set activity_id = '${CALL}' where activity_id = '${id(303)}'`,
+				"email_about_a_record",
+			],
+			[
+				`insert into activity (id, kind, happened_at) values ('${id(304)}', 'email', now());
+				${linkedEmail(id(303))}; update email set activity_id = '${id(304)}' where activity_id = '${id(303)}'`,
+				"email_about_a_record",
+			],
+		],
+	"a next step is about exactly one record": [
+		[
+			`insert into next_step (what, deal_id, party_id) values ('Example', '${DEAL}', '${CLIENT}')`,
+			"next_step_one_record",
+		],
+		["insert into next_step (what) values ('Example')", "next_step_one_record"],
+	],
 	"a round is never rewritten or removed, and one round per deal is accepted": [
 		[
 			"update offer set rent_per_sf_yr = 30 where round = 1",
@@ -337,7 +415,7 @@ after(async () => {
 	await admin.end();
 });
 
-test("everything about the LOI deal comes back in one read, rounds in order", async () => {
+test("everything about the LOI deal comes back in one read, each list in order", async () => {
 	assert.deepEqual(await readDeal(), {
 		deal: { id: DEAL, name: "Example Dental Springfield Deal" },
 		phases,
@@ -357,6 +435,46 @@ test("everything about the LOI deal comes back in one read, rounds in order", as
 			},
 		],
 		offers: rounds,
+		activity: [
+			{
+				id: EMAIL,
+				kind: "email",
+				happened_at: "2026-03-09T14:00:00+00:00",
+				from_party_id: AGENT,
+				summary: null,
+				email: {
+					message_id: "<counter-2@example.com>",
+					sender: "avery@example.com",
+					subject: "Counter to your LOI",
+					body: "Our counter is attached.",
+					documents: [rounds[1]?.documents[0]],
+				},
+			},
+			{
+				id: CALL,
+				kind: "call",
+				happened_at: "2026-03-10T16:00:00+00:00",
+				from_party_id: CLIENT,
+				summary: "Example asks for a shorter term",
+				email: null,
+			},
+		],
+		next_steps: [
+			{
+				id: id(401),
+				what: "Send the signed LOI",
+				owner_party_id: CLIENT,
+				due_on: "2026-03-13",
+				done_at: "2026-03-13T18:00:00+00:00",
+			},
+			{
+				id: id(400),
+				what: "Start the lease draft",
+				owner_party_id: null,
+				due_on: "2026-03-20",
+				done_at: null,
+			},
+		],
 	});
 });
 
