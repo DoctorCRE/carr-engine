@@ -20,9 +20,15 @@ function bucket() {
 		async put(
 			key: string,
 			_value: Uint8Array,
-			options: { httpMetadata: { contentType: string } },
+			options: {
+				httpMetadata: { contentType: string };
+				onlyIf: { etagDoesNotMatch: string };
+			},
 		) {
+			if (options.onlyIf.etagDoesNotMatch === "*" && stored.has(key))
+				return null;
 			stored.set(key, options.httpMetadata.contentType);
+			return {};
 		},
 	};
 }
@@ -66,20 +72,20 @@ const pagesAt = (count: number) =>
 	Array.from({ length: count }, (_, page) => 100 + page * 9_000);
 
 test("a file's own bytes decide its type, and other files are refused", async () => {
-	const media = bucket();
 	for (const [file, type] of [
 		[jpeg(1080, 1350), "image/jpeg"],
 		[png(1080, 1350), "image/png"],
 		[mp4("isom", 200_000), "video/mp4"],
 		[pdf(pagesAt(8)), "application/pdf"],
 	] as const) {
+		const media = bucket();
 		assert.deepEqual(await storeMedia(media, DOCUMENT, file), {
 			key: DOCUMENT,
 			type,
 		});
 		assert.equal(media.stored.get(DOCUMENT), type);
 	}
-	media.stored.clear();
+	const media = bucket();
 	for (const file of [
 		bytes(1000, "an example caption, not a picture"),
 		bytes(1000, "GIF89a"),
@@ -99,7 +105,7 @@ test("a file outside its type's size limits is refused", async () => {
 		[pdf([100], 100 * MB + 1), "too_large"],
 		[jpeg(1080, 1350, 8 * MB + 1), "too_large"],
 		[mp4("mp42", 300 * MB + 1), "too_large"],
-		[mp4("mp42", 74_999), "too_small"],
+		[mp4("mp42", 76_799), "too_small"],
 	] as const) {
 		assert.deepEqual(await storeMedia(media, DOCUMENT, file), { refused });
 	}
@@ -130,10 +136,19 @@ test("a PDF over 300 pages is refused, wherever its pages sit", async () => {
 	);
 });
 
-test("a stored file is keyed by its document id alone", async () => {
-	await assert.rejects(
-		storeMedia(bucket(), "example-clinic-flyer.jpg", jpeg(10, 10)),
-	);
+test("a stored file is keyed and linked by its document id alone", async () => {
+	const name = "example-clinic-flyer.jpg";
+	await assert.rejects(storeMedia(bucket(), name, jpeg(10, 10)));
+	await assert.rejects(signedMediaUrl(SIGNER, name));
+});
+
+test("a stored file is never replaced", async () => {
+	const media = bucket();
+	assert.ok("key" in (await storeMedia(media, DOCUMENT, jpeg(10, 10))));
+	assert.deepEqual(await storeMedia(media, DOCUMENT, png(10, 10)), {
+		refused: "already_stored",
+	});
+	assert.equal(media.stored.get(DOCUMENT), "image/jpeg");
 });
 
 // An independent check of an AWS version 4 query signature, as R2 makes it.
@@ -189,6 +204,12 @@ test("a signed link verifies for 24 hours and no longer, and only unchanged", as
 	const url = new URL(signed);
 	assert.equal(url.host, `${SIGNER.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`);
 	assert.equal(url.pathname, `/${SIGNER.POST_MEDIA_BUCKET}/${DOCUMENT}`);
+	assert.equal(url.searchParams.get("X-Amz-Algorithm"), "AWS4-HMAC-SHA256");
+	assert.equal(
+		url.searchParams.get("X-Amz-Credential"),
+		`${SIGNER.R2_ACCESS_KEY_ID}/20261113/auto/s3/aws4_request`,
+	);
+	assert.equal(url.searchParams.get("X-Amz-SignedHeaders"), "host");
 	assert.equal(verifies(signed, issued), true);
 	assert.equal(verifies(signed, new Date("2026-11-14T12:00:00Z")), true);
 	assert.equal(verifies(signed, new Date("2026-11-14T12:00:01Z")), false);

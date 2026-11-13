@@ -7,7 +7,8 @@ type Refusal =
 	| "too_small"
 	| "too_large"
 	| "too_many_pixels"
-	| "too_many_pages";
+	| "too_many_pages"
+	| "already_stored";
 type Rule = {
 	is(bytes: Uint8Array): boolean;
 	minBytes?: number;
@@ -103,7 +104,7 @@ const MEDIA: Record<MediaType, Rule> = {
 	"video/mp4": {
 		is: (bytes) =>
 			ascii(bytes, 4, 8) === "ftyp" && MP4_BRANDS.has(ascii(bytes, 8, 12)),
-		minBytes: 75_000,
+		minBytes: 76_800,
 		maxBytes: 300 * MB,
 	},
 	"application/pdf": {
@@ -121,27 +122,39 @@ function refusal(type: MediaType, bytes: Uint8Array): Refusal | undefined {
 	return rule.refuses?.(bytes);
 }
 
+function mediaKey(documentId: string) {
+	if (!UUID.test(documentId)) throw new Error("a media key is a document id");
+	return documentId;
+}
+
 // The file's own bytes decide its type; a name or extension is never trusted.
 export async function storeMedia(
 	bucket: {
 		put(
 			key: string,
 			value: Uint8Array,
-			options: { httpMetadata: { contentType: MediaType } },
-		): Promise<unknown>;
+			options: {
+				httpMetadata: { contentType: MediaType };
+				onlyIf: { etagDoesNotMatch: "*" };
+			},
+		): Promise<object | null>;
 	},
 	documentId: string,
 	bytes: Uint8Array,
 ): Promise<{ key: string; type: MediaType } | { refused: Refusal }> {
-	if (!UUID.test(documentId)) throw new Error("a media key is a document id");
+	const key = mediaKey(documentId);
 	const type = (Object.keys(MEDIA) as MediaType[]).find((candidate) =>
 		MEDIA[candidate].is(bytes),
 	);
 	if (type === undefined) return { refused: "unsupported_file" };
 	const refused = refusal(type, bytes);
 	if (refused) return { refused };
-	await bucket.put(documentId, bytes, { httpMetadata: { contentType: type } });
-	return { key: documentId, type };
+	// R2 answers null when the precondition fails, so a file is never replaced.
+	const stored = await bucket.put(key, bytes, {
+		httpMetadata: { contentType: type },
+		onlyIf: { etagDoesNotMatch: "*" },
+	});
+	return stored === null ? { refused: "already_stored" } : { key, type };
 }
 
 export type MediaSigner = {
@@ -164,7 +177,7 @@ export async function signedMediaUrl(
 		region: "auto",
 	});
 	const url = new URL(
-		`https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.POST_MEDIA_BUCKET}/${key}`,
+		`https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.POST_MEDIA_BUCKET}/${mediaKey(key)}`,
 	);
 	url.searchParams.set("X-Amz-Expires", String(URL_LIFETIME_SECONDS));
 	const signed = await client.sign(url, {
