@@ -1,4 +1,4 @@
-import { isRecord } from "./answers.ts";
+import { isRecord, nextCursor } from "./answers.ts";
 import { type Ask, StopRun } from "./run.ts";
 
 type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
@@ -14,6 +14,8 @@ const FEED_PAGE = 200;
 // A cursor that never advances would otherwise page forever.
 const PAGES = 25;
 const REASONS_PAGES = 100;
+// Only the first pages of a long queue are compared.
+const TODAY_PAGES = 5;
 
 const REFUSALS = new Set([400, 404, 409, 422]);
 
@@ -21,14 +23,16 @@ const REFUSALS = new Set([400, 404, 409, 422]);
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
-// A board for a listed workspace, the invoices and the directory lists have no
-// refusal to compare. Comparing one would match two empty answers, and an
-// empty board or list samples no records.
+// A board for a listed workspace, the invoices, the directory lists, today's
+// reminders and meeting prep have no refusal to compare. Comparing one would
+// match two empty answers, and an empty board or list samples no records.
 const UNREFUSED = new Set<Ask["read"]>([
 	"board",
 	"invoices",
 	"client list",
 	"vendor list",
+	"today's reminders",
+	"meeting prep",
 ]);
 
 function refusal(ask: ToolAsk, body: unknown) {
@@ -92,7 +96,18 @@ const reasonsPage = (before_id?: string) =>
 		before_id === undefined ? { limit: 25 } : { limit: 25, before_id },
 	);
 
-function requestOf(ask: Exclude<ToolAsk, { read: "lead" }>): Request {
+const todayPage = (
+	{ owners }: Extract<Ask, { read: "today's reminders" }>,
+	cursor?: string,
+) =>
+	mirrored("/api/engine/today-triage", "today-triage", {
+		...(owners && { owners }),
+		...(cursor !== undefined && { cursor }),
+	});
+
+function requestOf(
+	ask: Exclude<ToolAsk, { read: "lead" | "today's reminders" }>,
+): Request {
 	switch (ask.read) {
 		case "board":
 			return mirrored("/api/engine/deals", "deal-room-board", {
@@ -145,6 +160,11 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" }>): Request {
 				query: ask.name,
 				limit: 10,
 			});
+		case "meeting prep":
+			return mirrored(
+				"/api/engine/calendar-meeting-prep",
+				"calendar-meeting-prep",
+			);
 	}
 }
 
@@ -164,10 +184,6 @@ const olderStages = (page: unknown) => {
 	const cursor = olderHistory(page, "stage_history");
 	return typeof cursor === "string" ? cursor : undefined;
 };
-const moreReasons = (page: unknown) =>
-	isRecord(page) && typeof page.next_cursor === "string"
-		? page.next_cursor
-		: undefined;
 
 // Each side follows the cursors its own answers hand back.
 async function answerOf(
@@ -210,12 +226,30 @@ async function answerOf(
 			),
 		};
 	}
+	if (ask.read === "today's reminders") {
+		const pages = [await read(todayPage(ask))];
+		let cursor = nextCursor(pages[0]);
+		while (cursor !== undefined && pages.length < TODAY_PAGES) {
+			await beforePage();
+			const page = await read(todayPage(ask, cursor));
+			pages.push(page);
+			cursor = nextCursor(page);
+		}
+		return { pages };
+	}
 	const first = await read(requestOf(ask));
+	// Two unavailable calendars would match while comparing no meetings.
+	if (
+		ask.read === "meeting prep" &&
+		isRecord(first) &&
+		first.state === "unavailable"
+	)
+		throw new Error("meeting prep unavailable");
 	if (ask.read !== "reasons to reach out") return first;
 	return {
 		pages: [
 			first,
-			...(await follow(first, moreReasons, reasonsPage, REASONS_PAGES)),
+			...(await follow(first, nextCursor, reasonsPage, REASONS_PAGES)),
 		],
 	};
 }

@@ -46,6 +46,10 @@ function kindOf(value: unknown) {
 }
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
 	kindOf(value) === "object";
+export const nextCursor = (page: unknown) =>
+	isRecord(page) && typeof page.next_cursor === "string"
+		? page.next_cursor
+		: undefined;
 const byKey = (a: Row, b: Row) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
 function canonical(value: unknown): string {
