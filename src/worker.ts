@@ -12,6 +12,7 @@ import { relationships } from "./relationships/routes.ts";
 import type { WriterEnv } from "./save.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
+import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 
 type WorkerEnv = WriterEnv & {
@@ -40,6 +41,7 @@ app.route("/api/engine", leads);
 app.route("/api/engine", presence);
 app.route("/api/engine", relationships);
 app.route("/api/engine", search);
+app.route("/api/engine", today);
 app.route("/api/engine", vendorMarkets);
 
 export default app;

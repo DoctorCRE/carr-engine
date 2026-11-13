@@ -24,6 +24,7 @@ import { type Reader, readSnapshot } from "./reader.ts";
 import { readNetwork } from "./relationships/network.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
+import { readTodayTriage } from "./today/triage.ts";
 import { readVendorMarkets } from "./vendors/markets.ts";
 import { readVendor, readVendorList } from "./vendors/read.ts";
 
@@ -88,6 +89,7 @@ const readable = [
 	"v_ref_index",
 	"v_requirement_request",
 	"v_subject_timeline",
+	"v_today_triage",
 	"v_vendor_assignment_context",
 	"vendor",
 	"vendor_category",
@@ -233,7 +235,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices and today's meetings and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings and today's reminders and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -463,6 +465,22 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 					recent.catch_up.calendar_history.map((r) => r.key),
 				],
 				[["2026-01-02T03:04:05.678Z"], ["calcap-reader"]],
+			);
+			await withAdmin(
+				(admin) =>
+					admin.query(
+						`insert into critical_date (deal_id, kind, due_on, source, created_by)
+						select $1, 'notice', current_date, 'manual', id from actor where slug = 'reader-agent'`,
+						[seeded.deal],
+					),
+				database,
+			);
+			const reminders = await readSnapshot(login, (db) =>
+				readTodayTriage(db, { owners: "all", limit: 50, after: null }),
+			);
+			assert.deepEqual(
+				reminders.items.map((r) => [r.item_kind, r.subject_name]),
+				[["critical_date", "Example Reader Deal"]],
 			);
 			await withAdmin(
 				(admin) =>
