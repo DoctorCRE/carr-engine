@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agendaFromSnapshot, type Meeting, UNAVAILABLE } from "./agenda.ts";
+import { type Meeting, meetingsFromSnapshot, UNAVAILABLE } from "./meetings.ts";
 
 const NOW = new Date("2026-11-12T15:00:00.000Z");
 const at = (hours: number) =>
@@ -16,25 +16,25 @@ const meeting = (start: number, hours: number, title: string) => ({
 	end: at(start + hours),
 	title,
 });
-const agenda = (stored: unknown) => {
-	const read = agendaFromSnapshot(stored, NOW);
-	assert.ok(read.state !== "unavailable");
+const shown = (stored: unknown) => {
+	const read = meetingsFromSnapshot(stored, NOW);
+	assert.ok(read && read.state !== "unavailable");
 	return read;
 };
 const titles = (items: readonly Meeting[]) => items.map((m) => m.title);
 
-test("a missing or unreadable snapshot is unavailable", () => {
+test("a missing snapshot is null and an unreadable one unavailable", () => {
+	assert.equal(meetingsFromSnapshot(undefined, NOW), null);
 	for (const stored of [
-		undefined,
 		snapshot([], { schema: "carr-calendar-agenda.v2" }),
 		snapshot([], { observed_at: "2026-02-30T00:00:00Z" }),
 		snapshot([], { items: {} }),
 	])
-		assert.deepEqual(agendaFromSnapshot(stored, NOW), UNAVAILABLE);
+		assert.deepEqual(meetingsFromSnapshot(stored, NOW), UNAVAILABLE);
 });
 
-test("the agenda shows the next seven days of meetings in the old keys", () => {
-	const read = agenda(
+test("the next seven days of meetings show in the old keys", () => {
+	const read = shown(
 		snapshot([
 			meeting(-3, 1, "Over"),
 			meeting(24 * 7, 1, "Past the week"),
@@ -77,11 +77,11 @@ test("the agenda shows the next seven days of meetings in the old keys", () => {
 			],
 		}),
 	);
-	assert.equal(agenda(snapshot([])).state, "empty");
+	assert.equal(shown(snapshot([])).state, "empty");
 });
 
 test("meetings sort by start, then title, and overlaps list up to five conflicts", () => {
-	const read = agenda(
+	const read = shown(
 		snapshot([
 			meeting(1, 4, "Long"),
 			...[0, 1, 2, 3, 4, 5].map((n) => meeting(1 + n / 2, 0.5, `Short ${n}`)),
@@ -112,8 +112,8 @@ test("meetings sort by start, then title, and overlaps list up to five conflicts
 	assert.equal(allDay?.schedule_conflict, false);
 });
 
-test("each gap in the snapshot becomes a note and makes the agenda partial", () => {
-	const read = agenda(
+test("each gap in the snapshot becomes a note and makes the answer partial", () => {
+	const read = shown(
 		snapshot(
 			[
 				meeting(1, 1, "Kept"),
@@ -152,7 +152,7 @@ test("each gap in the snapshot becomes a note and makes the agenda partial", () 
 			malformed: 2,
 		},
 	);
-	assert.deepEqual(agenda(snapshot([], { observed_at: at(1) })).notes, [
+	assert.deepEqual(shown(snapshot([], { observed_at: at(1) })).notes, [
 		"This calendar's observation time is in the future. Refresh Outlook before reviewing meetings.",
 	]);
 });
@@ -172,7 +172,7 @@ test("meetings that ended in the last day ask for an outcome review", () => {
 		review("aaaaaaaaaaaaaaaa", -24),
 		review("not-a-key", -2),
 	];
-	const read = agenda(snapshot([], { follow_up_reviews: reviews }));
+	const read = shown(snapshot([], { follow_up_reviews: reviews }));
 	assert.deepEqual(
 		read.follow_up_reviews?.map((r) => r.key),
 		["fedcba9876543210", "0123456789abcdef"],
@@ -181,12 +181,12 @@ test("meetings that ended in the last day ask for an outcome review", () => {
 		"These are scheduled meetings, not confirmed attendance. Confirm each happened before recording an outcome or next step.",
 		"1 stored meeting outcome review could not be shown.",
 	]);
-	const stale = agenda(
+	const stale = shown(
 		snapshot([], {
 			observed_at: at(-19),
 			follow_up_reviews: [review("0123456789abcdef", -20)],
 		}),
 	);
 	assert.deepEqual(stale.follow_up_reviews, []);
-	assert.equal("follow_up_reviews" in agenda(snapshot([])), false);
+	assert.equal("follow_up_reviews" in shown(snapshot([])), false);
 });

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import { activity } from "./activity/routes.ts";
+import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
 import { connection } from "./connection.ts";
 import { deals } from "./deals/routes.ts";
@@ -30,6 +31,7 @@ app.get("/health", (c) =>
 app.use("/api/engine/*", requireSession);
 app.get("/api/engine/whoami", (c) => c.json(c.get("partner")));
 app.route("/api/engine", activity);
+app.route("/api/engine", calendar);
 app.route("/api/engine", directory);
 app.route("/api/engine", connection);
 app.route("/api/engine", deals);
