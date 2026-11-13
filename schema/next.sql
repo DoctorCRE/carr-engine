@@ -3,6 +3,7 @@
 
 create table party (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	kind text not null check (kind in ('person', 'company')),
 	name text not null,
 	unique (id, kind)
@@ -16,12 +17,14 @@ create table role (
 create table party_role (
 	party_id uuid not null references party,
 	role text not null references role,
+	created_at timestamptz not null default now(),
 	primary key (party_id, role)
 );
 
 -- A person's place at a company, dated, so their history survives a move.
 create table party_company (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	person_id uuid not null,
 	person_kind text not null generated always as ('person') stored,
 	company_id uuid not null,
@@ -36,11 +39,13 @@ create table party_company (
 
 create table property (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	address text not null
 );
 
 create table deal (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	name text not null
 );
 
@@ -61,6 +66,7 @@ create table deal_phase_change (
 create table deal_property (
 	deal_id uuid not null references deal,
 	property_id uuid not null references property,
+	created_at timestamptz not null default now(),
 	primary key (deal_id, property_id)
 );
 
@@ -68,6 +74,7 @@ create table deal_party (
 	deal_id uuid not null references deal,
 	party_id uuid not null references party,
 	role text not null references role,
+	created_at timestamptz not null default now(),
 	primary key (deal_id, party_id, role)
 );
 
@@ -85,6 +92,7 @@ create table activity_about (
 	deal_id uuid references deal,
 	party_id uuid references party,
 	property_id uuid references property,
+	created_at timestamptz not null default now(),
 	constraint activity_about_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
 	unique nulls not distinct (activity_id, deal_id, party_id, property_id)
 );
@@ -114,27 +122,14 @@ begin
 end $$;
 
 -- Deferred, because an email is saved before the rows that say what it is about.
-create constraint trigger email_about_a_record after insert or update of activity_id on email
+create constraint trigger email_about_a_record after insert on email
 	initially deferred for each row execute function email_about_a_record();
-create constraint trigger email_about_a_record after delete or update of activity_id on activity_about
+create constraint trigger email_about_a_record after delete on activity_about
 	initially deferred for each row execute function email_about_a_record();
-
-create function email_about_a_record_on_truncate() returns trigger
-language plpgsql as $$
-begin
-	if exists (select from email) then
-		raise exception 'an email is stored only when it is about a record'
-			using errcode = 'check_violation', constraint = 'email_about_a_record';
-	end if;
-	return null;
-end $$;
-
--- Row and constraint triggers do not fire on truncate.
-create trigger email_about_a_record_on_truncate after truncate on activity_about
-	for each statement execute function email_about_a_record_on_truncate();
 
 create table next_step (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	what text not null,
 	-- No owner also covers a partner's own step, until partners become parties.
 	owner_party_id uuid references party,
@@ -148,6 +143,7 @@ create table next_step (
 
 create table document (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	name text not null,
 	r2_key text not null,
 	email_activity_id uuid references email
@@ -185,31 +181,6 @@ create table offer (
 -- An earlier accepted round is superseded before a revived deal accepts a new one.
 create unique index offer_one_accepted_per_deal on offer (deal_id) where status = 'accepted';
 
--- Refuses removing a row or changing it, except in the columns the trigger names.
-create function keeps_history() returns trigger
-language plpgsql as $$
-declare
-	-- tg_argv is null, not empty, when the trigger names no columns.
-	changeable text[] := coalesce(tg_argv, '{}');
-begin
-	if tg_op <> 'UPDATE' or to_jsonb(new) - changeable <> to_jsonb(old) - changeable then
-		raise exception '% is history: never rewritten or removed', tg_table_name
-			using errcode = 'check_violation', constraint = tg_table_name || '_keeps_history';
-	end if;
-	return new;
-end $$;
-
-create trigger offer_keeps_history before update or delete on offer
-	for each row execute function keeps_history('status');
--- Row triggers do not fire on truncate.
-create trigger offer_keeps_history_on_truncate before truncate on offer
-	for each statement execute function keeps_history();
-
-create trigger deal_phase_change_keeps_history before update or delete on deal_phase_change
-	for each row execute function keeps_history();
-create trigger deal_phase_change_keeps_history_on_truncate before truncate on deal_phase_change
-	for each statement execute function keeps_history();
-
 create function offer_status_moves() returns trigger
 language plpgsql as $$
 begin
@@ -245,12 +216,9 @@ create constraint trigger offer_superseded_by_later_acceptance after insert or u
 create table offer_document (
 	offer_id uuid not null references offer,
 	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
 	primary key (offer_id, document_id)
 );
-
--- A truncate cascading from email through document would otherwise reach a round's documents.
-create trigger offer_document_keeps_history_on_truncate before truncate on offer_document
-	for each statement execute function keeps_history();
 
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
@@ -308,6 +276,7 @@ end;
 -- "Account" alone means a national account (docs/glossary.md).
 create table social_account (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
 	owner_party_id uuid not null references party,
 	handle text not null,
@@ -335,6 +304,7 @@ select platform, unnest(metrics) from (values
 
 create table idea (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	angle text not null,
 	hook text not null,
 	pillar text not null
@@ -342,6 +312,7 @@ create table idea (
 
 create table design_template (
 	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
 	name text not null unique
 );
 
@@ -362,12 +333,16 @@ create table post (
 	foreign key (social_account_id, platform) references social_account (id, platform)
 );
 
+create function post_status_final() returns trigger
+language plpgsql as $$
+begin
+	raise exception 'a published or failed post keeps its status'
+		using errcode = 'check_violation', constraint = 'post_status_final';
+end $$;
+
 -- A retry is a new post, so a failure stays on record.
--- No truncate guard: truncating post must cascade to measurement, whose guard refuses it.
-create trigger post_keeps_history before delete on post
-	for each row execute function keeps_history();
 create trigger post_status_final before update of status on post
-	for each row when (old.status <> 'scheduled' and new.status <> old.status) execute function keeps_history();
+	for each row when (old.status <> 'scheduled' and new.status <> old.status) execute function post_status_final();
 
 create table measurement (
 	post_id uuid not null,
@@ -382,11 +357,6 @@ create table measurement (
 	foreign key (post_id, platform) references post (id, platform),
 	foreign key (platform, metric) references platform_metric
 );
-
-create trigger measurement_keeps_history before update or delete on measurement
-	for each row execute function keeps_history();
-create trigger measurement_keeps_history_on_truncate before truncate on measurement
-	for each statement execute function keeps_history();
 
 -- Posts at least 7 days old by as_of, each judged by its latest reading of each metric its platform reports.
 create function posts_at_day_7(as_of timestamptz) returns jsonb
@@ -434,3 +404,32 @@ begin atomic
 		)
 	);
 end;
+
+-- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
+-- It reads and adds everywhere, never empties a table, and changes or removes only what the grants below name.
+-- History (deal_phase_change, offer, offer_document, post, measurement) is never removed.
+do $$ begin
+	create role engine nologin;
+-- Roles belong to the server and outlive a database, so a second load reuses it.
+exception when duplicate_object or unique_violation then null;
+end $$;
+
+do $$ begin
+	execute format('grant usage on schema %1$I to engine;
+		grant select, insert on all tables in schema %1$I to engine', current_schema());
+end $$;
+
+grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
+	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;
+
+-- Ids, links and created_at never change; a different link is a removed row and a new one.
+grant update (label) on table role, phase to engine;
+grant update (name) on party, deal, document, design_template to engine;
+grant update (address) on property to engine;
+grant update (title, started_on, ended_on) on party_company to engine;
+grant update (happened_at, from_party_id, summary) on activity to engine;
+grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
+grant update (status) on offer to engine;
+grant update (handle) on social_account to engine;
+grant update (angle, hook, pillar) on idea to engine;
+grant update (status, platform_post_id, published_at) on post to engine;
