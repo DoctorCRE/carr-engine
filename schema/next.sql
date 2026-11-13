@@ -406,23 +406,34 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads and adds everywhere, never empties a table, and changes or removes only what the grants below name.
+-- It reads everywhere, adds everywhere but platform_metric, never empties a table, and changes or removes only what the grants below name.
 -- History (deal_phase_change, offer, offer_document, post, measurement) is never removed.
 do $$ begin
-	create role engine nologin;
--- Roles belong to the server and outlive a database, so a second load reuses it.
-exception when duplicate_object or unique_violation then null;
+	begin
+		create role engine nologin;
+	-- Roles belong to the server and outlive a database, so a second load reuses it.
+	exception when duplicate_object or unique_violation then null;
+	end;
+	-- A reused role must hold nothing that would reach past the grants below.
+	if exists (select from pg_roles where rolname = 'engine'
+			and (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication))
+		or exists (select from pg_auth_members where member = 'engine'::regrole) then
+		raise exception 'role engine holds rights beyond its grants';
+	end if;
 end $$;
 
 do $$ begin
 	execute format('grant usage on schema %1$I to engine;
 		grant select, insert on all tables in schema %1$I to engine', current_schema());
 end $$;
+-- Which metrics a platform reports is a schema decision: a new one drops older posts from the day-7 comparison.
+revoke insert on platform_metric from engine;
 
 grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
 	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;
 
--- Ids, links and created_at never change; a different link is a removed row and a new one.
+-- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
+-- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, phase to engine;
 grant update (name) on party, deal, document, design_template to engine;
 grant update (address) on property to engine;

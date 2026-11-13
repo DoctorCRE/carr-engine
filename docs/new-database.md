@@ -54,7 +54,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 19. A post is never removed, and a published or failed post keeps its status. A retry is a new post.
 20. A reading is of a metric its post's platform reports, and never negative. A reading that could not be taken has a reason and no value, never a zero.
 21. A reading is stored once and never rewritten or removed.
-22. Each platform's reported metrics come from the known platforms and metrics, each once.
+22. Each platform's reported metrics come from the known platforms and metrics, each once, and only a schema change adds one.
 23. A record or link keeps when it was stored.
 24. The engine empties no table, removes no history, and changes only the columns that may change.
 
@@ -62,7 +62,9 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 ## Who may change what
 
-`schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The role reads and adds rows in every table and empties none. It removes rows only outside history, and changes only these columns:
+`schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
+
+The role reads rows in every table, adds rows in every table except `platform_metric`, and empties none. It removes rows only outside history, and changes only these columns:
 
 - a role's or a phase's label;
 - a party's, deal's, document's or design template's name, and a property's address;
@@ -73,7 +75,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 - a social account's handle, and an idea's angle, hook and pillar;
 - a post's status, platform post id and publish time.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post` and `measurement`. Ids, links and `created_at` never change; a different link is a removed row and a new one. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, and a post's final status.
+History is `deal_phase_change`, `offer`, `offer_document`, `post` and `measurement`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, and a post's final status.
 
 The owner's own login can still change anything. That path is not the engine's concern.
 
@@ -131,7 +133,7 @@ The owner's automation keeps posting as it does today. These tables record what 
 - **`social_account`**: a partner's presence on X, LinkedIn, Facebook or Instagram, by its handle, owned by a party. "Account" alone means a national account (`docs/glossary.md`).
 - **`idea`**: what a post says, as its angle, hook and pillar. One idea can run on several accounts.
 - **`design_template`**: a reusable look that a post's image is made from.
-- **`platform_metric`**: the metrics each platform reports, one row each. LinkedIn and X do not report saves, for example. The rows are a guess, to be confirmed against each platform's API, and a change is a row, not code.
+- **`platform_metric`**: the metrics each platform reports, one row each. LinkedIn and X do not report saves, for example. The rows are a guess, to be confirmed against each platform's API. Only a schema change adds one, because a post with no reading of a new metric drops out of the day-7 comparison.
 - **`post`**: one post on one account, with its idea, its design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
 - **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading of a metric the post's platform does not report is refused. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
 

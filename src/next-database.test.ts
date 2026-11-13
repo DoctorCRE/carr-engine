@@ -256,10 +256,17 @@ const STAMPED = [
 	"design_template",
 ];
 
-const RULES: Record<
-	string,
-	[sql: string, refusal: string | ReturnType<typeof notGranted>][]
-> = {
+// A constraint's name, or the error PostgreSQL raises.
+type Refusal = string | { code?: string; message: string };
+const expected = (refusal: Refusal) =>
+	typeof refusal === "string" ? { constraint: refusal } : refusal;
+
+const SCHEMA = await readFile(
+	new URL("../schema/next.sql", import.meta.url),
+	"utf8",
+);
+
+const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 	"a link to a record that does not exist is refused": [
 		[
 			`insert into deal_party values ('${DEAL}', '${MISSING}', 'client')`,
@@ -466,18 +473,10 @@ const RULES: Record<
 			"social_account_one_per_handle",
 		],
 	],
-	"a platform reports metrics from the known lists, each once": [
+	"only the schema adds a platform's metrics": [
 		[
-			"insert into platform_metric values ('myspace', 'views')",
-			"platform_metric_platform_check",
-		],
-		[
-			"insert into platform_metric values ('x', 'likes')",
-			"platform_metric_metric_check",
-		],
-		[
-			"insert into platform_metric values ('x', 'views')",
-			"platform_metric_pkey",
+			"insert into platform_metric values ('x', 'saves')",
+			notGranted("platform_metric"),
 		],
 	],
 	"a post is scheduled, published or failed, and only a published post has its platform id and time":
@@ -545,6 +544,29 @@ const RULES: Record<
 		notGranted(table),
 	]),
 };
+const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
+const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
+// Rules on paths only the schema's owner can take.
+const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
+	"a platform reports metrics from the known lists, each once": [
+		[
+			"insert into platform_metric values ('myspace', 'views')",
+			"platform_metric_platform_check",
+		],
+		[
+			"insert into platform_metric values ('x', 'likes')",
+			"platform_metric_metric_check",
+		],
+		[
+			"insert into platform_metric values ('x', 'views')",
+			"platform_metric_pkey",
+		],
+	],
+	"loading the schema refuses an engine role with rights beyond its grants": [
+		[`grant pg_write_all_data to engine; ${RELOAD}`, TOO_MUCH],
+		[`alter role engine bypassrls; ${RELOAD}`, TOO_MUCH],
+	],
+};
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
@@ -575,6 +597,22 @@ async function rolledBack(run: () => Promise<unknown>) {
 		await run();
 	} finally {
 		await db.query("rollback");
+	}
+}
+// Each case runs in its own owner's transaction, rolled back.
+async function asOwner(cases: [sql: string, refusal: Refusal][]) {
+	const owner = await connect("none");
+	try {
+		for (const [sql, refusal] of cases) {
+			await owner.query("begin");
+			try {
+				await assert.rejects(owner.query(sql), expected(refusal));
+			} finally {
+				await owner.query("rollback");
+			}
+		}
+	} finally {
+		await owner.end();
 	}
 }
 // When a row was stored is the clock's, so reads are compared without it.
@@ -613,11 +651,7 @@ before(async () => {
 	await admin.connect();
 	await admin.query(`create database "${name}" template template0`);
 	db = await connect("none");
-	const schema = await readFile(
-		new URL("../schema/next.sql", import.meta.url),
-		"utf8",
-	);
-	await db.query(`create schema next; ${schema}`);
+	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(`set role engine; ${SEED} ${MARKETING_SEED}`);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
@@ -712,19 +746,18 @@ test("everything about the LOI deal comes back in one read, each list in order",
 for (const [rule, cases] of Object.entries(RULES))
 	test(rule, async () => {
 		for (const [sql, refusal] of cases)
-			await rolledBack(() =>
-				assert.rejects(
-					db.query(sql),
-					typeof refusal === "string" ? { constraint: refusal } : refusal,
-				),
-			);
+			await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
 	});
 
-test("the engine changes only the columns that may change, removes no history, and empties no table", async () => {
+for (const [rule, cases] of Object.entries(OWNER_RULES))
+	test(rule, () => asOwner(cases));
+
+test("the engine adds, changes and removes only what its grants name, and empties no table", async () => {
 	const { rows } = await db.query(
 		`select c.relname as table,
 			array_agg(a.attname::text order by a.attname)
 				filter (where has_column_privilege(c.oid, a.attnum, 'update')) as changeable,
+			has_table_privilege(c.oid, 'insert') as addable,
 			has_table_privilege(c.oid, 'delete') as removable,
 			has_table_privilege(c.oid, 'truncate') as emptied
 		from pg_class c join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
@@ -736,6 +769,7 @@ test("the engine changes only the columns that may change, removes no history, a
 		rows.map(({ table }) => ({
 			table,
 			changeable: CHANGEABLE[table] ?? null,
+			addable: table !== "platform_metric",
 			removable: REMOVABLE.includes(table),
 			emptied: false,
 		})),
