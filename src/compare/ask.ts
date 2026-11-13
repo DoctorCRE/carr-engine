@@ -1,4 +1,4 @@
-import { isRecord } from "./answers.ts";
+import { isRecord, nextCursor } from "./answers.ts";
 import { type Ask, StopRun } from "./run.ts";
 
 type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
@@ -184,10 +184,6 @@ const olderStages = (page: unknown) => {
 	const cursor = olderHistory(page, "stage_history");
 	return typeof cursor === "string" ? cursor : undefined;
 };
-const nextCursor = (page: unknown) =>
-	isRecord(page) && typeof page.next_cursor === "string"
-		? page.next_cursor
-		: undefined;
 
 // Each side follows the cursors its own answers hand back.
 async function answerOf(

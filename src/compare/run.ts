@@ -1,6 +1,11 @@
 import { WORKSPACES, type Workspace } from "../deals/board.ts";
 import { UUID } from "../uuid.ts";
-import { compareAnswers, isRecord, type ReadShape } from "./answers.ts";
+import {
+	compareAnswers,
+	isRecord,
+	nextCursor,
+	type ReadShape,
+} from "./answers.ts";
 import {
 	boardShape,
 	captureQueueShape,
@@ -149,6 +154,12 @@ function activityName(answer: unknown) {
 	return name && ref && name.length <= NAME_MAX ? name : null;
 }
 
+// A walk cut off at its page limit ends on a page that still points on.
+const cutOff = (answer: unknown) =>
+	isRecord(answer) &&
+	Array.isArray(answer.pages) &&
+	nextCursor(answer.pages.at(-1)) !== undefined;
+
 const FEED_DAYS = 3;
 
 // Built as the app builds its start cursor: a time and the zero ID, base64url without padding.
@@ -260,7 +271,7 @@ export async function compareDeals(
 		const result =
 			comparison.differences.length > 0
 				? "different"
-				: comparison.capAmbiguous.length > 0
+				: comparison.capAmbiguous.length > 0 || cutOff(old)
 					? "at cap"
 					: comparison.tiedRowsReordered.length > 0
 						? "tie order"
