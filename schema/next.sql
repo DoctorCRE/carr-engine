@@ -80,7 +80,6 @@ create table activity (
 	unique (id, kind)
 );
 
--- Each "about" row points at exactly one record through a checked key, never a type word and a bare id.
 create table activity_about (
 	activity_id uuid not null references activity,
 	deal_id uuid references deal,
@@ -94,7 +93,7 @@ create table activity_about (
 create table email (
 	activity_id uuid primary key,
 	activity_kind text not null generated always as ('email') stored,
-	message_id text not null unique,
+	message_id text not null unique check (message_id = btrim(message_id)),
 	sender text not null,
 	subject text not null,
 	body text not null,
@@ -120,9 +119,24 @@ create constraint trigger email_about_a_record after insert or update of activit
 create constraint trigger email_about_a_record after delete or update of activity_id on activity_about
 	initially deferred for each row execute function email_about_a_record();
 
+create function email_about_a_record_on_truncate() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from email) then
+		raise exception 'an email is stored only when it is about a record'
+			using errcode = 'check_violation', constraint = 'email_about_a_record';
+	end if;
+	return null;
+end $$;
+
+-- Row and constraint triggers do not fire on truncate.
+create trigger email_about_a_record_on_truncate after truncate on activity_about
+	for each statement execute function email_about_a_record_on_truncate();
+
 create table next_step (
 	id uuid primary key default gen_random_uuid(),
 	what text not null,
+	-- No owner also covers a partner's own step, until partners become parties.
 	owner_party_id uuid references party,
 	due_on date,
 	done_at timestamptz,
@@ -233,6 +247,10 @@ create table offer_document (
 	document_id uuid not null references document,
 	primary key (offer_id, document_id)
 );
+
+-- A truncate cascading from email through document would otherwise reach a round's documents.
+create trigger offer_document_keeps_history_on_truncate before truncate on offer_document
+	for each statement execute function keeps_history();
 
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable

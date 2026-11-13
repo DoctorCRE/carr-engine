@@ -45,7 +45,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it.
 12. A person-at-company link joins a person to a company, ends no earlier than it starts, and is stored once.
 13. A deal's phase changes are never rewritten or removed, each phase comes from the list, and a move to dead says why.
 14. An activity is an email, a call, a meeting or a note. Each `activity_about` row names exactly one deal, party or property, and is stored once.
-15. An email's mailbox message id is stored once, an email belongs to an email activity, and an attachment names an email. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing or moving its last link.
+15. An email's Message-ID is stored once and never has spaces around it, an email belongs to an email activity, and an attachment names an email. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing, moving or emptying away its last link. Emptying `email` cannot reach a round's documents.
 16. A next step is about exactly one deal, party or property.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
@@ -72,9 +72,10 @@ A round's status records what happened to that round, and the deal's phase recor
 ## Activity, emails and next steps
 
 - **`activity`** records something that happened. **`activity_about`** links it to each deal, person or company, or property it concerns, one row each. One email about a deal, its client and its lender shows on all three timelines.
-- **`email`** holds the mailbox's message id, unique so the same message is never stored twice, plus the sender, the subject and the new text only, with quoted history removed. The date is the activity's time. The agent stores only an email it ties to a record. Mail that matches nothing stays in the mailbox and is not copied, and the database refuses an email that is about no record. The original mailbox stays the full record.
+- **`email`** holds the message's own Message-ID header (Outlook's `internetMessageId`), never an id one mailbox gives it, so mail both partners received is stored once. The id is unique, keeps its case, and is refused with spaces around it. The row also holds the sender, the subject and the new text only, with quoted history removed. The date is the activity's time. The agent stores only an email it ties to a record. Mail that matches nothing stays in the mailbox and is not copied, and the database refuses an email that is about no record. The original mailbox stays the full record.
 - **Attachments** go to R2. Each becomes a `document` that names the email it arrived with.
-- **`next_step`** is about exactly one deal, person or company, or property. Its owner is a party. Partners are not parties yet, so a partner's own step has no owner until they are.
+- **`next_step`** is about exactly one deal, person or company, or property. Its owner is a party.
+- A step with no owner may be a partner's own, because partners become parties only in a later slice.
 
 A row that may point at one of several kinds of record has one checked key per kind and a check that exactly one is set. It never holds a type word and an id the database cannot check (decision 21). Activity and next steps are not history: a note can be corrected, and a step is marked done.
 

@@ -275,6 +275,7 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 	"an email is stored once, belongs to an email activity, and is about a record":
 		[
 			[newEmail(id(303), "<counter-2@example.com>"), "email_message_id_key"],
+			[newEmail(id(303), " <padded@example.com>"), "email_message_id_check"],
 			[
 				`insert into email (activity_id, message_id, sender, subject, body)
 				values ('${CALL}', '<call@example.com>', 'avery@example.com', 'Example', 'Example')`,
@@ -289,6 +290,8 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 				`delete from activity_about where activity_id = '${EMAIL}'; ${CHECK_AT_COMMIT}`,
 				"email_about_a_record",
 			],
+			["truncate activity_about", "email_about_a_record"],
+			["truncate email cascade", "offer_document_keeps_history"],
 			[
 				`${linkedEmail(id(303))}; update activity_about set activity_id = '${CALL}' where activity_id = '${id(303)}'`,
 				"email_about_a_record",
