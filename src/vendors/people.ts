@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { type RawBuilder, sql } from "kysely";
 
 const filled = (field: string) =>
@@ -49,18 +48,3 @@ export const people = sql<
 	join party c on c.id = (listed ->> 'id')::uuid and btrim(c.name) <> ''
 	${latestAddress(sql.ref("c.id"))}
 	where a.id = v.id)`;
-
-const byJsonbKey = ([a]: [string, unknown], [b]: [string, unknown]) =>
-	Buffer.byteLength(a) - Buffer.byteLength(b) ||
-	Buffer.compare(Buffer.from(a), Buffer.from(b));
-
-// The order jsonb keeps an object's keys in: shortest first, then by bytes.
-export function inJsonbOrder<T>(value: T): T {
-	if (Array.isArray(value)) return value.map(inJsonbOrder) as T;
-	if (value === null || typeof value !== "object") return value;
-	return Object.fromEntries(
-		Object.entries(value)
-			.sort(byJsonbKey)
-			.map(([key, nested]) => [key, inJsonbOrder(nested)]),
-	) as T;
-}

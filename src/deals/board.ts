@@ -1,7 +1,7 @@
 import { type Kysely, sql } from "kysely";
 import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../database.d.ts";
-import { asText } from "../reader.ts";
+import { asText, inJsonbOrder } from "../reader.ts";
 import {
 	clientPortalUrlOf,
 	nextStepRequired,
@@ -49,8 +49,10 @@ export async function readBoard(
 		deals: deals.map((deal) => ({
 			...deal,
 			phase_started_on: phaseStartedOn(deal.phase_started_on),
-			field_base: Object.fromEntries(
-				deal.field_base.map(({ field, ...base }) => [field, base]),
+			field_base: inJsonbOrder(
+				Object.fromEntries(
+					deal.field_base.map(({ field, ...base }) => [field, base]),
+				),
 			),
 			short_name: shortName(deal),
 		})),
@@ -94,11 +96,13 @@ const openDeals = (db: Kysely<DB>, { workspace, account }: Scope) =>
 					.orderBy("i.created_order")
 					.orderBy("i.id"),
 			).as("items"),
+			// The old actions were jsonb, so the columns follow its key order.
 			jsonArrayFrom(
 				q
 					.selectFrom("v_deal_room_action as n")
-					.select(["n.id", "n.item_id", "n.owner", "n.description"])
+					.select(["n.id", "n.owner"])
 					.select((s) => asText(s.ref("n.due_on")).as("due_on"))
+					.select(["n.item_id", "n.description"])
 					.whereRef("n.deal_id", "=", "b.id")
 					.where("n.status", "=", "open")
 					.where("n.item_title", "is", null)

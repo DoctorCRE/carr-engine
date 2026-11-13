@@ -6,6 +6,10 @@ import { withRollback } from "../test-rollback.ts";
 import { SOURCES } from "./checklist.ts";
 import { readDealDetail } from "./detail.ts";
 
+// The old detail's keys, around the deal row each read spreads in.
+const keysAround = (row: string) =>
+	`schema_version checklist lease deal_id ${row} short_name thread thread_truncated critical_dates next_actions item_schema_version items activities activities_truncated email_threads participants premises negotiation_rounds documents events events_truncated`;
+
 async function seed(tx: Transaction<DB>, deal: { invoiced_on?: string } = {}) {
 	const actor = await tx
 		.insertInto("actor")
@@ -253,25 +257,47 @@ test("an open deal reads with text dates, decimal strings and capped history", a
 			})),
 		);
 		assert.deepEqual(detail.phase_started_on, { "detail-open": "2030-01-01" });
-		assert.deepEqual(detail.phase_change, {
+		const phaseChange = {
+			phase: "detail-open",
+			reason: "phase changed",
 			deal_id: deal,
 			event_id: phaseEvent.id,
-			prior_phase: "detail-intake",
-			phase: "detail-open",
 			automatic: false,
-			reason: "phase changed",
-			evidence_date: "2030-01-02T03:04:05.678+00:00",
+			prior_phase: "detail-intake",
 			recorded_at: "2030-01-02T03:04:06+00:00",
-		});
-		assert.deepEqual(
-			detail.vendors.map((v) => [v.role, v.company, v.contact]),
-			[
-				[
-					"title",
-					{ id: company.id, name: "Example Title Co" },
-					{ id: contact.id, name: "Example Closer", email: null, phone: null },
-				],
-			],
+			evidence_date: "2030-01-02T03:04:05.678+00:00",
+		};
+		assert.equal(
+			JSON.stringify(detail.phase_change),
+			JSON.stringify(phaseChange),
+		);
+		const [vendor] = detail.vendors;
+		assert.equal(detail.vendors.length, 1);
+		assert.match(
+			String(vendor?.updated_at),
+			/^\d{4}-\d\d-\d\dT[\d:.]+\+00:00$/,
+		);
+		assert.equal(
+			JSON.stringify(vendor),
+			JSON.stringify({
+				note: null,
+				role: "title",
+				company: { id: company.id, name: "Example Title Co" },
+				contact: {
+					id: contact.id,
+					name: "Example Closer",
+					email: null,
+					phone: null,
+				},
+				party_id: contact.id,
+				updated_at: vendor?.updated_at,
+			}),
+		);
+		assert.equal(
+			Object.keys(detail).join(" "),
+			keysAround(
+				"id name phase owner type city segment attention vendors next_date next_step next_step_required client_id client_ref client_name account_client_id account_client_ref account_name account_owner market_agent last_touch last_review_at workspace_kind operating_state parking_reason parking_note invoiced_on closed_on lane outcome client_portal_url phase_change phase_started_on parked_at parked_by salesforce_id base_version client_status client_version prospect_engagement_status",
+			),
 		);
 		assert.deepEqual(detail.lease, null);
 	});
@@ -653,6 +679,12 @@ test("an invoiced deal reads through the archived shape", async () => {
 		assert.equal("next_step" in detail, false);
 		assert.equal("phase_change" in detail, false);
 		assert.deepEqual(detail.vendors, []);
+		assert.equal(
+			Object.keys(detail).join(" "),
+			keysAround(
+				"id name phase owner type vendors client_ref client_name client_id account_client_id workspace_kind closed_on invoiced_on outcome lane client_portal_url phase_started_on salesforce_id base_version client_status client_version prospect_engagement_status",
+			),
+		);
 	});
 });
 

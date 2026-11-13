@@ -14,8 +14,8 @@ import {
 	viewerIdOf,
 } from "../clients/read.ts";
 import type { DB } from "../database.d.ts";
-import { asText } from "../reader.ts";
-import { inJsonbOrder, people } from "./people.ts";
+import { asText, inJsonbOrder } from "../reader.ts";
+import { people } from "./people.ts";
 import { rateTrackRecord, trackRecordFacts } from "./track-record.ts";
 
 export const VENDOR_SORTS = [...SORTS, "territory"] as const;
