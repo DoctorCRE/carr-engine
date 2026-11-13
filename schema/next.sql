@@ -279,7 +279,7 @@ create table social_account (
 	created_at timestamptz not null default now(),
 	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
 	owner_party_id uuid not null references party,
-	handle text not null,
+	handle text not null check (handle ~ '\S'),
 	unique (id, platform)
 );
 
@@ -291,11 +291,13 @@ create table platform_metric (
 	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
 	metric text not null
 		check (metric in ('views', 'reactions', 'comments', 'shares', 'saves', 'clicks', 'follows')),
+	-- Day 7 asks this metric only of posts published since, so adding one keeps older posts compared.
+	reported_since timestamptz not null default now(),
 	primary key (platform, metric)
 );
 
 insert into platform_metric
-select platform, unnest(metrics) from (values
+select platform, unnest(metrics), '-infinity' from (values
 	('x', array['views', 'reactions', 'comments', 'shares', 'clicks', 'follows']),
 	('linkedin', array['views', 'reactions', 'comments', 'shares', 'clicks', 'follows']),
 	('facebook', array['views', 'reactions', 'comments', 'shares', 'clicks']),
@@ -333,32 +335,45 @@ create table post (
 	foreign key (social_account_id, platform) references social_account (id, platform)
 );
 
-create function post_status_final() returns trigger
+create function post_final() returns trigger
 language plpgsql as $$
 begin
-	raise exception 'a published or failed post keeps its status'
-		using errcode = 'check_violation', constraint = 'post_status_final';
+	raise exception 'a published or failed post never changes'
+		using errcode = 'check_violation', constraint = 'post_final';
 end $$;
 
--- A retry is a new post, so a failure stays on record.
-create trigger post_status_final before update of status on post
-	for each row when (old.status <> 'scheduled' and new.status <> old.status) execute function post_status_final();
+-- A retry is a new post, so a failure stays on record, and a published post keeps the time its readings count from.
+create trigger post_final before update on post
+	for each row when (old.status <> 'scheduled' and old.* is distinct from new.*) execute function post_final();
 
 create table measurement (
 	post_id uuid not null,
 	platform text not null,
 	metric text not null,
 	taken_at timestamptz not null,
-	source text not null,
+	source text not null check (source ~ '\S'),
 	value bigint check (value >= 0),
-	not_measured_reason text,
+	not_measured_reason text check (not_measured_reason ~ '\S'),
 	constraint measurement_value_or_reason check (num_nonnulls(value, not_measured_reason) = 1),
 	primary key (post_id, metric, taken_at, source),
 	foreign key (post_id, platform) references post (id, platform),
 	foreign key (platform, metric) references platform_metric
 );
 
--- Posts at least 7 days old by as_of, each judged by its latest reading of each metric its platform reports.
+-- Checked on insert only: a reading is never rewritten, and a published post never changes.
+create function measurement_after_publishing() returns trigger
+language plpgsql as $$
+begin
+	if not exists (select from post where id = new.post_id and published_at <= new.taken_at) then
+		raise exception 'a reading is of a published post, taken no earlier than it was published'
+			using errcode = 'check_violation', constraint = 'measurement_after_publishing';
+	end if;
+	return new;
+end $$;
+
+create trigger measurement_after_publishing before insert on measurement
+	for each row execute function measurement_after_publishing();
+
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable
 begin atomic
@@ -367,11 +382,12 @@ begin atomic
 		from post p
 		join platform_metric r on r.platform = p.platform
 			and r.metric in ('views', 'reactions', 'comments', 'shares', 'saves')
+			and r.reported_since <= p.published_at
 		-- Hours, not days, so the session's time zone cannot move day 7 across a clock change.
 		left join measurement m on m.post_id = p.id and m.metric = r.metric
 			and m.taken_at <= p.published_at + interval '168 hours'
 		where p.published_at + interval '168 hours' <= as_of
-		order by p.id, r.metric, m.taken_at desc, m.source
+		order by p.id, r.metric, m.taken_at desc, m.value is null, m.source
 	),
 	compared as (
 		select id, social_account_id, idea_id, design_template_id, published_at,
@@ -426,7 +442,7 @@ do $$ begin
 	execute format('grant usage on schema %1$I to engine;
 		grant select, insert on all tables in schema %1$I to engine', current_schema());
 end $$;
--- Which metrics a platform reports is a schema decision: a new one drops older posts from the day-7 comparison.
+-- Which metrics a platform reports, and since when, is a schema decision.
 revoke insert on platform_metric from engine;
 
 grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
