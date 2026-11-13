@@ -5,7 +5,7 @@ import { type Insertable, type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
 import { withRollback } from "../test-rollback.ts";
 import { readBoard } from "./board.ts";
-import { shortName } from "./shared.ts";
+import { phaseStartedOn, shortName } from "./shared.ts";
 
 const withRows = (
 	run: (rows: Awaited<ReturnType<typeof seed>>) => Promise<void>,
@@ -204,7 +204,7 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 				subject_id: id,
 				cause: "human_stated",
 			};
-			const [phaseEvent] = await tx
+			const [phaseEvent, attentionEvent] = await tx
 				.insertInto("event")
 				.values([
 					{
@@ -215,6 +215,15 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 						new_value: JSON.stringify({ phase }),
 						occurred_at: "2026-02-01T03:00:00Z",
 						recorded_at: "2026-02-01T03:00:00.5Z",
+					},
+					{
+						...event,
+						verb: "patch-deal-field",
+						field: "attention",
+						old_value: JSON.stringify({ attention: false }),
+						new_value: JSON.stringify({ attention: true }),
+						occurred_at: "2026-01-25T12:00:00Z",
+						recorded_at: "2026-01-25T12:00:00Z",
 					},
 					{
 						...event,
@@ -252,8 +261,9 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 			assert.equal(board.schema_version, "local-deals-board.v2");
 			assert.equal(board.actor, partner.slug);
 			const row = board.deals.find((d) => d.id === id);
-			assert.ok(row && item && phaseEvent);
-			assert.deepEqual(row, {
+			assert.ok(row && item && phaseEvent && attentionEvent);
+			// In the old order: nested objects in jsonb's, shortest key first.
+			const expected = {
 				id,
 				name: "Example Deal",
 				type: `lease-${tag}`,
@@ -263,7 +273,7 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 				base_version: 1,
 				vendors: [
 					{
-						party_id: company.id,
+						note: null,
 						role: "lender",
 						company: { id: company.id, name: "Example Lender" },
 						contact: {
@@ -272,7 +282,7 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 							email: "pat@example.com",
 							phone: "555-0100",
 						},
-						note: null,
+						party_id: company.id,
 						updated_at: "2026-01-02T03:04:05+00:00",
 					},
 				],
@@ -292,10 +302,10 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 				open_actions: ["2026-04-01", "2026-04-02", "2026-04-03"].map(
 					(due_on, i) => ({
 						id: open[i === 0 ? 0 : i + 1]?.id,
-						item_id: `next_action:${open[i === 0 ? 0 : i + 1]?.id}`,
 						owner: i === 0 ? partner.slug : helpers[i - 1]?.slug,
-						description: "Call the example lender",
 						due_on,
+						item_id: `next_action:${open[i === 0 ? 0 : i + 1]?.id}`,
+						description: "Call the example lender",
 					}),
 				),
 				last_step: {
@@ -329,14 +339,14 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 				outcome: null,
 				client_portal_url: "https://share.example.com/example-board",
 				phase_change: {
+					phase,
+					reason: "phase changed",
 					deal_id: id,
 					event_id: phaseEvent.id,
-					prior_phase: "intro",
-					phase,
 					automatic: false,
-					reason: "phase changed",
-					evidence_date: "2026-02-01T03:00:00+00:00",
+					prior_phase: "intro",
 					recorded_at: "2026-02-01T03:00:00.5+00:00",
+					evidence_date: "2026-02-01T03:00:00+00:00",
 				},
 				phase_started_on: { intro: "2026-01-20", [phase]: "2026-01-31" },
 				parked_at: null,
@@ -346,9 +356,15 @@ test("an open deal carries its cards, steps and field bases in wire formats", ()
 						id: phaseEvent.id,
 						recorded_at: "2026-02-01T03:00:00.5+00:00",
 					},
+					attention: {
+						id: attentionEvent.id,
+						recorded_at: "2026-01-25T12:00:00+00:00",
+					},
 				},
 				short_name: "Dr. Example's Example City Deal",
-			});
+			};
+			assert.deepEqual(row, expected);
+			assert.equal(JSON.stringify(row), JSON.stringify(expected));
 		},
 	));
 
@@ -836,3 +852,15 @@ test("short_name uses the doctor's last name and market, else the deal name", ()
 		"Example Deal",
 	);
 });
+
+test("phase start dates list their phases in the old jsonb order", () =>
+	assert.equal(
+		JSON.stringify(
+			phaseStartedOn([
+				{ phase: "negotiation", started_on: "2026-01-03" },
+				{ phase: "tour", started_on: "2026-01-02" },
+				{ phase: "intro", started_on: "2026-01-01" },
+			]),
+		),
+		'{"tour":"2026-01-02","intro":"2026-01-01","negotiation":"2026-01-03"}',
+	));
