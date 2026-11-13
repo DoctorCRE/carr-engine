@@ -225,14 +225,38 @@ const newPost = (row: Record<string, string>) => {
 	};
 	return `insert into post (${Object.keys(post)}) values (${Object.values(post).map((value) => `'${value}'`)})`;
 };
-const newReading = (
-	value: string,
-	reason = "null",
-	metric = "views",
-	platform = "linkedin",
-) =>
-	`insert into measurement (post_id, platform, metric, taken_at, source, value, not_measured_reason)
-	values ('${post(1)}', '${platform}', '${metric}', now(), 'example_source', ${value}, ${reason})`;
+const newReading = (row: Record<string, string | number | null>) => {
+	const reading = {
+		post_id: post(1),
+		platform: "linkedin",
+		metric: "views",
+		taken_at: "2026-06-20T15:00:00+00:00",
+		source: "example_source",
+		value: 1,
+		not_measured_reason: null,
+		...row,
+	};
+	return `insert into measurement (${Object.keys(reading)}) values (${Object.values(
+		reading,
+	).map((value) => (value === null ? "null" : `'${value}'`))})`;
+};
+const NOT_MEASURED = {
+	value: null,
+	not_measured_reason: "Example: no number came back",
+};
+const DAY_7 = "2026-06-25T00:00:00+00:00";
+// Per account: how many posts compared, then the best and the worst.
+const compared = async (client = db) =>
+	(
+		await client.query("select posts_at_day_7($1) as read", [DAY_7])
+	).rows[0].read.accounts.map(
+		(account: {
+			platform: string;
+			posts: number;
+			best: { id: string };
+			worst: { id: string };
+		}) => [account.platform, account.posts, account.best.id, account.worst.id],
+	);
 
 // The engine's role lacks the privilege, so PostgreSQL refuses before any row is touched.
 const notGranted = (table: string) => ({
@@ -472,6 +496,10 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			`insert into social_account (platform, owner_party_id, handle) values ('x', '${PARTNER}', 'JordanExample')`,
 			"social_account_one_per_handle",
 		],
+		[
+			`insert into social_account (platform, owner_party_id, handle) values ('x', '${PARTNER}', ' ')`,
+			"social_account_handle_check",
+		],
 	],
 	"only the schema adds a platform's metrics": [
 		[
@@ -507,29 +535,50 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 				"post_social_account_id_platform_post_id_key",
 			],
 		],
-	"a post is never removed, and a published or failed post keeps its status": [
+	"a post is never removed, and a published or failed post never changes": [
 		["delete from post where status = 'failed'", notGranted("post")],
 		["truncate post cascade", notGranted("post")],
 		[
 			"update post set status = 'scheduled' where status = 'failed'",
-			"post_status_final",
+			"post_final",
+		],
+		[`update post set status = 'failed' where id = '${post(1)}'`, "post_final"],
+		[
+			`update post set published_at = published_at - interval '1 day' where id = '${post(1)}'`,
+			"post_final",
 		],
 		[
-			`update post set status = 'failed' where id = '${post(1)}'`,
-			"post_status_final",
+			`update post set platform_post_id = 'example-99' where id = '${post(1)}'`,
+			"post_final",
 		],
 	],
-	"a reading is a metric its post's platform reports, never negative, and not measured is a reason, never a zero":
+	"a reading is a metric its post's platform reports, names its source, is never negative, and not measured is a reason, never a zero":
 		[
-			[newReading("1", "null", "saves"), "measurement_platform_metric_fkey"],
+			[newReading({ metric: "saves" }), "measurement_platform_metric_fkey"],
+			[newReading({ platform: "x" }), "measurement_post_id_platform_fkey"],
+			[newReading({ value: -1 }), "measurement_value_check"],
+			[newReading({ value: null }), "measurement_value_or_reason"],
 			[
-				newReading("1", "null", "views", "x"),
-				"measurement_post_id_platform_fkey",
+				newReading({ value: 0, not_measured_reason: "Example" }),
+				"measurement_value_or_reason",
 			],
-			[newReading("-1"), "measurement_value_check"],
-			[newReading("null"), "measurement_value_or_reason"],
-			[newReading("0", "'Example'"), "measurement_value_or_reason"],
+			[newReading({ source: "" }), "measurement_source_check"],
+			[
+				newReading({ ...NOT_MEASURED, not_measured_reason: " " }),
+				"measurement_not_measured_reason_check",
+			],
 		],
+	"a reading is of a published post, taken no earlier than it was published": [
+		[newReading({ post_id: post(8) }), "measurement_after_publishing"],
+		[
+			newReading({ post_id: post(7), platform: "x" }),
+			"measurement_after_publishing",
+		],
+		[
+			newReading({ taken_at: "2026-06-01T14:59:59+00:00" }),
+			"measurement_after_publishing",
+		],
+	],
 	"a reading is stored once and never rewritten or removed": [
 		[
 			`insert into measurement select * from measurement limit 1`,
@@ -813,9 +862,7 @@ test("posts compare at day 7, best and worst per account", async () => {
 		best: posts[0],
 		worst: posts.at(-1),
 	});
-	const { rows } = await db.query("select posts_at_day_7($1) as read", [
-		"2026-06-25T00:00:00+00:00",
-	]);
+	const { rows } = await db.query("select posts_at_day_7($1) as read", [DAY_7]);
 	const checklistOnStatCard = ranked(4, CHECKLIST_IDEA, STAT_CARD, 0.04, 160);
 	assert.deepEqual(unstamped(rows[0].read), {
 		accounts: [
@@ -835,6 +882,36 @@ test("posts compare at day 7, best and worst per account", async () => {
 			account(X, "x", "jordanexample", checklistOnStatCard),
 		],
 	});
+});
+
+test("at one instant, a measured reading wins over one that was not measured", () =>
+	rolledBack(async () => {
+		await db.query(
+			newReading({
+				...NOT_MEASURED,
+				post_id: post(2),
+				taken_at: "2026-06-10T15:00:00+00:00",
+				source: "another_source",
+			}),
+		);
+		assert.deepEqual((await compared())[1], ["linkedin", 2, post(2), post(1)]);
+	}));
+
+test("a metric added later is asked only of posts published since", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query("begin");
+		await owner.query(`insert into platform_metric (platform, metric) values ('x', 'saves');
+			insert into platform_metric values ('linkedin', 'saves', '2026-06-02T00:00:00+00:00')`);
+		assert.deepEqual(await compared(owner), [
+			["instagram", 1, post(9), post(9)],
+			["linkedin", 1, post(1), post(1)],
+			["x", 1, post(4), post(4)],
+		]);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
 });
 
 test("day 7 is 168 hours after publishing, even across a clock change", () =>

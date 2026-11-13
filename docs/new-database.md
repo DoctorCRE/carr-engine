@@ -49,12 +49,12 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 14. An activity is an email, a call, a meeting or a note. Each `activity_about` row names exactly one deal, party or property, and is stored once.
 15. An email's Message-ID is stored once and never has spaces around it, an email belongs to an email activity, and an attachment names an email. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing, moving or emptying away its last link.
 16. A next step is about exactly one deal, party or property.
-17. A social account is on a known platform, and a handle is used once per platform, in any case.
+17. A social account is on a known platform, its handle is not blank, and a handle is used once per platform, in any case.
 18. A post is on its account's platform and is scheduled, published or failed. Only a published post has the platform's post id and its publish time, and that id is stored once per account.
-19. A post is never removed, and a published or failed post keeps its status. A retry is a new post.
-20. A reading is of a metric its post's platform reports, and never negative. A reading that could not be taken has a reason and no value, never a zero.
+19. A post is never removed, and a published or failed post never changes. A retry is a new post.
+20. A reading is of a published post, taken no earlier than it was published, of a metric its platform reports, and never negative. It names its source. A reading that could not be taken has a reason and no value, never a zero. A source or reason is never blank.
 21. A reading is stored once and never rewritten or removed.
-22. Each platform's reported metrics come from the known platforms and metrics, each once, and only a schema change adds one.
+22. Each platform's reported metrics come from the known platforms and metrics, each once, with the time from which posts must have it, and only a schema change adds one.
 23. A record or link keeps when it was stored.
 24. The engine empties no table, removes no history, and changes only the columns that may change.
 
@@ -73,9 +73,9 @@ The role reads rows in every table, adds rows in every table except `platform_me
 - a next step's text, owner, due date and done time;
 - a round's status;
 - a social account's handle, and an idea's angle, hook and pillar;
-- a post's status, platform post id and publish time.
+- a scheduled post's status, platform post id and publish time.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post` and `measurement`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, and a post's final status.
+History is `deal_phase_change`, `offer`, `offer_document`, `post` and `measurement`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post that is no longer scheduled, and a reading of a published post.
 
 The owner's own login can still change anything. That path is not the engine's concern.
 
@@ -133,15 +133,15 @@ The owner's automation keeps posting as it does today. These tables record what 
 - **`social_account`**: a partner's presence on X, LinkedIn, Facebook or Instagram, by its handle, owned by a party. "Account" alone means a national account (`docs/glossary.md`).
 - **`idea`**: what a post says, as its angle, hook and pillar. One idea can run on several accounts.
 - **`design_template`**: a reusable look that a post's image is made from.
-- **`platform_metric`**: the metrics each platform reports, one row each. LinkedIn and X do not report saves, for example. The rows are a guess, to be confirmed against each platform's API. Only a schema change adds one, because a post with no reading of a new metric drops out of the day-7 comparison.
+- **`platform_metric`**: the metrics each platform reports, one row each. LinkedIn and X do not report saves, for example. The rows are a guess, to be confirmed against each platform's API. Each row says from when posts must have the metric. The first rows hold from the start, and a row added later holds from when it is added, so older posts, which have no reading of it, stay in the day-7 comparison. Only a schema change adds one.
 - **`post`**: one post on one account, with its idea, its design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
-- **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading of a metric the post's platform does not report is refused. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
+- **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading of a metric the post's platform does not report is refused, and so is a reading before the post is published. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
 
-Ratios are calculated when read, never stored. Engagement is the sum of the reactions, comments, shares and saves that the post's platform reports, and engagement per view divides it by views.
+Ratios are calculated when read, never stored. Engagement is the sum of the reactions, comments, shares and saves that the post's platform reported when it was published, and engagement per view divides it by views.
 
 `posts_at_day_7(as_of)` compares posts at the same age, because a post's numbers keep growing for days. Each post is judged by its latest reading of each metric at or before 168 hours after it was published. It returns, per account, how many posts it compared and the best and worst by engagement per view.
 
-A post is left out while it is younger than 7 days, when its platform reports views or an engagement metric that has no measured reading by day 7, or when it had no views.
+A post is left out while it is younger than 7 days, when it has no reading by day 7 of views or of an engagement metric its platform reports, or one whose latest reading by day 7 was not measured, or when it had no views.
 
 Best and worst stay within one account, so they compare like with like. Averages per idea and design template come next (#206). They can mix platforms that count engagement differently, so each will show how many of its posts are on each platform.
 
