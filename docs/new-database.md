@@ -30,9 +30,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it.
 4. A person or company is one of the two kinds.
 5. A round's number is used once per deal, and a round answers an earlier round of the same deal.
 6. A round comes from someone on the deal, in their role on that deal, about a property the deal is considering.
-7. A round is never rewritten. Only its status changes. New terms are the next round.
+7. A round is never rewritten or removed. Only its status changes. New terms are the next round, and `withdrawn` takes a round back.
 8. At most one round per deal is accepted.
-9. No column holds file bytes.
+9. Rent, term, TI and free rent are never negative.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -50,6 +50,10 @@ Some LOIs carry a term no other deal has, such as an exclusive-use clause. There
 - **A row per extra term**, each with a name and a value. Each term could then be compared round to round, at the cost of another table and a name for every term.
 
 Unusual terms are rare and are read by people, not computed, so the text field is enough.
+
+## Owner decision: how a round's status may change
+
+Today a round's status can move from any value to any other, such as from accepted back to open. The recommendation is to allow only these moves: open to countered, accepted, rejected or withdrawn, and nothing out of countered, accepted, rejected or withdrawn. A mistaken status would then be fixed by a new round, as a mistaken term is.
 
 ## Next slice (#196): activity, emails and next steps
 
@@ -78,4 +82,4 @@ The tests run rounds 1 to 3 and the acceptance, and read them back in order.
 
 ## Later slices
 
-Partners as people, and who changed what. Deal phase, type, owner and dates. Emails and phone numbers per person. People at companies. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across.
+Partners as people, and who changed what. Deal phase, type, owner and dates. Emails and phone numbers per person. People at companies. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`.

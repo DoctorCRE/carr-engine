@@ -58,14 +58,14 @@ create table offer (
 	offered_at timestamptz not null,
 	status text not null default 'open'
 		check (status in ('open', 'countered', 'accepted', 'rejected', 'withdrawn')),
-	rent_per_sf_yr numeric(10, 2),
-	term_months integer,
-	ti_per_sf numeric(10, 2),
-	free_rent_months numeric(4, 1),
+	rent_per_sf_yr numeric(10, 2) check (rent_per_sf_yr >= 0),
+	term_months integer check (term_months >= 0),
+	ti_per_sf numeric(10, 2) check (ti_per_sf >= 0),
+	free_rent_months numeric(4, 1) check (free_rent_months >= 0),
 	escalation_pct numeric(5, 2),
 	commencement_on date,
 	other_terms text,
-	check (answers_round < round),
+	constraint offer_answers_earlier_round check (answers_round < round),
 	unique (deal_id, round),
 	foreign key (deal_id, property_id) references deal_property,
 	foreign key (deal_id, from_party_id, from_role) references deal_party,
@@ -77,13 +77,14 @@ create unique index offer_one_accepted_per_deal on offer (deal_id) where status 
 create function offer_keeps_its_terms() returns trigger
 language plpgsql as $$
 begin
-	if to_jsonb(new) - 'status' <> to_jsonb(old) - 'status' then
-		raise exception 'a round is never rewritten; add the next round' using errcode = 'check_violation', constraint = 'offer_keeps_its_terms';
+	if tg_op = 'DELETE' or to_jsonb(new) - 'status' <> to_jsonb(old) - 'status' then
+		raise exception 'a round is never rewritten or removed; add the next round or withdraw it'
+			using errcode = 'check_violation', constraint = 'offer_keeps_its_terms';
 	end if;
 	return new;
 end $$;
 
-create trigger offer_keeps_its_terms before update on offer
+create trigger offer_keeps_its_terms before update or delete on offer
 	for each row execute function offer_keeps_its_terms();
 
 create table offer_document (

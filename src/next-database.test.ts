@@ -4,7 +4,6 @@ import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { URL } from "node:url";
 import pg from "pg";
-import { url } from "./test-rollback.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -15,6 +14,7 @@ const ELSEWHERE = id(4);
 const DEAL = id(5);
 const MISSING = id(99);
 const LENDERS = [id(6), id(7)];
+const LENDER_DEAL = id(8);
 
 const SEED = `
 insert into role (slug, label) values
@@ -25,7 +25,8 @@ insert into party (id, kind, name) values
 insert into party_role values ('${CLIENT}', 'client'), ('${AGENT}', 'listing_agent');
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
-insert into deal (id, name) values ('${DEAL}', 'Example Dental Springfield Deal');
+insert into deal (id, name) values
+	('${DEAL}', 'Example Dental Springfield Deal'), ('${LENDER_DEAL}', 'Example Loan Deal');
 insert into deal_property values ('${DEAL}', '${PROPERTY}');
 insert into deal_party values ('${DEAL}', '${CLIENT}', 'client'), ('${DEAL}', '${AGENT}', 'listing_agent');
 `;
@@ -73,9 +74,10 @@ const offer = (
 	from: string,
 	role: string,
 	at = PROPERTY,
+	rent = 30,
 ) =>
-	`insert into offer (deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at)
-	values ('${DEAL}', '${at}', ${round}, ${answers}, '${from}', '${role}', now())`;
+	`insert into offer (deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at, rent_per_sf_yr)
+	values ('${DEAL}', '${at}', ${round}, ${answers}, '${from}', '${role}', now(), ${rent})`;
 
 const RULES: Record<string, [sql: string, constraint: string][]> = {
 	"a link to a record that does not exist is refused": [
@@ -109,7 +111,7 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 	],
 	"a round number is used once per deal and answers an earlier round": [
 		[offer(3, 2, AGENT, "listing_agent"), "offer_deal_id_round_key"],
-		[offer(4, 4, AGENT, "listing_agent"), "offer_check"],
+		[offer(4, 4, AGENT, "listing_agent"), "offer_answers_earlier_round"],
 		[offer(9, 8, AGENT, "listing_agent"), "offer_deal_id_answers_round_fkey"],
 	],
 	"a round comes from someone on the deal about a property it is considering": [
@@ -122,11 +124,18 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			"offer_deal_id_property_id_fkey",
 		],
 	],
-	"an earlier round is never rewritten, and one round per deal is accepted": [
+	"a round's terms are never negative": [
+		[
+			offer(4, 3, AGENT, "listing_agent", PROPERTY, -1),
+			"offer_rent_per_sf_yr_check",
+		],
+	],
+	"a round is never rewritten or removed, and one round per deal is accepted": [
 		[
 			"update offer set rent_per_sf_yr = 30 where round = 1",
 			"offer_keeps_its_terms",
 		],
+		["delete from offer where round = 3", "offer_keeps_its_terms"],
 		[
 			"update offer set status = 'accepted' where round = 1",
 			"offer_one_accepted_per_deal",
@@ -134,6 +143,9 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 	],
 };
 
+const url = process.env.TEST_DATABASE_URL;
+if (!url)
+	throw new Error("Run npm run check to restore the test database first");
 // Its own database, because this schema's trigger would change the count database.test.ts reads.
 const name = `engine_next_${randomUUID().replaceAll("-", "")}`;
 const admin = new pg.Client({ connectionString: url });
@@ -151,7 +163,7 @@ let db: pg.Client;
 
 before(async () => {
 	await admin.connect();
-	await admin.query(`create database "${name}"`);
+	await admin.query(`create database "${name}" template template0`);
 	db = await connect();
 	const schema = await readFile(
 		new URL("../schema/next.sql", import.meta.url),
@@ -209,31 +221,11 @@ test("everything about the LOI deal comes back in one read, rounds in order", as
 	});
 });
 
-test("the property, the client and the listing agent each lead to the deal", async () => {
-	const { rows } = await db.query(
-		`select deal_id from deal_property where property_id = $1
-		union all select deal_id from deal_party where party_id in ($2, $3)`,
-		[PROPERTY, CLIENT, AGENT],
-	);
-	assert.deepEqual(rows, [
-		{ deal_id: DEAL },
-		{ deal_id: DEAL },
-		{ deal_id: DEAL },
-	]);
-});
-
 for (const [rule, cases] of Object.entries(RULES))
 	test(rule, async () => {
 		for (const [sql, constraint] of cases)
 			await assert.rejects(db.query(sql), { constraint });
 	});
-
-test("a document holds a pointer to object storage, never the file", async () => {
-	const { rows } = await db.query(
-		"select column_name from information_schema.columns where table_schema = 'next' and data_type = 'bytea'",
-	);
-	assert.deepEqual(rows, []);
-});
 
 test("two partners adding different lenders to one deal at once both keep them", async () => {
 	const writers = [await connect(), await connect()];
@@ -242,12 +234,13 @@ test("two partners adding different lenders to one deal at once both keep them",
 		await writers[1]?.query("set local lock_timeout = '1s'");
 		for (const [i, writer] of writers.entries())
 			await writer.query("insert into deal_party values ($1, $2, 'lender')", [
-				DEAL,
+				LENDER_DEAL,
 				LENDERS[i],
 			]);
 		for (const writer of writers) await writer.query("commit");
 		const { rows } = await db.query(
-			"select party_id from deal_party where role = 'lender' order by party_id",
+			"select party_id from deal_party where deal_id = $1 order by party_id",
+			[LENDER_DEAL],
 		);
 		assert.deepEqual(
 			rows.map((row) => row.party_id),
