@@ -30,6 +30,11 @@ export async function withSnapshot(run: (url: string) => Promise<void>) {
 	const name = `engine_test_${randomUUID().replaceAll("-", "")}`;
 	try {
 		await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);
+		// The server's own zone must not shape a test; a non-UTC one makes a
+		// missing UTC pin fail on every server.
+		await admin.query(
+			`ALTER DATABASE "${name}" SET TimeZone = 'America/Chicago'`,
+		);
 		url.pathname = `/${name}`;
 		const db = new pg.Client({ connectionString: url.href });
 		await db.connect();
