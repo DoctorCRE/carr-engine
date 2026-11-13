@@ -431,15 +431,17 @@ create table post_text (
 	-- None means the weekly batch wrote it.
 	author_party_id uuid references party,
 	written_at timestamptz not null default now(),
+	previous_version smallint generated always as (nullif(version - 1, 0)) stored,
 	constraint post_text_edit_has_author check (version = 1 or author_party_id is not null),
-	primary key (post_id, version)
+	primary key (post_id, version),
+	foreign key (post_id, previous_version) references post_text
 );
 
 create function post_text_before_review_closes() returns trigger
 language plpgsql as $$
 begin
 	if not exists (select from post
-		where id = new.post_id and status = 'scheduled' and new.written_at < scheduled_at - interval '1 hour') then
+		where id = new.post_id and status = 'scheduled' and now() < scheduled_at - interval '1 hour') then
 		raise exception 'a post''s text is edited only while it is scheduled, until review closes an hour before its time'
 			using errcode = 'check_violation', constraint = 'post_text_before_review_closes';
 	end if;
@@ -467,7 +469,7 @@ create table post_review (
 	outcome text not null check (outcome in ('edited', 'cancelled', 'no_response')),
 	reviewed_at timestamptz not null default now(),
 	by_party_id uuid references party,
-	text_version smallint,
+	text_version smallint check (text_version > 1),
 	constraint post_review_by_a_partner check ((outcome = 'no_response') = (by_party_id is null)),
 	constraint post_review_edit_names_its_text check ((outcome = 'edited') = (text_version is not null)),
 	unique (post_id, text_version),
@@ -481,16 +483,18 @@ language plpgsql as $$
 declare
 	reviewed post;
 begin
-	select * into reviewed from post where id = new.post_id;
-	if (new.outcome = 'no_response') <> (new.reviewed_at >= reviewed.scheduled_at - interval '1 hour')
+	-- Held, so an edit and the job writing no_response take turns on one post.
+	select * into reviewed from post where id = new.post_id for update;
+	if (new.outcome = 'no_response') <> (now() >= reviewed.scheduled_at - interval '1 hour')
 		or exists (select from post_review
 			where post_id = new.post_id and (outcome = 'no_response') <> (new.outcome = 'no_response')) then
 		raise exception 'edits and cancels come before review closes, an hour before the post, and no_response at its close, alone'
 			using errcode = 'check_violation', constraint = 'post_review_in_window';
 	end if;
-	if new.outcome = 'cancelled' and reviewed.status <> 'cancelled' then
-		raise exception 'a cancel is reviewed on a cancelled post'
-			using errcode = 'check_violation', constraint = 'post_review_cancels_the_post';
+	if new.outcome = 'cancelled' and reviewed.status <> 'cancelled'
+		or new.outcome = 'no_response' and reviewed.status <> 'scheduled' then
+		raise exception 'a cancel is of a cancelled post, and no_response of a scheduled one'
+			using errcode = 'check_violation', constraint = 'post_review_matches_the_post';
 	end if;
 	return new;
 end $$;
@@ -600,6 +604,11 @@ revoke insert on platform_metric, platform_format from engine;
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
+
+-- An edit's and a review's time is the clock's, which the review window is judged by.
+revoke insert on post_text, post_review from engine;
+grant insert (post_id, version, body, author_party_id) on post_text to engine;
+grant insert (post_id, outcome, by_party_id, text_version) on post_review to engine;
 
 grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
 	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;

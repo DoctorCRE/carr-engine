@@ -59,9 +59,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 24. A post is scheduled, or claimed for publishing, only when its account's `engine_publishes_from` is at or before its time. None means never. The account's time cannot change while a claim is being saved, and only the owner sets it.
 25. A sign-in is as its account's own platform account id, ends after it starts, and is never rewritten or removed.
 26. Each platform's formats come from the known platforms and formats, each once, and only a schema change adds one.
-27. A post's text versions count from 1. A later version is an edit by a partner, written while the post is scheduled and before its review closes, an hour before its time. Text is never blank, rewritten or removed.
+27. A post's text versions run 1, 2, 3 with no gap. A later version is an edit by a partner, written while the post is scheduled and before its review closes, an hour before its time by the database's clock. Text is never blank, rewritten or removed.
 28. A post's media are documents in order, from 1 to 20. A text post has none, and only a photo set has more than one. Each medium is in its post's format and is never changed or removed.
-29. A review is an edit, a cancel or no response. An edit names its text version and a cancel is of a cancelled post; both name a partner and come before review closes. No response names no one, comes at or after the close, and only for a post with no other review. Each version is reviewed once, a post is cancelled and gets no response at most once, and a review is never rewritten or removed.
+29. A review is an edit, a cancel or no response, judged by the database's clock. An edit names a text version after the first, and a cancel is of a cancelled post; both name a partner and come before review closes. No response names no one, comes at or after the close, only for a scheduled post with no other review. A review holds its post until it is saved, so an edit and the job writing no response take turns. Each version is reviewed once, a post is cancelled and gets no response at most once, and a review is never rewritten or removed.
 30. A record or link keeps when it was stored.
 31. The engine empties no table, removes no history, and changes only the columns that may change.
 
@@ -71,7 +71,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the clock's time, which it cannot write. It removes rows only outside history, and changes only these columns:
 
 - a role's or a phase's label;
 - a party's, deal's, document's or design template's name, and a property's address;
