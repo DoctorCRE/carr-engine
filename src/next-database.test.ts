@@ -153,12 +153,96 @@ const TERMS = [
 	"commencement_days_after_delivery",
 ];
 
+const PARTNER = id(20);
+const LINKEDIN = id(500);
+const X = id(501);
+const INSTAGRAM = id(502);
+const RENT_IDEA = id(510);
+const CHECKLIST_IDEA = id(511);
+const STAT_CARD = id(520);
+const PHOTO = id(521);
+const post = (n: number) => id(530 + n);
+const POST_ROWS = [
+	[1, LINKEDIN, RENT_IDEA, STAT_CARD, "2026-06-01", "published"],
+	[2, LINKEDIN, CHECKLIST_IDEA, PHOTO, "2026-06-03", "published"],
+	[3, LINKEDIN, RENT_IDEA, PHOTO, "2026-06-05", "published"],
+	[4, X, CHECKLIST_IDEA, STAT_CARD, "2026-06-02", "published"],
+	[5, X, RENT_IDEA, null, "2026-06-20", "published"],
+	[6, X, CHECKLIST_IDEA, null, "2026-06-04", "published"],
+	[7, X, RENT_IDEA, STAT_CARD, "2026-06-06", "failed"],
+	[8, LINKEDIN, CHECKLIST_IDEA, PHOTO, "2026-06-30", "scheduled"],
+	[9, INSTAGRAM, CHECKLIST_IDEA, PHOTO, "2026-06-07", "published"],
+	[10, INSTAGRAM, RENT_IDEA, STAT_CARD, "2026-06-08", "published"],
+] as const;
+// Hours after publishing and the numbers read then; null was not measured.
+const READINGS: [number, number, Record<string, number | null>][] = [
+	[1, 48, { views: 500, reactions: 10, comments: 2, shares: 1 }],
+	[1, 168, { views: 1000, reactions: 30, comments: 10, shares: 10 }],
+	[1, 336, { views: 2000, reactions: 100, comments: 20, shares: 10 }],
+	[2, 168, { views: 1000, reactions: 40, comments: 20, shares: 10, clicks: 3 }],
+	[3, 48, { views: 1000, reactions: 20, comments: 5, shares: 2 }],
+	[3, 168, { views: 2000, reactions: null, comments: 10, shares: 5 }],
+	[4, 160, { views: 500 }],
+	[4, 166, { reactions: 10, comments: 5, shares: 5 }],
+	[5, 72, { views: 800, reactions: 40, comments: 0, shares: 0 }],
+	[6, 168, { views: 0, reactions: 0, comments: 0, shares: 0 }],
+	[9, 168, { views: 1000, reactions: 50, comments: 10, shares: 5, saves: 25 }],
+	[10, 168, { views: 1000, reactions: 10, comments: 0, shares: 0 }],
+];
+const MARKETING_SEED = `
+insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Jordan Example');
+insert into social_account (id, platform, owner_party_id, handle) values
+	('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example'), ('${X}', 'x', '${PARTNER}', 'jordanexample'),
+	('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example');
+insert into idea (id, angle, hook, pillar) values
+	('${RENT_IDEA}', 'Example rents rose this year', 'number', 'local_market'),
+	('${CHECKLIST_IDEA}', 'Five example lease questions', 'checklist', 'education');
+insert into design_template (id, name) values ('${STAT_CARD}', 'Example stat card'), ('${PHOTO}', 'Example photo backdrop');
+insert into post (id, social_account_id, platform, idea_id, design_template_id, scheduled_at, status, platform_post_id, published_at)
+values ${POST_ROWS.map(
+	([n, account, idea, template, day, status]) =>
+		`('${post(n)}', '${account}', (select platform from social_account where id = '${account}'), '${idea}',
+		${template && `'${template}'`}, '${day}T15:00:00+00:00', '${status}', ${
+			status === "published"
+				? `'example-${n}', '${day}T15:00:00+00:00'`
+				: "null, null"
+		})`,
+)};
+insert into measurement (post_id, platform, metric, taken_at, source, value, not_measured_reason)
+select p.id, p.platform, r.metric, p.published_at + make_interval(hours => r.hours), 'example_source', r.value,
+	case when r.value is null then 'Example: no number came back' end
+from post p join (values ${READINGS.flatMap(([n, hours, values]) =>
+	Object.entries(values).map(
+		([metric, value]) =>
+			`('${post(n)}'::uuid, ${hours}, '${metric}', ${value}::bigint)`,
+	),
+)}) r (post_id, hours, metric, value) on r.post_id = p.id;
+`;
+const newPost = (row: Record<string, string>) => {
+	const post = {
+		social_account_id: X,
+		platform: "x",
+		scheduled_at: "2026-06-09",
+		...row,
+	};
+	return `insert into post (${Object.keys(post)}) values (${Object.values(post).map((value) => `'${value}'`)})`;
+};
+const newReading = (
+	value: string,
+	reason = "null",
+	metric = "views",
+	platform = "linkedin",
+) =>
+	`insert into measurement (post_id, platform, metric, taken_at, source, value, not_measured_reason)
+	values ('${post(1)}', '${platform}', '${metric}', now(), 'example_source', ${value}, ${reason})`;
+
 const RULES: Record<string, [sql: string, constraint: string][]> = {
 	"a link to a record that does not exist is refused": [
 		[
 			`insert into deal_party values ('${DEAL}', '${MISSING}', 'client')`,
 			"deal_party_party_id_fkey",
 		],
+		[newPost({ idea_id: MISSING }), "post_idea_id_fkey"],
 		[`delete from party where id = '${AGENT}'`, "party_role_party_id_fkey"],
 	],
 	"the role list refuses a role it does not hold": [
@@ -350,6 +434,90 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			"offer_superseded_by_later_acceptance",
 		],
 	],
+	"a social account is on a known platform, once per handle in any case": [
+		[
+			`insert into social_account (platform, owner_party_id, handle) values ('myspace', '${PARTNER}', 'example')`,
+			"social_account_platform_check",
+		],
+		[
+			`insert into social_account (platform, owner_party_id, handle) values ('x', '${PARTNER}', 'JordanExample')`,
+			"social_account_one_per_handle",
+		],
+	],
+	"a platform reports metrics from the known lists, each once": [
+		[
+			"insert into platform_metric values ('myspace', 'views')",
+			"platform_metric_platform_check",
+		],
+		[
+			"insert into platform_metric values ('x', 'likes')",
+			"platform_metric_metric_check",
+		],
+		[
+			"insert into platform_metric values ('x', 'views')",
+			"platform_metric_pkey",
+		],
+	],
+	"a post is scheduled, published or failed, and only a published post has its platform id and time":
+		[
+			[
+				newPost({ platform: "linkedin" }),
+				"post_social_account_id_platform_fkey",
+			],
+			[newPost({ status: "removed" }), "post_status_check"],
+			[
+				newPost({ status: "published", platform_post_id: "example-9" }),
+				"post_published_has_id_and_time",
+			],
+			[
+				newPost({ status: "published", published_at: "2026-06-09" }),
+				"post_published_has_id_and_time",
+			],
+			[
+				newPost({ status: "failed", platform_post_id: "example-9" }),
+				"post_published_has_id_and_time",
+			],
+			[
+				newPost({
+					status: "published",
+					platform_post_id: "example-4",
+					published_at: "2026-06-09",
+				}),
+				"post_social_account_id_platform_post_id_key",
+			],
+		],
+	"a post is never removed, and a published or failed post keeps its status": [
+		["delete from post where status = 'failed'", "post_keeps_history"],
+		["truncate post cascade", "measurement_keeps_history"],
+		[
+			"update post set status = 'scheduled' where status = 'failed'",
+			"post_keeps_history",
+		],
+		[
+			`update post set status = 'failed' where id = '${post(1)}'`,
+			"post_keeps_history",
+		],
+	],
+	"a reading is a metric its post's platform reports, never negative, and not measured is a reason, never a zero":
+		[
+			[newReading("1", "null", "saves"), "measurement_platform_metric_fkey"],
+			[
+				newReading("1", "null", "views", "x"),
+				"measurement_post_id_platform_fkey",
+			],
+			[newReading("-1"), "measurement_value_check"],
+			[newReading("null"), "measurement_value_or_reason"],
+			[newReading("0", "'Example'"), "measurement_value_or_reason"],
+		],
+	"a reading is stored once and never rewritten or removed": [
+		[
+			`insert into measurement select * from measurement limit 1`,
+			"measurement_pkey",
+		],
+		["update measurement set value = 1", "measurement_keeps_history"],
+		["delete from measurement", "measurement_keeps_history"],
+		["truncate measurement", "measurement_keeps_history"],
+	],
 };
 
 // Each case runs in a transaction it rolls back, so a broken rule leaves nothing behind.
@@ -391,7 +559,7 @@ before(async () => {
 		new URL("../schema/next.sql", import.meta.url),
 		"utf8",
 	);
-	await db.query(`create schema next; ${schema} ${SEED}`);
+	await db.query(`create schema next; ${schema} ${SEED} ${MARKETING_SEED}`);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
 			"insert into offer select * from jsonb_populate_record(null::offer, $1)",
@@ -486,6 +654,90 @@ for (const [rule, cases] of Object.entries(RULES))
 		for (const [sql, constraint] of cases)
 			await rolledBack(() => assert.rejects(db.query(sql), { constraint }));
 	});
+
+test("a scheduled post can be published", () =>
+	rolledBack(() =>
+		db.query(
+			`update post set status = 'published', platform_post_id = 'example-8', published_at = now() where id = $1`,
+			[post(8)],
+		),
+	));
+
+test("posts compare at day 7, best and worst per account", async () => {
+	const ranked = (
+		n: number,
+		idea: string,
+		template: string,
+		rate: number,
+		age = 168,
+	) => ({
+		id: post(n),
+		published_at: `${POST_ROWS[n - 1]?.[4]}T15:00:00+00:00`,
+		idea_id: idea,
+		design_template_id: template,
+		engagement_per_view: rate,
+		reading_age_hours: age,
+	});
+	const account = (
+		id: string,
+		platform: string,
+		handle: string,
+		...posts: ReturnType<typeof ranked>[]
+	) => ({
+		id,
+		platform,
+		owner_party_id: PARTNER,
+		handle,
+		posts: posts.length,
+		best: posts[0],
+		worst: posts.at(-1),
+	});
+	const { rows } = await db.query("select posts_at_day_7($1) as read", [
+		"2026-06-25T00:00:00+00:00",
+	]);
+	const checklistOnStatCard = ranked(4, CHECKLIST_IDEA, STAT_CARD, 0.04, 160);
+	assert.deepEqual(rows[0].read, {
+		accounts: [
+			account(
+				INSTAGRAM,
+				"instagram",
+				"jordan.example",
+				ranked(9, CHECKLIST_IDEA, PHOTO, 0.09),
+			),
+			account(
+				LINKEDIN,
+				"linkedin",
+				"jordan-example",
+				ranked(2, CHECKLIST_IDEA, PHOTO, 0.07),
+				ranked(1, RENT_IDEA, STAT_CARD, 0.05),
+			),
+			account(X, "x", "jordanexample", checklistOnStatCard),
+		],
+	});
+});
+
+test("day 7 is 168 hours after publishing, even across a clock change", () =>
+	rolledBack(async () => {
+		await db.query("set local time zone 'America/Chicago'");
+		await db.query(
+			`insert into post (id, social_account_id, platform, scheduled_at, status, platform_post_id, published_at)
+			values ($1, $2, 'x', $3, 'published', 'example-clock', $3)`,
+			[post(11), X, "2026-10-29T15:00:00+00:00"],
+		);
+		await db.query(
+			`insert into measurement (post_id, platform, metric, taken_at, source, value)
+			select $1, 'x', metric, $2, 'example_source', value
+			from unnest(array['views', 'reactions', 'comments', 'shares'], array[100, 10, 0, 0]) as r (metric, value)`,
+			[post(11), "2026-11-05T15:00:00+00:00"],
+		);
+		const { rows } = await db.query("select posts_at_day_7($1) as read", [
+			"2026-11-05T15:00:00+00:00",
+		]);
+		const x = rows[0].read.accounts.find(
+			(account: { platform: string }) => account.platform === "x",
+		);
+		assert.equal(x.best.id, post(11));
+	}));
 
 test("a deal that dies after acceptance keeps its accepted round, and a revival accepts a new one", () =>
 	rolledBack(async () => {
