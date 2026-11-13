@@ -389,17 +389,21 @@ create trigger post_final before update on post
 create function post_status_moves() returns trigger
 language plpgsql as $$
 begin
-	if not (old.status = 'scheduled' and new.status in ('publishing', 'cancelled')
-		or old.status = 'publishing' and new.status in ('published', 'failed')) then
-		raise exception 'a post moves from scheduled to publishing or cancelled, and from publishing to published or failed'
+	if not (case tg_op
+		when 'INSERT' then new.status not in ('publishing', 'cancelled')
+		else old.status = new.status
+			or old.status = 'scheduled' and new.status in ('publishing', 'cancelled')
+			or old.status = 'publishing' and new.status in ('published', 'failed')
+	end) then
+		raise exception 'a post starts scheduled, published or failed, moves from scheduled to publishing or cancelled, and from publishing to published or failed'
 			using errcode = 'check_violation', constraint = 'post_status_moves';
 	end if;
 	return new;
 end $$;
 
--- Only the publisher's claim leaves scheduled for publishing, so a post is sent at most once.
-create trigger post_status_moves before update of status on post
-	for each row when (new.status is distinct from old.status) execute function post_status_moves();
+-- Only the publisher's claim reaches publishing, so a post is sent at most once.
+create trigger post_status_moves before insert or update of status on post
+	for each row execute function post_status_moves();
 
 create function post_engine_publishes_from() returns trigger
 language plpgsql as $$
@@ -592,6 +596,10 @@ do $$ begin
 end $$;
 -- Which metrics and formats a platform offers is a schema decision.
 revoke insert on platform_metric, platform_format from engine;
+
+-- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
+revoke insert on social_account from engine;
+grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
 grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
 	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;

@@ -191,10 +191,13 @@ const READINGS: [number, number, Record<string, number | null>][] = [
 ];
 const MARKETING_SEED = `
 insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Jordan Example');
-insert into social_account (id, platform, owner_party_id, handle, platform_account_id, engine_publishes_from) values
-	('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example', 'example-person-1', '${ENGINE_FROM}'),
-	('${X}', 'x', '${PARTNER}', 'jordanexample', null, null),
-	('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example', null, null);
+insert into social_account (id, platform, owner_party_id, handle, platform_account_id) values
+	('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example', 'example-person-1'),
+	('${X}', 'x', '${PARTNER}', 'jordanexample', null), ('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example', null);
+-- Only the owner sets when the engine starts publishing for an account.
+set role none;
+update social_account set engine_publishes_from = '${ENGINE_FROM}' where id = '${LINKEDIN}';
+set role engine;
 insert into social_sign_in values ('${LINKEDIN}', 'example-person-1', '${PARTNER}',
 	'2026-06-01T15:00:00+00:00', '2026-07-31T15:00:00+00:00', '{openid,profile,w_member_social}');
 insert into idea (id, angle, hook, pillar) values
@@ -255,6 +258,8 @@ const newReading = (row: Record<string, string | number | null>) =>
 		not_measured_reason: null,
 		...row,
 	});
+const NEW_ACCOUNT = `insert into social_account (id, platform, owner_party_id, handle)
+	values ('${id(503)}', 'facebook', '${PARTNER}', 'example-page')`;
 const CLAIM = `update post set status = 'publishing' where id = '${post(8)}'`;
 // Post 8's review closes an hour before its time, at 14:00 on 2026-06-30.
 const BEFORE_CLOSE = "2026-06-29T15:00:00+00:00";
@@ -619,9 +624,14 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 		[
 			[newPost({ platform: "x" }), "post_social_account_id_platform_fkey"],
 			[newPost({ status: "removed" }), "post_status_check"],
+			[newPost({ status: "publishing" }), "post_status_moves"],
+			[
+				newPost({ status: "cancelled", reason: "Example" }),
+				"post_status_moves",
+			],
 			[newPost({ status: "failed" }), "post_failed_or_cancelled_says_why"],
 			[newPost({ reason: "Example" }), "post_failed_or_cancelled_says_why"],
-			[newPost({ status: "cancelled", reason: " " }), "post_reason_check"],
+			[newPost({ status: "failed", reason: " " }), "post_reason_check"],
 			[
 				newPost({ status: "published", platform_post_id: "example-9" }),
 				"post_published_has_id_and_time",
@@ -665,6 +675,16 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 		],
 	"the engine holds only posts scheduled from its account's engine_publishes_from, and none means never":
 		[
+			[
+				`insert into social_account (platform, owner_party_id, handle, engine_publishes_from)
+				values ('facebook', '${PARTNER}', 'example-page', now())`,
+				notGranted("social_account"),
+			],
+			[
+				`${NEW_ACCOUNT}; delete from social_account where id = '${id(503)}'; ${NEW_ACCOUNT};
+				${newPost({ social_account_id: id(503), platform: "facebook" })}`,
+				"post_engine_publishes_from",
+			],
 			[
 				newPost({ scheduled_at: "2026-06-08T04:59:59+00:00" }),
 				"post_engine_publishes_from",
@@ -862,6 +882,10 @@ const CHANGEABLE: Record<string, string[]> = {
 	design_template: ["name"],
 	post: ["platform_post_id", "published_at", "reason", "status"],
 };
+// Columns the engine leaves to their default when it adds a row.
+const DEFAULTED: Record<string, string[]> = {
+	social_account: ["engine_publishes_from"],
+};
 const REMOVABLE = [
 	...STAMPED.filter(
 		(table) => !["offer_document", "post_media"].includes(table),
@@ -1037,7 +1061,9 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 		`select c.relname as table,
 			array_agg(a.attname::text order by a.attname)
 				filter (where has_column_privilege(c.oid, a.attnum, 'update')) as changeable,
-			has_table_privilege(c.oid, 'insert') as addable,
+			has_any_column_privilege(c.oid, 'insert') as addable,
+			array_agg(a.attname::text order by a.attname) filter (where has_any_column_privilege(c.oid, 'insert')
+				and not has_column_privilege(c.oid, a.attnum, 'insert')) as defaulted,
 			has_table_privilege(c.oid, 'delete') as removable,
 			has_table_privilege(c.oid, 'truncate') as emptied
 		from pg_class c join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
@@ -1050,6 +1076,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			table,
 			changeable: CHANGEABLE[table] ?? null,
 			addable: !["platform_metric", "platform_format"].includes(table),
+			defaulted: DEFAULTED[table] ?? null,
 			removable: REMOVABLE.includes(table),
 			emptied: false,
 		})),
