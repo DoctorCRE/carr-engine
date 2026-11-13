@@ -369,6 +369,7 @@ create table post (
 	constraint post_failed_or_cancelled_says_why check ((status in ('failed', 'cancelled')) = (reason is not null)),
 	unique (social_account_id, platform_post_id),
 	unique (id, platform),
+	unique (id, format),
 	foreign key (social_account_id, platform) references social_account (id, platform),
 	foreign key (platform, format) references platform_format
 );
@@ -421,6 +422,85 @@ end $$;
 -- Scheduled means the engine will publish it; a post another publisher sent is stored as published or failed.
 create trigger post_engine_publishes_from before insert or update of status on post
 	for each row when (new.status in ('scheduled', 'publishing')) execute function post_engine_publishes_from();
+
+-- An edit is a new version, never an overwrite; the latest version is the one posted.
+create table post_text (
+	post_id uuid not null references post,
+	version smallint not null check (version >= 1),
+	body text not null check (body ~ '\S'),
+	-- None means the weekly batch wrote it.
+	author_party_id uuid references party,
+	written_at timestamptz not null default now(),
+	previous_version smallint generated always as (nullif(version - 1, 0)) stored,
+	constraint post_text_edit_has_author check (version = 1 or author_party_id is not null),
+	primary key (post_id, version),
+	foreign key (post_id, previous_version) references post_text
+);
+
+create function post_text_before_review_closes() returns trigger
+language plpgsql as $$
+begin
+	if not exists (select from post
+		where id = new.post_id and status = 'scheduled' and now() < scheduled_at - interval '1 hour') then
+		raise exception 'a post''s text is edited only while it is scheduled, until review closes an hour before its time'
+			using errcode = 'check_violation', constraint = 'post_text_before_review_closes';
+	end if;
+	return new;
+end $$;
+
+create trigger post_text_before_review_closes before insert on post_text
+	for each row when (new.version > 1) execute function post_text_before_review_closes();
+
+-- Each file is a document in R2. Only a photo set has more than one.
+create table post_media (
+	post_id uuid not null,
+	format text not null,
+	position smallint not null check (position between 1 and 20),
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	constraint post_media_fits_format check (format <> 'text' and (position = 1 or format = 'photo_set')),
+	primary key (post_id, position),
+	foreign key (post_id, format) references post (id, format)
+);
+
+-- A post goes out unless cancelled. At review's close a post nobody edited or cancelled gets no_response.
+create table post_review (
+	post_id uuid not null references post,
+	outcome text not null check (outcome in ('edited', 'cancelled', 'no_response')),
+	reviewed_at timestamptz not null default now(),
+	by_party_id uuid references party,
+	text_version smallint check (text_version > 1),
+	constraint post_review_by_a_partner check ((outcome = 'no_response') = (by_party_id is null)),
+	constraint post_review_edit_names_its_text check ((outcome = 'edited') = (text_version is not null)),
+	unique (post_id, text_version),
+	foreign key (post_id, text_version) references post_text
+);
+
+create unique index post_review_once on post_review (post_id, outcome) where outcome <> 'edited';
+
+create function post_review_in_window() returns trigger
+language plpgsql as $$
+declare
+	reviewed post;
+begin
+	-- Held, so an edit and the job writing no_response take turns on one post.
+	select * into reviewed from post where id = new.post_id for update;
+	if (new.outcome = 'no_response') <> (now() >= reviewed.scheduled_at - interval '1 hour')
+		or exists (select from post_review
+			where post_id = new.post_id and (outcome = 'no_response') <> (new.outcome = 'no_response')) then
+		raise exception 'edits and cancels come before review closes, an hour before the post, and no_response at its close, alone'
+			using errcode = 'check_violation', constraint = 'post_review_in_window';
+	end if;
+	if new.outcome = 'cancelled' and reviewed.status <> 'cancelled'
+		or new.outcome = 'no_response' and reviewed.status <> 'scheduled' then
+		raise exception 'a cancel is of a cancelled post, and no_response of a scheduled one'
+			using errcode = 'check_violation', constraint = 'post_review_matches_the_post';
+	end if;
+	return new;
+end $$;
+
+create trigger post_review_in_window before insert on post_review
+	for each row execute function post_review_in_window();
 
 create table measurement (
 	post_id uuid not null,
@@ -499,7 +579,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
--- History (deal_phase_change, offer, offer_document, post, measurement, social_sign_in) is never removed.
+-- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -524,6 +604,11 @@ revoke insert on platform_metric, platform_format from engine;
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
+
+-- An edit's and a review's time is the clock's, which the review window is judged by.
+revoke insert on post_text, post_review from engine;
+grant insert (post_id, version, body, author_party_id) on post_text to engine;
+grant insert (post_id, outcome, by_party_id, text_version) on post_review to engine;
 
 grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
 	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;

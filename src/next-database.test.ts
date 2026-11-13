@@ -160,6 +160,10 @@ const CHECKLIST_IDEA = id(511);
 const STAT_CARD = id(520);
 const PHOTO = id(521);
 const post = (n: number) => id(530 + n);
+const PHOTO_FILE = id(540);
+// Review closes an hour before a post's time, judged by the real clock.
+const OPEN = post(13);
+const CLOSED = post(14);
 const ENGINE_FROM = "2026-06-08T05:00:00+00:00";
 const POST_ROWS = [
 	[1, LINKEDIN, RENT_IDEA, STAT_CARD, "2026-06-01", "published"],
@@ -215,6 +219,12 @@ values ${POST_ROWS.map(
 				: "null, null"
 		})`,
 )};
+insert into document (id, name, r2_key) values ('${PHOTO_FILE}', 'Example photo.jpg', 'example/photo.jpg');
+insert into post_media (post_id, format, position, document_id) values ('${post(8)}', 'photo', 1, '${PHOTO_FILE}');
+insert into post (id, social_account_id, platform, format, scheduled_at) values
+	('${OPEN}', '${LINKEDIN}', 'linkedin', 'photo', now() + interval '2 hours'),
+	('${CLOSED}', '${LINKEDIN}', 'linkedin', 'photo', now() + interval '30 minutes');
+insert into post_text (post_id, version, body) values ('${OPEN}', 1, 'Five example lease questions');
 insert into measurement (post_id, platform, metric, taken_at, source, value, not_measured_reason)
 select p.id, p.platform, r.metric, p.published_at + make_interval(hours => r.hours), 'example_source', r.value,
 	case when r.value is null then 'Example: no number came back' end
@@ -256,6 +266,32 @@ const newReading = (row: Record<string, string | number | null>) =>
 const NEW_ACCOUNT = `insert into social_account (id, platform, owner_party_id, handle)
 	values ('${id(503)}', 'facebook', '${PARTNER}', 'example-page')`;
 const CLAIM = `update post set status = 'publishing' where id = '${post(8)}'`;
+const newText = (row: Record<string, string | number | null>) =>
+	insert("post_text", {
+		post_id: OPEN,
+		version: 2,
+		body: "Six example lease questions",
+		author_party_id: PARTNER,
+		...row,
+	});
+const newMedium = (row: Record<string, string | number>) =>
+	insert("post_media", {
+		post_id: post(8),
+		format: "photo",
+		position: 1,
+		document_id: PHOTO_FILE,
+		...row,
+	});
+const newReview = (row: Record<string, string | number | null>) =>
+	insert("post_review", { post_id: OPEN, by_party_id: PARTNER, ...row });
+const EDITED = `${newText({})}; ${newReview({ outcome: "edited", text_version: 2 })}`;
+const NO_RESPONSE = {
+	post_id: CLOSED,
+	outcome: "no_response",
+	by_party_id: null,
+};
+const cancel = (post: string) =>
+	`update post set status = 'cancelled', reason = 'Example: the rent number changed' where id = '${post}'`;
 const newSignIn = (row: Record<string, string>) =>
 	insert("social_sign_in", {
 		social_account_id: LINKEDIN,
@@ -304,6 +340,7 @@ const STAMPED = [
 	"social_account",
 	"idea",
 	"design_template",
+	"post_media",
 ];
 
 // A constraint's name, or the error PostgreSQL raises.
@@ -677,6 +714,75 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			"post_final",
 		],
 	],
+	"a post's text is edited as the next version by a partner, while it is scheduled and until review closes":
+		[
+			[newText({ version: 1 }), "post_text_pkey"],
+			[newText({ version: 0 }), "post_text_version_check"],
+			[newText({ version: 3 }), "post_text_post_id_previous_version_fkey"],
+			[newText({ body: " \n" }), "post_text_body_check"],
+			[newText({ author_party_id: null }), "post_text_edit_has_author"],
+			[newText({ post_id: CLOSED }), "post_text_before_review_closes"],
+			[`${cancel(OPEN)}; ${newText({})}`, "post_text_before_review_closes"],
+			[newText({ written_at: "2020-01-01" }), notGranted("post_text")],
+			["update post_text set body = 'Example'", notGranted("post_text")],
+			["delete from post_text", notGranted("post_text")],
+		],
+	"a post's media fit its format, in order, and never change": [
+		[newMedium({ post_id: post(5), format: "text" }), "post_media_fits_format"],
+		[newMedium({ position: 2 }), "post_media_fits_format"],
+		[
+			`${newPost({ id: post(12), format: "photo_set" })};
+			${newMedium({ post_id: post(12), format: "photo_set", position: 21 })}`,
+			"post_media_position_check",
+		],
+		[
+			newMedium({ post_id: post(1), format: "video" }),
+			"post_media_post_id_format_fkey",
+		],
+		[newMedium({}), "post_media_pkey"],
+		["update post_media set position = 2", notGranted("post_media")],
+		["delete from post_media", notGranted("post_media")],
+	],
+	"a review is a partner's edit or cancel before review closes, or no response alone at its close, each once":
+		[
+			[newReview({ outcome: "approved" }), "post_review_outcome_check"],
+			[newReview({ outcome: "edited" }), "post_review_edit_names_its_text"],
+			[
+				newReview({ outcome: "edited", text_version: 1 }),
+				"post_review_text_version_check",
+			],
+			[
+				newReview({ outcome: "edited", text_version: 5 }),
+				"post_review_post_id_text_version_fkey",
+			],
+			[
+				newReview({ ...NO_RESPONSE, by_party_id: PARTNER }),
+				"post_review_by_a_partner",
+			],
+			[
+				`${cancel(CLOSED)}; ${newReview({ post_id: CLOSED, outcome: "cancelled" })}`,
+				"post_review_in_window",
+			],
+			[newReview({ ...NO_RESPONSE, post_id: OPEN }), "post_review_in_window"],
+			[newReview({ outcome: "cancelled" }), "post_review_matches_the_post"],
+			[
+				`${cancel(CLOSED)}; ${newReview(NO_RESPONSE)}`,
+				"post_review_matches_the_post",
+			],
+			[
+				`${newReview(NO_RESPONSE)}; ${newReview(NO_RESPONSE)}`,
+				"post_review_once",
+			],
+			[
+				newReview({ outcome: "cancelled", reviewed_at: "2020-01-01" }),
+				notGranted("post_review"),
+			],
+			[
+				`${EDITED}; update post_review set by_party_id = null`,
+				notGranted("post_review"),
+			],
+			[`${EDITED}; delete from post_review`, notGranted("post_review")],
+		],
 	"a reading is a metric its post's platform reports, names its source, is never negative, and not measured is a reason, never a zero":
 		[
 			[newReading({ metric: "saves" }), "measurement_platform_metric_fkey"],
@@ -736,6 +842,18 @@ const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			"platform_metric_pkey",
 		],
 	],
+	"no response is a post's only review, even when its time moves": [
+		[
+			`${EDITED}; update post set scheduled_at = now() + interval '30 minutes' where id = '${OPEN}';
+			set local role engine; ${newReview({ ...NO_RESPONSE, post_id: OPEN })}`,
+			"post_review_in_window",
+		],
+		[
+			`${newReview(NO_RESPONSE)}; update post set scheduled_at = now() + interval '2 hours' where id = '${CLOSED}';
+			set local role engine; ${cancel(CLOSED)}; ${newReview({ post_id: CLOSED, outcome: "cancelled" })}`,
+			"post_review_in_window",
+		],
+	],
 	"the engine claims no post once its account's engine_publishes_from moves past it":
 		[
 			[
@@ -783,9 +901,13 @@ const CHANGEABLE: Record<string, string[]> = {
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
 	social_account: ["engine_publishes_from"],
+	post_text: ["previous_version", "written_at"],
+	post_review: ["reviewed_at"],
 };
 const REMOVABLE = [
-	...STAMPED.filter((table) => table !== "offer_document"),
+	...STAMPED.filter(
+		(table) => !["offer_document", "post_media"].includes(table),
+	),
 	"activity",
 	"email",
 ];
@@ -984,6 +1106,29 @@ test("the engine claims a scheduled post, then publishes it", () =>
 		db.query(`${CLAIM}; update post set status = 'published', platform_post_id = 'example-8',
 			published_at = now() where id = '${post(8)}'`),
 	));
+
+test("a partner's edit and cancel are reviewed before review closes, and an untouched post gets no response", () =>
+	rolledBack(() =>
+		db.query(`${EDITED}; ${cancel(OPEN)}; ${newReview({ outcome: "cancelled" })};
+			${newReview(NO_RESPONSE)}`),
+	));
+
+test("a review holds its post until it is saved", async () => {
+	const [partner, job] = [await connect(), await connect()];
+	try {
+		await partner.query(`begin; ${EDITED}`);
+		await job.query("begin; set local lock_timeout = '100ms'");
+		await assert.rejects(
+			job.query("select from post where id = $1 for no key update", [OPEN]),
+			{ code: "55P03" },
+		);
+	} finally {
+		for (const client of [partner, job]) {
+			await client.query("rollback");
+			await client.end();
+		}
+	}
+});
 
 test("an account's engine_publishes_from waits while the engine claims one of its posts", async () => {
 	const [engine, owner] = [await connect(), await connect("none")];
