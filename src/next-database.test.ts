@@ -141,8 +141,6 @@ const newEmail = (activity: string, messageId = `<${activity}@example.com>`) =>
 	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', now());
 	insert into email (activity_id, message_id, sender, subject, body)
 	values ('${activity}', '${messageId}', 'avery@example.com', 'Example', 'Example')`;
-const linkedEmail = (activity: string) =>
-	`${newEmail(activity)}; insert into activity_about (activity_id, property_id) values ('${activity}', '${PROPERTY}'); ${CHECK_AT_COMMIT}`;
 const TERMS = [
 	"rent_per_sf_yr",
 	"nnn_per_sf_yr",
@@ -236,7 +234,39 @@ const newReading = (
 	`insert into measurement (post_id, platform, metric, taken_at, source, value, not_measured_reason)
 	values ('${post(1)}', '${platform}', '${metric}', now(), 'example_source', ${value}, ${reason})`;
 
-const RULES: Record<string, [sql: string, constraint: string][]> = {
+// The engine's role lacks the privilege, so PostgreSQL refuses before any row is touched.
+const notGranted = (table: string) => ({
+	code: "42501",
+	message: `permission denied for table ${table}`,
+});
+const STAMPED = [
+	"party",
+	"property",
+	"deal",
+	"party_role",
+	"party_company",
+	"deal_property",
+	"deal_party",
+	"activity_about",
+	"offer_document",
+	"next_step",
+	"document",
+	"social_account",
+	"idea",
+	"design_template",
+];
+
+// A constraint's name, or the error PostgreSQL raises.
+type Refusal = string | { code?: string; message: string };
+const expected = (refusal: Refusal) =>
+	typeof refusal === "string" ? { constraint: refusal } : refusal;
+
+const SCHEMA = await readFile(
+	new URL("../schema/next.sql", import.meta.url),
+	"utf8",
+);
+
+const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 	"a link to a record that does not exist is refused": [
 		[
 			`insert into deal_party values ('${DEAL}', '${MISSING}', 'client')`,
@@ -304,10 +334,10 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			],
 			[
 				"update deal_phase_change set reason = 'Example'",
-				"deal_phase_change_keeps_history",
+				notGranted("deal_phase_change"),
 			],
-			["delete from deal_phase_change", "deal_phase_change_keeps_history"],
-			["truncate deal_phase_change", "deal_phase_change_keeps_history"],
+			["delete from deal_phase_change", notGranted("deal_phase_change")],
+			["truncate deal_phase_change", notGranted("deal_phase_change")],
 		],
 	"a round number is used once per deal and answers an earlier round": [
 		[offer(3, 2, AGENT, "listing_agent"), "offer_deal_id_round_key"],
@@ -374,17 +404,12 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 				`delete from activity_about where activity_id = '${EMAIL}'; ${CHECK_AT_COMMIT}`,
 				"email_about_a_record",
 			],
-			["truncate activity_about", "email_about_a_record"],
-			["truncate email cascade", "offer_document_keeps_history"],
+			["truncate activity_about", notGranted("activity_about")],
 			[
-				`${linkedEmail(id(303))}; update activity_about set activity_id = '${CALL}' where activity_id = '${id(303)}'`,
-				"email_about_a_record",
+				`update activity_about set activity_id = '${CALL}' where activity_id = '${EMAIL}'`,
+				notGranted("activity_about"),
 			],
-			[
-				`insert into activity (id, kind, happened_at) values ('${id(304)}', 'email', now());
-				${linkedEmail(id(303))}; update email set activity_id = '${id(304)}' where activity_id = '${id(303)}'`,
-				"email_about_a_record",
-			],
+			[`update email set activity_id = '${CALL}'`, notGranted("email")],
 		],
 	"a next step is about exactly one record": [
 		[
@@ -396,10 +421,14 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 	"a round is never rewritten or removed, and one round per deal is accepted": [
 		[
 			"update offer set rent_per_sf_yr = 30 where round = 1",
-			"offer_keeps_history",
+			notGranted("offer"),
 		],
-		["delete from offer where round = 3", "offer_keeps_history"],
-		["truncate offer cascade", "offer_keeps_history"],
+		["delete from offer where round = 3", notGranted("offer")],
+		["truncate offer cascade", notGranted("offer")],
+		[
+			`delete from offer_document where document_id = '${id(200)}'`,
+			notGranted("offer_document"),
+		],
 		[
 			`${NEXT_ROUND}; update offer set status = 'accepted' where round = 4`,
 			"offer_one_accepted_per_deal",
@@ -444,18 +473,10 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			"social_account_one_per_handle",
 		],
 	],
-	"a platform reports metrics from the known lists, each once": [
+	"only the schema adds a platform's metrics": [
 		[
-			"insert into platform_metric values ('myspace', 'views')",
-			"platform_metric_platform_check",
-		],
-		[
-			"insert into platform_metric values ('x', 'likes')",
-			"platform_metric_metric_check",
-		],
-		[
-			"insert into platform_metric values ('x', 'views')",
-			"platform_metric_pkey",
+			"insert into platform_metric values ('x', 'saves')",
+			notGranted("platform_metric"),
 		],
 	],
 	"a post is scheduled, published or failed, and only a published post has its platform id and time":
@@ -487,15 +508,15 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			],
 		],
 	"a post is never removed, and a published or failed post keeps its status": [
-		["delete from post where status = 'failed'", "post_keeps_history"],
-		["truncate post cascade", "measurement_keeps_history"],
+		["delete from post where status = 'failed'", notGranted("post")],
+		["truncate post cascade", notGranted("post")],
 		[
 			"update post set status = 'scheduled' where status = 'failed'",
-			"post_keeps_history",
+			"post_status_final",
 		],
 		[
 			`update post set status = 'failed' where id = '${post(1)}'`,
-			"post_keeps_history",
+			"post_status_final",
 		],
 	],
 	"a reading is a metric its post's platform reports, never negative, and not measured is a reason, never a zero":
@@ -514,11 +535,60 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			`insert into measurement select * from measurement limit 1`,
 			"measurement_pkey",
 		],
-		["update measurement set value = 1", "measurement_keeps_history"],
-		["delete from measurement", "measurement_keeps_history"],
-		["truncate measurement", "measurement_keeps_history"],
+		["update measurement set value = 1", notGranted("measurement")],
+		["delete from measurement", notGranted("measurement")],
+		["truncate measurement", notGranted("measurement")],
+	],
+	"a record or link keeps when it was stored": STAMPED.map((table) => [
+		`update ${table} set created_at = now()`,
+		notGranted(table),
+	]),
+};
+const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
+const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
+// Rules on paths only the schema's owner can take.
+const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
+	"a platform reports metrics from the known lists, each once": [
+		[
+			"insert into platform_metric values ('myspace', 'views')",
+			"platform_metric_platform_check",
+		],
+		[
+			"insert into platform_metric values ('x', 'likes')",
+			"platform_metric_metric_check",
+		],
+		[
+			"insert into platform_metric values ('x', 'views')",
+			"platform_metric_pkey",
+		],
+	],
+	"loading the schema refuses an engine role with rights beyond its grants": [
+		[`grant pg_write_all_data to engine; ${RELOAD}`, TOO_MUCH],
+		[`alter role engine bypassrls; ${RELOAD}`, TOO_MUCH],
 	],
 };
+// What the engine may change; every other column, and every row of history, stays as stored.
+const CHANGEABLE: Record<string, string[]> = {
+	role: ["label"],
+	phase: ["label"],
+	party: ["name"],
+	property: ["address"],
+	deal: ["name"],
+	party_company: ["ended_on", "started_on", "title"],
+	activity: ["from_party_id", "happened_at", "summary"],
+	next_step: ["done_at", "due_on", "owner_party_id", "what"],
+	document: ["name"],
+	offer: ["status"],
+	social_account: ["handle"],
+	idea: ["angle", "hook", "pillar"],
+	design_template: ["name"],
+	post: ["platform_post_id", "published_at", "status"],
+};
+const REMOVABLE = [
+	...STAMPED.filter((table) => table !== "offer_document"),
+	"activity",
+	"email",
+];
 
 // Each case runs in a transaction it rolls back, so a broken rule leaves nothing behind.
 async function rolledBack(run: () => Promise<unknown>) {
@@ -529,9 +599,34 @@ async function rolledBack(run: () => Promise<unknown>) {
 		await db.query("rollback");
 	}
 }
+// Each case runs in its own owner's transaction, rolled back.
+async function asOwner(cases: [sql: string, refusal: Refusal][]) {
+	const owner = await connect("none");
+	try {
+		for (const [sql, refusal] of cases) {
+			await owner.query("begin");
+			try {
+				await assert.rejects(owner.query(sql), expected(refusal));
+			} finally {
+				await owner.query("rollback");
+			}
+		}
+	} finally {
+		await owner.end();
+	}
+}
+// When a row was stored is the clock's, so reads are compared without it.
+const unstamped = (read: unknown) =>
+	JSON.parse(
+		JSON.stringify(read, (key, value) =>
+			key === "created_at" ? undefined : value,
+		),
+	);
 const readDeal = async () =>
-	(await db.query("select everything_about_deal($1) as deal", [DEAL])).rows[0]
-		.deal;
+	unstamped(
+		(await db.query("select everything_about_deal($1) as deal", [DEAL])).rows[0]
+			.deal,
+	);
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url)
@@ -541,10 +636,11 @@ const name = `engine_next_${randomUUID().replaceAll("-", "")}`;
 const admin = new pg.Client({ connectionString: url });
 const target = new URL(url);
 target.pathname = `/${name}`;
-const connect = async () => {
+// Every test works as the engine; only loading the schema needs its owner (role none).
+const connect = async (role = "engine") => {
 	const client = new pg.Client({
 		connectionString: target.href,
-		options: "-c search_path=next -c TimeZone=UTC",
+		options: `-c search_path=next -c TimeZone=UTC -c role=${role}`,
 	});
 	await client.connect();
 	return client;
@@ -554,12 +650,9 @@ let db: pg.Client;
 before(async () => {
 	await admin.connect();
 	await admin.query(`create database "${name}" template template0`);
-	db = await connect();
-	const schema = await readFile(
-		new URL("../schema/next.sql", import.meta.url),
-		"utf8",
-	);
-	await db.query(`create schema next; ${schema} ${SEED} ${MARKETING_SEED}`);
+	db = await connect("none");
+	await db.query(`create schema next; ${SCHEMA}`);
+	await db.query(`set role engine; ${SEED} ${MARKETING_SEED}`);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
 			"insert into offer select * from jsonb_populate_record(null::offer, $1)",
@@ -567,8 +660,9 @@ before(async () => {
 		);
 		for (const document of documents)
 			await db.query(
-				`with saved as (insert into document
-					select * from jsonb_populate_record(null::document, $1) returning id)
+				`with saved as (insert into document (id, name, r2_key, email_activity_id)
+					select id, name, r2_key, email_activity_id
+					from jsonb_populate_record(null::document, $1) returning id)
 				insert into offer_document select $2, id from saved`,
 				[document, round.id],
 			);
@@ -651,9 +745,36 @@ test("everything about the LOI deal comes back in one read, each list in order",
 
 for (const [rule, cases] of Object.entries(RULES))
 	test(rule, async () => {
-		for (const [sql, constraint] of cases)
-			await rolledBack(() => assert.rejects(db.query(sql), { constraint }));
+		for (const [sql, refusal] of cases)
+			await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
 	});
+
+for (const [rule, cases] of Object.entries(OWNER_RULES))
+	test(rule, () => asOwner(cases));
+
+test("the engine adds, changes and removes only what its grants name, and empties no table", async () => {
+	const { rows } = await db.query(
+		`select c.relname as table,
+			array_agg(a.attname::text order by a.attname)
+				filter (where has_column_privilege(c.oid, a.attnum, 'update')) as changeable,
+			has_table_privilege(c.oid, 'insert') as addable,
+			has_table_privilege(c.oid, 'delete') as removable,
+			has_table_privilege(c.oid, 'truncate') as emptied
+		from pg_class c join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+		where c.relnamespace = 'next'::regnamespace and c.relkind = 'r'
+		group by c.oid order by c.relname`,
+	);
+	assert.deepEqual(
+		rows,
+		rows.map(({ table }) => ({
+			table,
+			changeable: CHANGEABLE[table] ?? null,
+			addable: table !== "platform_metric",
+			removable: REMOVABLE.includes(table),
+			emptied: false,
+		})),
+	);
+});
 
 test("a scheduled post can be published", () =>
 	rolledBack(() =>
@@ -696,7 +817,7 @@ test("posts compare at day 7, best and worst per account", async () => {
 		"2026-06-25T00:00:00+00:00",
 	]);
 	const checklistOnStatCard = ranked(4, CHECKLIST_IDEA, STAT_CARD, 0.04, 160);
-	assert.deepEqual(rows[0].read, {
+	assert.deepEqual(unstamped(rows[0].read), {
 		accounts: [
 			account(
 				INSTAGRAM,
