@@ -1260,3 +1260,23 @@ test("today's reminders and meeting prep the engine cannot read fail, and the ru
 		/\nnot compared: result, read, record ID\nfailed {2}today's reminders {2}-\nfailed {2}today's reminders {2}-\nfailed {2}meeting prep {2}-\n$/,
 	);
 });
+
+test("today's reminders that still have pages after the last page read are at cap, not matched", async () => {
+	const page = (n: number) => ({
+		items: [{ item_kind: "next_action", id: uuid(70 + n), due_on: clock }],
+		total: 300,
+		has_more: true,
+		next_cursor: String(n + 1),
+	});
+	const cutOff = (ask: Ask) =>
+		ask.read === "today's reminders"
+			? { pages: [1, 2, 3, 4, 5].map(page) }
+			: answer(ask);
+	const { run } = await runWith(cutOff, cutOff);
+	assert.deepEqual(todayReads(run), ["at cap", "at cap", "matched"]);
+	assert.equal(exitCode(run), 0);
+	assert.match(
+		report("production", run),
+		/\ntoday's reminders +2 +0 +0 +2 +0 +0 +0\n/,
+	);
+});
