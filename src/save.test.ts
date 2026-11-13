@@ -139,7 +139,7 @@ test("saves", (t) =>
 						{
 							...row,
 							verb: "other-save",
-							occurred_at: "2030-01-15 18:00:00+00",
+							occurred_at: "2030-01-15 12:00:00-06",
 							after_lock: true,
 						},
 					],
