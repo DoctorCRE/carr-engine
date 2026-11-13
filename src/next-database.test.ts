@@ -264,6 +264,10 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			`update offer set status = 'superseded' where round = 3; ${NEXT_ROUND}; ${CHECK_AT_COMMIT}`,
 			"offer_superseded_by_later_acceptance",
 		],
+		[
+			`${offer(4, 3, AGENT, "listing_agent", { status: "superseded" })}; ${CHECK_AT_COMMIT}`,
+			"offer_superseded_by_later_acceptance",
+		],
 	],
 };
 
