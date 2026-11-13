@@ -1,6 +1,6 @@
 // The Outlook job on a partner's Mac publishes their next fourteen days of
-// meetings as one snapshot; the agenda shows the next seven. Every gap the
-// snapshot reports becomes a note, and an agenda with any note is partial.
+// meetings as one snapshot; this shows the next seven. Every gap the snapshot
+// reports becomes a note, and an answer with any note is partial.
 const SCHEMA = "carr-calendar-agenda.v1";
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -33,7 +33,23 @@ type Conflict = Record<
 	"title" | "start" | "end" | "overlap_start" | "overlap_end",
 	string
 >;
-export type Meeting = ReturnType<typeof meetingFrom>;
+export type Meeting = {
+	start: string;
+	end: string;
+	title: string;
+	location: string | null;
+	organizer: Person;
+	attendees: Person[];
+	attendee_count: number;
+	all_day: boolean;
+	recurring: boolean;
+	time_changed: boolean;
+	times: string[];
+	conflict: boolean;
+	schedule_conflict: boolean;
+	schedule_conflicts: Conflict[];
+	schedule_conflicts_omitted: number;
+};
 
 export const UNAVAILABLE = {
 	state: "unavailable",
@@ -79,11 +95,22 @@ const person = (value: unknown): Person => ({
 	email: text(field(value, "email"))?.toLowerCase() ?? null,
 });
 
-function meetingFrom(row: unknown, start: number, end: number, title: string) {
+function alternateTimes(listed: unknown) {
+	if (!Array.isArray(listed))
+		return { shown: [], unread: listed === undefined ? 0 : 1 };
+	const parsed = listed.map(instant);
+	const shown = parsed.filter((at) => at !== null).map(iso);
+	return { shown, unread: parsed.length - shown.length };
+}
+
+function meetingFrom(
+	row: unknown,
+	{ start, end, title }: { start: number; end: number; title: string },
+	times: string[],
+): Meeting {
 	const listed = field(row, "attendees");
 	const attendees = Array.isArray(listed) ? listed.map(person) : [];
 	const count = field(row, "attendee_count");
-	const times = field(row, "times");
 	return {
 		start: iso(start),
 		end: iso(end),
@@ -98,22 +125,13 @@ function meetingFrom(row: unknown, start: number, end: number, title: string) {
 		all_day: field(row, "all_day") === true,
 		recurring: field(row, "recurring") === true,
 		time_changed: field(row, "time_changed") === true,
-		times: (Array.isArray(times) ? times : []).flatMap((t) => {
-			const at = instant(t);
-			return at === null ? [] : [iso(at)];
-		}),
+		times,
 		conflict: field(row, "conflict") === true,
 		schedule_conflict: false,
-		schedule_conflicts: [] as Conflict[],
+		schedule_conflicts: [],
 		schedule_conflicts_omitted: 0,
 	};
 }
-
-const unreadTimes = (row: unknown) => {
-	const times = field(row, "times");
-	if (!Array.isArray(times)) return times === undefined ? 0 : 1;
-	return times.filter((t) => instant(t) === null).length;
-};
 
 const timed = (meeting: Meeting) =>
 	!meeting.all_day && meeting.end > meeting.start;
@@ -173,10 +191,15 @@ function reviewFrom(row: unknown) {
 		start !== null &&
 		end !== null &&
 		end > start;
-	return valid && title && prompt ? { key, title, start, end, prompt } : null;
+	return valid && title && prompt
+		? { key, title, start, end, state: "needs_review" as const, prompt }
+		: null;
 }
 
-export function agendaFromSnapshot(snapshot: unknown, now: Date) {
+// Null when the partner never published a snapshot, so each caller says that
+// its own way.
+export function meetingsFromSnapshot(snapshot: unknown, now: Date) {
+	if (snapshot === undefined || snapshot === null) return null;
 	const nowMs = now.getTime();
 	const observed = instant(field(snapshot, "observed_at"));
 	const rows = field(snapshot, "items");
@@ -192,8 +215,9 @@ export function agendaFromSnapshot(snapshot: unknown, now: Date) {
 		const title = text(field(row, "title"));
 		if (start === null || end === null || end < start || !title) malformed++;
 		else if (end > nowMs && start < nowMs + 7 * DAY_MS) {
-			meetings.push(meetingFrom(row, start, end, title));
-			unread += unreadTimes(row);
+			const times = alternateTimes(field(row, "times"));
+			meetings.push(meetingFrom(row, { start, end, title }, times.shown));
+			unread += times.unread;
 		}
 	}
 	meetings.sort(
@@ -204,29 +228,25 @@ export function agendaFromSnapshot(snapshot: unknown, now: Date) {
 	const stale = nowMs - observed > 18 * HOUR_MS;
 	const future = observed > nowMs;
 	const listed = field(snapshot, "follow_up_reviews");
-	const parsed = (Array.isArray(listed) ? listed : []).map(reviewFrom);
-	const reviews = parsed
-		.flatMap((review) =>
-			review &&
-			!stale &&
-			!future &&
-			review.end <= Math.min(observed, nowMs) &&
-			review.end > nowMs - DAY_MS
-				? [
-						{
-							key: review.key,
-							title: review.title,
-							start: iso(review.start),
-							end: iso(review.end),
-							state: "needs_review" as const,
-							prompt: review.prompt,
-						},
-					]
-				: [],
+	const parsed = Array.isArray(listed) ? listed.map(reviewFrom) : [];
+	const valid = parsed.filter((review) => review !== null);
+	const reviews = valid
+		.filter(
+			(review) =>
+				!stale &&
+				!future &&
+				review.end <= Math.min(observed, nowMs) &&
+				review.end > nowMs - DAY_MS,
 		)
+		.map((review) => ({
+			...review,
+			start: iso(review.start),
+			end: iso(review.end),
+		}))
 		.sort((a, b) => b.end.localeCompare(a.end) || a.key.localeCompare(b.key));
 	const malformedReviews =
-		parsed.filter((review) => review === null).length +
+		parsed.length -
+		valid.length +
 		(listed !== undefined && !Array.isArray(listed) ? 1 : 0);
 
 	const warnings = field(snapshot, "warnings");
