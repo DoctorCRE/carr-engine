@@ -1,6 +1,11 @@
 import { WORKSPACES, type Workspace } from "../deals/board.ts";
 import { UUID } from "../uuid.ts";
-import { compareAnswers, isRecord, type ReadShape } from "./answers.ts";
+import {
+	compareAnswers,
+	isRecord,
+	nextCursor,
+	type ReadShape,
+} from "./answers.ts";
 import {
 	boardShape,
 	captureQueueShape,
@@ -26,6 +31,7 @@ import {
 	territoryShape,
 } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
+import { meetingPrepShape, todayShape } from "./today-shapes.ts";
 
 export class StopRun extends Error {}
 
@@ -49,7 +55,10 @@ export type Ask =
 	| { read: "vendor markets" }
 	| { read: "relationships" }
 	// `record` is the opened client or vendor whose name is asked.
-	| { read: "recent activity"; name: string; record: string };
+	| { read: "recent activity"; name: string; record: string }
+	// With no owners, the old default queue of every owner.
+	| { read: "today's reminders"; owners?: "partners" }
+	| { read: "meeting prep" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -96,6 +105,8 @@ export const READS: Record<Ask["read"], Read> = {
 	"vendor markets": { shape: marketsShape, prefix: "markets" },
 	relationships: { shape: networkShape, prefix: "network" },
 	"recent activity": { shape: activityShape, prefix: "activity" },
+	"today's reminders": { shape: todayShape, prefix: "today" },
+	"meeting prep": { shape: meetingPrepShape, prefix: "prep" },
 };
 
 // Each opened lead re-sends the whole board, so a fixed number spread over the
@@ -143,6 +154,12 @@ function activityName(answer: unknown) {
 	return name && ref && name.length <= NAME_MAX ? name : null;
 }
 
+// A walk cut off at its page limit ends on a page that still points on.
+const cutOff = (answer: unknown) =>
+	isRecord(answer) &&
+	Array.isArray(answer.pages) &&
+	nextCursor(answer.pages.at(-1)) !== undefined;
+
 const FEED_DAYS = 3;
 
 // Built as the app builds its start cursor: a time and the zero ID, base64url without padding.
@@ -185,6 +202,10 @@ export async function compareDeals(
 		// The app's first asks: every market, and the whole map.
 		{ read: "vendor markets" },
 		{ read: "relationships" },
+		{ read: "today's reminders" },
+		{ read: "today's reminders", owners: "partners" },
+		// Both systems read the signed-in partner's own calendar.
+		{ read: "meeting prep" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
@@ -250,7 +271,7 @@ export async function compareDeals(
 		const result =
 			comparison.differences.length > 0
 				? "different"
-				: comparison.capAmbiguous.length > 0
+				: comparison.capAmbiguous.length > 0 || cutOff(old)
 					? "at cap"
 					: comparison.tiedRowsReordered.length > 0
 						? "tie order"
