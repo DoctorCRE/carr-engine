@@ -342,7 +342,8 @@ create table post (
 	unique (social_account_id, platform_post_id)
 );
 
--- A retry is a new post, so a failure stays on record. Truncating post must cascade to measurement, whose guard refuses it.
+-- A retry is a new post, so a failure stays on record.
+-- No truncate guard: truncating post must cascade to measurement, whose guard refuses it.
 create trigger post_keeps_history before delete on post
 	for each row execute function keeps_history();
 create trigger post_status_final before update of status on post
@@ -400,7 +401,7 @@ begin atomic
 	)
 	select jsonb_build_object(
 		'accounts', (
-			select coalesce(jsonb_agg(to_jsonb(a) - 'owner_party_id' || jsonb_build_object(
+			select coalesce(jsonb_agg(to_jsonb(a) || jsonb_build_object(
 				'posts', r.posts, 'best', r.best - 'social_account_id', 'worst', r.worst - 'social_account_id'
 			) order by a.platform, a.handle), '[]')
 			from social_account a join ranked r on r.social_account_id = a.id
