@@ -92,12 +92,47 @@ test("a missing, forged, misdirected or expired token is refused", async () => {
 });
 
 test("the door stays shut until Access is configured", async () => {
+	const { asked, env } = oldSide();
+	for (const config of [
+		{ ACCESS_AUD: "" },
+		{ ACCESS_TEAM_DOMAIN: "" },
+		{ ACCESS_TEAM_DOMAIN: "example.cloudflareaccess.com" },
+		{ ACCESS_TEAM_DOMAIN: "http://example.cloudflareaccess.com" },
+	]) {
+		const response = await ask("joe/old/pipeline/changes", {
+			...env,
+			...config,
+		});
+		assert.deepEqual(
+			[response.status, await response.json()],
+			[503, { error: "compare_unconfigured" }],
+			JSON.stringify(config),
+		);
+	}
+	assert.equal(asked.length, 0);
+});
+
+test("no answer from the door may be cached", async () => {
 	const { env } = oldSide();
-	const response = await ask("joe/engine/whoami", { ...env, ACCESS_AUD: "" });
-	assert.deepEqual(
-		[response.status, await response.json()],
-		[503, { error: "compare_unconfigured" }],
-	);
+	for (const [path, init] of [
+		["joe/engine/whoami", {}],
+		["joe/old/mcp/find", {}],
+		["joe/engine/whoami", { jwt: "" }],
+		["joe/engine/whoami", { method: "POST" }],
+		["bob/engine/whoami", {}],
+	] as const) {
+		const response = await ask(path, env, init);
+		assert.equal(
+			response.headers.get("cache-control"),
+			"no-store",
+			`${path} ${response.status}`,
+		);
+	}
+	const unconfigured = await ask("joe/engine/whoami", {
+		...env,
+		ACCESS_AUD: "",
+	});
+	assert.equal(unconfigured.headers.get("cache-control"), "no-store");
 });
 
 test("only GET is answered", async () => {

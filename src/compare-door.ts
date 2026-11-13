@@ -28,8 +28,10 @@ function keysOf(team: string) {
 // A request that skips Access, such as one to a workers.dev or preview URL,
 // still reaches this door, so it checks the token itself.
 export const compareDoor = createMiddleware<CompareEnv>(async (c, next) => {
+	c.header("Cache-Control", "no-store");
 	const { ACCESS_TEAM_DOMAIN: team, ACCESS_AUD: audience } = c.env;
-	if (!team || !audience) return c.json({ error: "compare_unconfigured" }, 503);
+	if (!team || URL.parse(team)?.protocol !== "https:" || !audience)
+		return c.json({ error: "compare_unconfigured" }, 503);
 	try {
 		await jwtVerify(
 			c.req.header("Cf-Access-Jwt-Assertion") ?? "",
@@ -52,6 +54,7 @@ export const compareDoor = createMiddleware<CompareEnv>(async (c, next) => {
 		return c.json({ error: "unknown_partner" }, 400);
 	c.set("partner", { slug, display: slug });
 	await next();
+	c.header("Cache-Control", "no-store");
 });
 
 // A fresh request, so no browser header such as Origin reaches the old door.
