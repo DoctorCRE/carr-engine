@@ -105,30 +105,43 @@ const ids = {
 	laterDate: "10000000-0000-4000-8000-000000000005",
 	passedDate: "10000000-0000-4000-8000-000000000006",
 	inbox: "10000000-0000-4000-8000-000000000007",
+	client: "30000000-0000-4000-8000-000000000001",
+	deal: "30000000-0000-4000-8000-000000000002",
 };
+const joe = "20000000-0000-4000-8000-000000000001";
 
 test("due actions lead, then near critical dates, then the rest, a page at a time", () =>
 	withSnapshot(async (url) => {
 		const db = new pg.Client({ connectionString: url });
 		await db.connect();
 		try {
-			// The capture rows behind a post-call action are not what this tests.
-			await db.query(`set session_replication_role = replica;
-			insert into actor (id, slug, kind, display_name) values
-				('20000000-0000-4000-8000-000000000001', 'joe', 'human', 'Example'),
+			await db.query(`insert into actor (id, slug, kind, display_name) values
+				('${joe}', 'joe', 'human', 'Example'),
 				('20000000-0000-4000-8000-000000000002', 'dell-local', 'automation', 'Example'),
 				('20000000-0000-4000-8000-000000000003', 'example-bot', 'automation', 'Example');
+			insert into contact_state (slug, label, contactable, sort) values ('active', 'Example', true, 1);
+			insert into deal_phase (slug, label) values ('today-open', 'Example');
+			insert into deal_type_ref (slug, label, sort) values ('today-lease', 'Example', 1);
+			insert into party (id, kind, name, created_by, updated_by) values
+				('30000000-0000-4000-8000-000000000003', 'org', 'Quibble Dental', '${joe}', '${joe}');
+			insert into client (id, party_id, roster_ref, created_by, updated_by) values
+				('${ids.client}', '30000000-0000-4000-8000-000000000003', 'Example Roster', '${joe}', '${joe}');
+			insert into deal (id, client_id, name, deal_type, phase, created_by, updated_by) values
+				('${ids.deal}', '${ids.client}', 'Example Suite Lease', 'today-lease', 'today-open', '${joe}', '${joe}');
 			insert into next_action (id, subject_type, subject_id, owner_id, due_on, description, created_by) values
-				('${ids.partnerAction}', 'deal', gen_random_uuid(), '20000000-0000-4000-8000-000000000001', current_date - 1, 'Example', '20000000-0000-4000-8000-000000000001'),
-				('${ids.machineAction}', 'deal', gen_random_uuid(), '20000000-0000-4000-8000-000000000003', current_date - 3, 'Example', '20000000-0000-4000-8000-000000000001');
-			insert into capture_post_call_action (id, candidate_id, deal_id, owner_id, due_on, description, accepted_by) values
-				('${ids.postCall}', gen_random_uuid(), gen_random_uuid(), '20000000-0000-4000-8000-000000000002', current_date - 2, 'Example', '20000000-0000-4000-8000-000000000001');
+				('${ids.partnerAction}', 'client', '${ids.client}', '${joe}', current_date - 1, 'Example', '${joe}'),
+				('${ids.machineAction}', 'deal', '${ids.deal}', '20000000-0000-4000-8000-000000000003', current_date - 3, 'Example', '${joe}');
 			insert into critical_date (id, deal_id, kind, due_on, source, created_by) values
-				('${ids.laterDate}', gen_random_uuid(), 'notice', current_date + 9, 'manual', '20000000-0000-4000-8000-000000000001'),
-				('${ids.soonDate}', gen_random_uuid(), 'option', current_date + 2, 'manual', '20000000-0000-4000-8000-000000000001'),
-				('${ids.passedDate}', gen_random_uuid(), 'renewal', current_date - 4, 'manual', '20000000-0000-4000-8000-000000000001');
+				('${ids.laterDate}', '${ids.deal}', 'notice', current_date + 9, 'manual', '${joe}'),
+				('${ids.soonDate}', '${ids.deal}', 'option', current_date + 2, 'manual', '${joe}'),
+				('${ids.passedDate}', '${ids.deal}', 'renewal', current_date - 4, 'manual', '${joe}');
 			insert into ingest_inbox (id, received_at, source, payload) values
-				('${ids.inbox}', now() - interval '2 days', 'email', '{}');`);
+				('${ids.inbox}', now() - interval '2 days', 'email', '{"organizer": " Example Organizer "}');
+			-- The capture rows behind a post-call action are not what this tests.
+			set session_replication_role = replica;
+			insert into capture_post_call_action (id, candidate_id, deal_id, owner_id, due_on, description, accepted_by) values
+				('${ids.postCall}', gen_random_uuid(), '${ids.deal}', '20000000-0000-4000-8000-000000000002', current_date - 2, 'Example', '${joe}');
+			set session_replication_role = origin;`);
 		} finally {
 			await db.end();
 		}
@@ -154,6 +167,19 @@ test("due actions lead, then near critical dates, then the rest, a page at a tim
 				ids.laterDate,
 				ids.inbox,
 				ids.passedDate,
+			],
+		);
+		const deal = ["Example Suite Lease", null];
+		assert.deepEqual(
+			all.items.map((item) => [item.subject_name, item.subject_ref]),
+			[
+				["Quibble Dental", "Example Roster"],
+				deal,
+				deal,
+				deal,
+				deal,
+				["Example Organizer", null],
+				deal,
 			],
 		);
 		assert.deepEqual(Object.keys(all.items[0] ?? {}), [
