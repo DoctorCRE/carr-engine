@@ -36,7 +36,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it.
 7. A round is never rewritten or removed, not even by emptying the table. Only its status changes. New terms are the next round, and `withdrawn` takes a round back.
 8. At most one round per deal is accepted at a time.
 9. Rent, NNN, term, TI, free rent, the escalator and days after delivery are never negative.
-10. A round's status moves only out of `open`, or from `accepted` to `superseded`. Every other status is final.
+10. A round's status moves only out of `open`, or from `accepted` to `superseded`. Every other status is final. A round is superseded only when a later round of the same deal is accepted, checked when the change is saved.
 11. Rent starts on a date or a number of days after delivery, never both.
 12. A person-at-company link joins a person to a company, ends no earlier than it starts, and is stored once.
 13. A deal's phase changes are never rewritten or removed, each phase comes from the list, and a move to dead says why.
@@ -60,7 +60,7 @@ Unusual terms are rare and are read by people, not computed, so the text field i
 
 ## When a deal falls apart
 
-A round's status records what happened to that round, and the deal's phase records where the deal stands. An accepted round stays accepted when the deal later dies. The deal moves to the dead phase, with a date and a reason, and nothing is deleted. If talks restart, the deal moves to a live phase again and the new rounds answer the last one. Before a new round is accepted, the earlier accepted round becomes `superseded`, so a deal has one current accepted round. A mistaken status is fixed by a new round, as a mistaken term is.
+A round's status records what happened to that round, and the deal's phase records where the deal stands. An accepted round stays accepted when the deal later dies. The deal moves to the dead phase, with a date and a reason, and nothing is deleted. If talks restart, the deal moves to a live phase again and the new rounds answer the last one. When a new round is accepted, the earlier accepted round becomes `superseded` in the same save, so a deal has one current accepted round. An accepted round is never superseded on its own. A mistaken status is fixed by a new round, as a mistaken term is.
 
 ## Next slice (#199): activity, emails and next steps
 

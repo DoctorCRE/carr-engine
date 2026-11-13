@@ -148,6 +148,24 @@ end $$;
 create trigger offer_status_moves before update of status on offer
 	for each row when (new.status is distinct from old.status) execute function offer_status_moves();
 
+create function offer_superseded_by_later_acceptance() returns trigger
+language plpgsql as $$
+begin
+	if not exists (
+		select from offer
+		where deal_id = new.deal_id and round > new.round and status = 'accepted'
+	) then
+		raise exception 'a round is superseded only when a later round of its deal is accepted'
+			using errcode = 'check_violation', constraint = 'offer_superseded_by_later_acceptance';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, because the earlier round is superseded before the later one can be accepted.
+create constraint trigger offer_superseded_by_later_acceptance after insert or update of status on offer
+	initially deferred for each row when (new.status = 'superseded')
+	execute function offer_superseded_by_later_acceptance();
+
 create table offer_document (
 	offer_id uuid not null references offer,
 	document_id uuid not null references document,

@@ -116,6 +116,8 @@ const offer = (
 	values ('${DEAL}', ${round}, ${answers}, '${from}', '${role}', now(), ${Object.values(row).map((value) => `'${value}'`)})`;
 };
 const NEXT_ROUND = offer(4, 3, AGENT, "listing_agent");
+// Runs the checks commit would run, inside a transaction the test still rolls back.
+const CHECK_AT_COMMIT = "set constraints all immediate";
 const TERMS = [
 	"rent_per_sf_yr",
 	"nnn_per_sf_yr",
@@ -173,6 +175,11 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			],
 			[
 				`insert into party_company (person_id, company_id, started_on) values ('${AGENT}', '${BROKERAGES[0]}', '2020-01-06')`,
+				"party_company_person_id_company_id_started_on_key",
+			],
+			[
+				`insert into party_company (person_id, company_id)
+				values ('${AGENT}', '${CLIENT}'), ('${AGENT}', '${CLIENT}')`,
 				"party_company_person_id_company_id_started_on_key",
 			],
 		],
@@ -246,6 +253,16 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 		[
 			`${NEXT_ROUND}; update offer set status = 'superseded' where round = 4`,
 			"offer_status_moves",
+		],
+	],
+	"a round is superseded only when a later round of its deal is accepted": [
+		[
+			`update offer set status = 'superseded' where round = 3; ${CHECK_AT_COMMIT}`,
+			"offer_superseded_by_later_acceptance",
+		],
+		[
+			`update offer set status = 'superseded' where round = 3; ${NEXT_ROUND}; ${CHECK_AT_COMMIT}`,
+			"offer_superseded_by_later_acceptance",
 		],
 	],
 };
@@ -349,14 +366,15 @@ test("a deal that dies after acceptance keeps its accepted round, and a revival 
 	rolledBack(async () => {
 		await db.query(
 			`insert into deal_phase_change values
-				($1, '2026-04-01T15:00:00+00:00', 'dead', 'Example financing fell through'),
-				($1, '2026-05-01T15:00:00+00:00', 'negotiation', 'Talks restarted')`,
+				($1, '2026-05-01T15:00:00+00:00', 'negotiation', 'Talks restarted'),
+				($1, '2026-04-01T15:00:00+00:00', 'dead', 'Example financing fell through')`,
 			[DEAL],
 		);
 		assert.equal((await readDeal()).offers[2].status, "accepted");
 		await db.query("update offer set status = 'superseded' where round = 3");
 		await db.query(NEXT_ROUND);
 		await db.query("update offer set status = 'accepted' where round = 4");
+		await db.query(CHECK_AT_COMMIT);
 		const deal = await readDeal();
 		assert.deepEqual(
 			deal.offers.map(({ status }: { status: string }) => status),
