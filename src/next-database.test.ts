@@ -160,6 +160,7 @@ const CHECKLIST_IDEA = id(511);
 const STAT_CARD = id(520);
 const PHOTO = id(521);
 const post = (n: number) => id(530 + n);
+const ENGINE_FROM = "2026-06-08T05:00:00+00:00";
 const POST_ROWS = [
 	[1, LINKEDIN, RENT_IDEA, STAT_CARD, "2026-06-01", "published"],
 	[2, LINKEDIN, CHECKLIST_IDEA, PHOTO, "2026-06-03", "published"],
@@ -189,18 +190,23 @@ const READINGS: [number, number, Record<string, number | null>][] = [
 ];
 const MARKETING_SEED = `
 insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Jordan Example');
-insert into social_account (id, platform, owner_party_id, handle) values
-	('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example'), ('${X}', 'x', '${PARTNER}', 'jordanexample'),
-	('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example');
+insert into social_account (id, platform, owner_party_id, handle, platform_account_id, engine_publishes_from) values
+	('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example', 'example-person-1', '${ENGINE_FROM}'),
+	('${X}', 'x', '${PARTNER}', 'jordanexample', null, null),
+	('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example', null, null);
+insert into social_sign_in values ('${LINKEDIN}', 'example-person-1', '${PARTNER}',
+	'2026-06-01T15:00:00+00:00', '2026-07-31T15:00:00+00:00', '{openid,profile,w_member_social}');
 insert into idea (id, angle, hook, pillar) values
 	('${RENT_IDEA}', 'Example rents rose this year', 'number', 'local_market'),
 	('${CHECKLIST_IDEA}', 'Five example lease questions', 'checklist', 'education');
 insert into design_template (id, name) values ('${STAT_CARD}', 'Example stat card'), ('${PHOTO}', 'Example photo backdrop');
-insert into post (id, social_account_id, platform, idea_id, design_template_id, scheduled_at, status, platform_post_id, published_at)
+insert into post (id, social_account_id, platform, format, idea_id, design_template_id, scheduled_at, status, reason,
+	platform_post_id, published_at)
 values ${POST_ROWS.map(
 	([n, account, idea, template, day, status]) =>
-		`('${post(n)}', '${account}', (select platform from social_account where id = '${account}'), '${idea}',
-		${template && `'${template}'`}, '${day}T15:00:00+00:00', '${status}', ${
+		`('${post(n)}', '${account}', (select platform from social_account where id = '${account}'),
+		'${template ? "photo" : "text"}', '${idea}', ${template && `'${template}'`}, '${day}T15:00:00+00:00', '${status}',
+		${status === "failed" ? "'Example: the platform refused it'" : "null"}, ${
 			status === "published"
 				? `'example-${n}', '${day}T15:00:00+00:00'`
 				: "null, null"
@@ -216,17 +222,25 @@ from post p join (values ${READINGS.flatMap(([n, hours, values]) =>
 	),
 )}) r (post_id, hours, metric, value) on r.post_id = p.id;
 `;
-const newPost = (row: Record<string, string>) => {
-	const post = {
-		social_account_id: X,
-		platform: "x",
+const insert = (table: string, row: Record<string, string | number | null>) =>
+	`insert into ${table} (${Object.keys(row)}) values (${Object.values(row).map(
+		(value) => (value === null ? "null" : `'${value}'`),
+	)})`;
+const newPost = (row: Record<string, string>) =>
+	insert("post", {
+		social_account_id: LINKEDIN,
+		platform: "linkedin",
+		format: "photo",
 		scheduled_at: "2026-06-09",
 		...row,
-	};
-	return `insert into post (${Object.keys(post)}) values (${Object.values(post).map((value) => `'${value}'`)})`;
+	});
+const PUBLISHED = {
+	status: "published",
+	platform_post_id: "example-new",
+	published_at: "2026-06-09",
 };
-const newReading = (row: Record<string, string | number | null>) => {
-	const reading = {
+const newReading = (row: Record<string, string | number | null>) =>
+	insert("measurement", {
 		post_id: post(1),
 		platform: "linkedin",
 		metric: "views",
@@ -235,11 +249,18 @@ const newReading = (row: Record<string, string | number | null>) => {
 		value: 1,
 		not_measured_reason: null,
 		...row,
-	};
-	return `insert into measurement (${Object.keys(reading)}) values (${Object.values(
-		reading,
-	).map((value) => (value === null ? "null" : `'${value}'`))})`;
-};
+	});
+const CLAIM = `update post set status = 'publishing' where id = '${post(8)}'`;
+const newSignIn = (row: Record<string, string>) =>
+	insert("social_sign_in", {
+		social_account_id: LINKEDIN,
+		platform_account_id: "example-person-1",
+		signed_in_by_party_id: PARTNER,
+		signed_in_at: "2026-07-30T15:00:00+00:00",
+		expires_at: "2026-09-28T15:00:00+00:00",
+		scopes: "{w_member_social}",
+		...row,
+	});
 const NOT_MEASURED = {
 	value: null,
 	not_measured_reason: "Example: no number came back",
@@ -501,19 +522,67 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			"social_account_handle_check",
 		],
 	],
-	"only the schema adds a platform's metrics": [
+	"a social account's platform id is never blank, used once per platform, and fixed once someone signed in as it":
+		[
+			[
+				`insert into social_account (platform, owner_party_id, handle, platform_account_id)
+				values ('linkedin', '${PARTNER}', 'another-example', 'example-person-1')`,
+				"social_account_platform_platform_account_id_key",
+			],
+			[
+				`update social_account set platform_account_id = ' ' where id = '${X}'`,
+				"social_account_platform_account_id_check",
+			],
+			[
+				`update social_account set platform_account_id = 'example-person-2' where id = '${LINKEDIN}'`,
+				"social_sign_in_social_account_id_platform_account_id_fkey",
+			],
+		],
+	"a sign-in is as its account's own platform id, expires after it starts, and is never rewritten or removed":
+		[
+			[
+				newSignIn({ platform_account_id: "example-person-2" }),
+				"social_sign_in_social_account_id_platform_account_id_fkey",
+			],
+			[
+				newSignIn({ expires_at: "2026-07-30T15:00:00+00:00" }),
+				"social_sign_in_check",
+			],
+			[
+				"update social_sign_in set expires_at = null",
+				notGranted("social_sign_in"),
+			],
+			["delete from social_sign_in", notGranted("social_sign_in")],
+		],
+	"only the schema adds a platform's metrics or formats": [
 		[
 			"insert into platform_metric values ('x', 'saves')",
 			notGranted("platform_metric"),
 		],
-	],
-	"a post is scheduled, published or failed, and only a published post has its platform id and time":
 		[
-			[
-				newPost({ platform: "linkedin" }),
-				"post_social_account_id_platform_fkey",
-			],
+			"insert into platform_format values ('x', 'document')",
+			notGranted("platform_format"),
+		],
+	],
+	"a post's format is one its platform offers": [
+		[newPost({ format: "reel" }), "post_platform_format_fkey"],
+		[
+			newPost({
+				...PUBLISHED,
+				social_account_id: INSTAGRAM,
+				platform: "instagram",
+				format: "document",
+			}),
+			"post_platform_format_fkey",
+		],
+	],
+	"a post's status is known, only a published post has its platform id and time, and a failed or cancelled one says why":
+		[
+			[newPost({ platform: "x" }), "post_social_account_id_platform_fkey"],
 			[newPost({ status: "removed" }), "post_status_check"],
+			[newPost({ status: "failed" }), "post_failed_or_cancelled_says_why"],
+			[newPost({ reason: "Example" }), "post_failed_or_cancelled_says_why"],
+			[newPost({ status: "cancelled", reason: " " }), "post_reason_check"],
 			[
 				newPost({ status: "published", platform_post_id: "example-9" }),
 				"post_published_has_id_and_time",
@@ -523,23 +592,59 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 				"post_published_has_id_and_time",
 			],
 			[
-				newPost({ status: "failed", platform_post_id: "example-9" }),
+				newPost({
+					status: "failed",
+					reason: "Example",
+					platform_post_id: "example-9",
+				}),
 				"post_published_has_id_and_time",
 			],
 			[
-				newPost({
-					status: "published",
-					platform_post_id: "example-4",
-					published_at: "2026-06-09",
-				}),
+				newPost({ ...PUBLISHED, platform_post_id: "example-1" }),
 				"post_social_account_id_platform_post_id_key",
 			],
 		],
-	"a post is never removed, and a published or failed post never changes": [
+	"a post moves from scheduled to publishing or cancelled, and from publishing to published or failed":
+		[
+			[
+				`update post set status = 'published', platform_post_id = 'example-8', published_at = now()
+				where id = '${post(8)}'`,
+				"post_status_moves",
+			],
+			[
+				`update post set status = 'failed', reason = 'Example' where id = '${post(8)}'`,
+				"post_status_moves",
+			],
+			[
+				`${CLAIM}; update post set status = 'scheduled' where id = '${post(8)}'`,
+				"post_status_moves",
+			],
+			[
+				`${CLAIM}; update post set status = 'cancelled', reason = 'Example' where id = '${post(8)}'`,
+				"post_status_moves",
+			],
+		],
+	"the engine holds only posts scheduled from its account's engine_publishes_from, and none means never":
+		[
+			[
+				newPost({ scheduled_at: "2026-06-08T04:59:59+00:00" }),
+				"post_engine_publishes_from",
+			],
+			[
+				newPost({ social_account_id: X, platform: "x" }),
+				"post_engine_publishes_from",
+			],
+		],
+	"a post is never removed, and published, failed or cancelled is final": [
 		["delete from post where status = 'failed'", notGranted("post")],
 		["truncate post cascade", notGranted("post")],
 		[
-			"update post set status = 'scheduled' where status = 'failed'",
+			"update post set reason = 'Another example' where status = 'failed'",
+			"post_final",
+		],
+		[
+			`update post set status = 'cancelled', reason = 'Example' where id = '${post(8)}';
+		update post set reason = 'Another example' where id = '${post(8)}'`,
 			"post_final",
 		],
 		[`update post set status = 'failed' where id = '${post(1)}'`, "post_final"],
@@ -611,6 +716,28 @@ const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			"platform_metric_pkey",
 		],
 	],
+	"the engine claims no post once its account's engine_publishes_from moves past it":
+		[
+			[
+				`update social_account set engine_publishes_from = '2026-07-01' where id = '${LINKEDIN}';
+			set local role engine; ${CLAIM}`,
+				"post_engine_publishes_from",
+			],
+		],
+	"a platform offers formats from the known lists, each once": [
+		[
+			"insert into platform_format values ('myspace', 'text')",
+			"platform_format_platform_check",
+		],
+		[
+			"insert into platform_format values ('x', 'reel')",
+			"platform_format_format_check",
+		],
+		[
+			"insert into platform_format values ('x', 'text')",
+			"platform_format_pkey",
+		],
+	],
 	"loading the schema refuses an engine role with rights beyond its grants": [
 		[`grant pg_write_all_data to engine; ${RELOAD}`, TOO_MUCH],
 		[`alter role engine bypassrls; ${RELOAD}`, TOO_MUCH],
@@ -628,10 +755,10 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
 	document: ["name"],
 	offer: ["status"],
-	social_account: ["handle"],
+	social_account: ["handle", "platform_account_id"],
 	idea: ["angle", "hook", "pillar"],
 	design_template: ["name"],
-	post: ["platform_post_id", "published_at", "status"],
+	post: ["platform_post_id", "published_at", "reason", "status"],
 };
 const REMOVABLE = [
 	...STAMPED.filter((table) => table !== "offer_document"),
@@ -818,20 +945,38 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 		rows.map(({ table }) => ({
 			table,
 			changeable: CHANGEABLE[table] ?? null,
-			addable: table !== "platform_metric",
+			addable: !["platform_metric", "platform_format"].includes(table),
 			removable: REMOVABLE.includes(table),
 			emptied: false,
 		})),
 	);
 });
 
-test("a scheduled post can be published", () =>
+test("the engine claims a scheduled post, then publishes it", () =>
 	rolledBack(() =>
-		db.query(
-			`update post set status = 'published', platform_post_id = 'example-8', published_at = now() where id = $1`,
-			[post(8)],
-		),
+		db.query(`${CLAIM}; update post set status = 'published', platform_post_id = 'example-8',
+			published_at = now() where id = '${post(8)}'`),
 	));
+
+test("an account's engine_publishes_from waits while the engine claims one of its posts", async () => {
+	const [engine, owner] = [await connect(), await connect("none")];
+	try {
+		await engine.query(`begin; ${CLAIM}`);
+		await owner.query("begin; set local lock_timeout = '100ms'");
+		await assert.rejects(
+			owner.query(
+				"update social_account set engine_publishes_from = null where id = $1",
+				[LINKEDIN],
+			),
+			{ code: "55P03" },
+		);
+	} finally {
+		for (const client of [engine, owner]) {
+			await client.query("rollback");
+			await client.end();
+		}
+	}
+});
 
 test("posts compare at day 7, best and worst per account", async () => {
 	const ranked = (
@@ -858,6 +1003,8 @@ test("posts compare at day 7, best and worst per account", async () => {
 		platform,
 		owner_party_id: PARTNER,
 		handle,
+		platform_account_id: id === LINKEDIN ? "example-person-1" : null,
+		engine_publishes_from: id === LINKEDIN ? ENGINE_FROM : null,
 		posts: posts.length,
 		best: posts[0],
 		worst: posts.at(-1),
@@ -918,8 +1065,8 @@ test("day 7 is 168 hours after publishing, even across a clock change", () =>
 	rolledBack(async () => {
 		await db.query("set local time zone 'America/Chicago'");
 		await db.query(
-			`insert into post (id, social_account_id, platform, scheduled_at, status, platform_post_id, published_at)
-			values ($1, $2, 'x', $3, 'published', 'example-clock', $3)`,
+			`insert into post (id, social_account_id, platform, format, scheduled_at, status, platform_post_id, published_at)
+			values ($1, $2, 'x', 'text', $3, 'published', 'example-clock', $3)`,
 			[post(11), X, "2026-10-29T15:00:00+00:00"],
 		);
 		await db.query(
