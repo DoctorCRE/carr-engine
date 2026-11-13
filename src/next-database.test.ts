@@ -15,32 +15,66 @@ const DEAL = id(5);
 const MISSING = id(99);
 const LENDERS = [id(6), id(7)];
 const LENDER_DEAL = id(8);
+const BROKERAGES = [id(9), id(10)];
 
 const SEED = `
 insert into role (slug, label) values
 	('client', 'Client'), ('listing_agent', 'Listing agent'), ('lender', 'Lender');
 insert into party (id, kind, name) values
 	('${CLIENT}', 'company', 'Example Dental Group'), ('${AGENT}', 'person', 'Avery Example'),
-	('${LENDERS[0]}', 'company', 'Example Bank'), ('${LENDERS[1]}', 'company', 'Example Credit Union');
+	('${LENDERS[0]}', 'company', 'Example Bank'), ('${LENDERS[1]}', 'company', 'Example Credit Union'),
+	('${BROKERAGES[0]}', 'company', 'Example Realty'), ('${BROKERAGES[1]}', 'company', 'Example Properties');
 insert into party_role values ('${CLIENT}', 'client'), ('${AGENT}', 'listing_agent');
+insert into party_company (person_id, company_id, title, started_on, ended_on) values
+	('${AGENT}', '${BROKERAGES[0]}', 'Associate', '2020-01-06', '2025-12-31'),
+	('${AGENT}', '${BROKERAGES[1]}', 'Senior associate', '2026-01-05', null);
+insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal', 'Legal'), ('dead', 'Dead');
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
 insert into deal (id, name) values
 	('${DEAL}', 'Example Dental Springfield Deal'), ('${LENDER_DEAL}', 'Example Loan Deal');
 insert into deal_property values ('${DEAL}', '${PROPERTY}');
 insert into deal_party values ('${DEAL}', '${CLIENT}', 'client'), ('${DEAL}', '${AGENT}', 'listing_agent');
+insert into deal_phase_change values
+	('${DEAL}', '2026-03-02T15:00:00+00:00', 'negotiation', null),
+	('${DEAL}', '2026-03-20T15:00:00+00:00', 'legal', 'LOI accepted');
 `;
+const phases = [
+	{
+		changed_at: "2026-03-02T15:00:00+00:00",
+		phase: "negotiation",
+		reason: null,
+	},
+	{
+		changed_at: "2026-03-20T15:00:00+00:00",
+		phase: "legal",
+		reason: "LOI accepted",
+	},
+];
 
 // Our LOI, the landlord's counter, our response, and their acceptance of it.
 // biome-ignore format: one row per round
 const ROUNDS = [
-	["client", CLIENT, "2026-03-02", "countered", 32, 60, 40, 3, "2026-07-01", null],
-	["listing_agent", AGENT, "2026-03-09", "countered", 34.5, 84, 25, 2, "2026-08-01", null],
-	["client", CLIENT, "2026-03-12", "accepted", 33.5, 84, 30, 2, "2026-08-01", "Example exclusive use"],
+	["client", CLIENT, "2026-03-02", "countered", 32, 9, 60, 40, 3, "2026-07-01", null, null],
+	["listing_agent", AGENT, "2026-03-09", "countered", 34.5, 9.5, 84, 25, 2, null, 90, null],
+	["client", CLIENT, "2026-03-12", "accepted", 33.5, 9.5, 84, 30, 2, null, 90, "Example exclusive use"],
 ] as const;
 const rounds = ROUNDS.map(
 	(
-		[from_role, from_party_id, day, status, rent, term, ti, free, start, other],
+		[
+			from_role,
+			from_party_id,
+			day,
+			status,
+			rent,
+			nnn,
+			term,
+			ti,
+			free,
+			start,
+			days,
+			other,
+		],
 		i,
 	) => ({
 		id: id(100 + i),
@@ -52,11 +86,13 @@ const rounds = ROUNDS.map(
 		offered_at: `${day}T15:00:00+00:00`,
 		status,
 		rent_per_sf_yr: rent,
+		nnn_per_sf_yr: nnn,
 		term_months: term,
 		ti_per_sf: ti,
 		free_rent_months: free,
 		escalation_pct: 3,
 		commencement_on: start,
+		commencement_days_after_delivery: days,
 		other_terms: other,
 		documents: [
 			{
@@ -73,11 +109,22 @@ const offer = (
 	answers: number,
 	from: string,
 	role: string,
-	at = PROPERTY,
-	rent = 30,
-) =>
-	`insert into offer (deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at, rent_per_sf_yr)
-	values ('${DEAL}', '${at}', ${round}, ${answers}, '${from}', '${role}', now(), ${rent})`;
+	terms: Record<string, string | number> = {},
+) => {
+	const row = { property_id: PROPERTY, rent_per_sf_yr: 30, ...terms };
+	return `insert into offer (deal_id, round, answers_round, from_party_id, from_role, offered_at, ${Object.keys(row)})
+	values ('${DEAL}', ${round}, ${answers}, '${from}', '${role}', now(), ${Object.values(row).map((value) => `'${value}'`)})`;
+};
+const NEXT_ROUND = offer(4, 3, AGENT, "listing_agent");
+const TERMS = [
+	"rent_per_sf_yr",
+	"nnn_per_sf_yr",
+	"term_months",
+	"ti_per_sf",
+	"free_rent_months",
+	"escalation_pct",
+	"commencement_days_after_delivery",
+];
 
 const RULES: Record<string, [sql: string, constraint: string][]> = {
 	"a link to a record that does not exist is refused": [
@@ -109,6 +156,43 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			"party_kind_check",
 		],
 	],
+	"a person works at a company, ending no earlier than they started, linked once":
+		[
+			[
+				`insert into party_company (person_id, company_id) values ('${CLIENT}', '${BROKERAGES[0]}')`,
+				"party_company_person_id_person_kind_fkey",
+			],
+			[
+				`insert into party_company (person_id, company_id) values ('${AGENT}', '${AGENT}')`,
+				"party_company_company_id_company_kind_fkey",
+			],
+			[
+				`insert into party_company (person_id, company_id, started_on, ended_on)
+				values ('${AGENT}', '${BROKERAGES[0]}', '2026-02-02', '2026-02-01')`,
+				"party_company_check",
+			],
+			[
+				`insert into party_company (person_id, company_id, started_on) values ('${AGENT}', '${BROKERAGES[0]}', '2020-01-06')`,
+				"party_company_person_id_company_id_started_on_key",
+			],
+		],
+	"a deal's phase history is kept, comes from the phase list, and a dead deal says why":
+		[
+			[
+				`insert into deal_phase_change values ('${DEAL}', now(), 'dead', null)`,
+				"deal_phase_change_dead_has_reason",
+			],
+			[
+				`insert into deal_phase_change values ('${DEAL}', now(), 'paused', null)`,
+				"deal_phase_change_phase_fkey",
+			],
+			[
+				"update deal_phase_change set reason = 'Example'",
+				"deal_phase_change_keeps_history",
+			],
+			["delete from deal_phase_change", "deal_phase_change_keeps_history"],
+			["truncate deal_phase_change", "deal_phase_change_keeps_history"],
+		],
 	"a round number is used once per deal and answers an earlier round": [
 		[offer(3, 2, AGENT, "listing_agent"), "offer_deal_id_round_key"],
 		[offer(4, 4, AGENT, "listing_agent"), "offer_answers_earlier_round"],
@@ -120,28 +204,64 @@ const RULES: Record<string, [sql: string, constraint: string][]> = {
 			"offer_deal_id_from_party_id_from_role_fkey",
 		],
 		[
-			offer(4, 3, AGENT, "listing_agent", ELSEWHERE),
+			offer(4, 3, AGENT, "listing_agent", { property_id: ELSEWHERE }),
 			"offer_deal_id_property_id_fkey",
 		],
 	],
-	"a round's terms are never negative": [
+	"a round's terms are never negative": TERMS.map((term) => [
+		offer(4, 3, AGENT, "listing_agent", { [term]: -1 }),
+		`offer_${term}_check`,
+	]),
+	"rent starts on a date or a number of days after delivery, never both": [
 		[
-			offer(4, 3, AGENT, "listing_agent", PROPERTY, -1),
-			"offer_rent_per_sf_yr_check",
+			offer(4, 3, AGENT, "listing_agent", {
+				commencement_on: "2026-09-01",
+				commencement_days_after_delivery: 90,
+			}),
+			"offer_commencement_date_or_days",
 		],
 	],
 	"a round is never rewritten or removed, and one round per deal is accepted": [
 		[
 			"update offer set rent_per_sf_yr = 30 where round = 1",
-			"offer_keeps_its_terms",
+			"offer_keeps_history",
 		],
-		["delete from offer where round = 3", "offer_keeps_its_terms"],
+		["delete from offer where round = 3", "offer_keeps_history"],
+		["truncate offer cascade", "offer_keeps_history"],
 		[
-			"update offer set status = 'accepted' where round = 1",
+			`${NEXT_ROUND}; update offer set status = 'accepted' where round = 4`,
 			"offer_one_accepted_per_deal",
 		],
 	],
+	"a round's status moves only out of open, or from accepted to superseded": [
+		[
+			"update offer set status = 'accepted' where round = 1",
+			"offer_status_moves",
+		],
+		["update offer set status = 'open' where round = 3", "offer_status_moves"],
+		[
+			"update offer set status = 'superseded' where round = 3; update offer set status = 'accepted' where round = 3",
+			"offer_status_moves",
+		],
+		[
+			`${NEXT_ROUND}; update offer set status = 'superseded' where round = 4`,
+			"offer_status_moves",
+		],
+	],
 };
+
+// Each case runs in a transaction it rolls back, so a broken rule leaves nothing behind.
+async function rolledBack(run: () => Promise<unknown>) {
+	await db.query("begin");
+	try {
+		await run();
+	} finally {
+		await db.query("rollback");
+	}
+}
+const readDeal = async () =>
+	(await db.query("select everything_about_deal($1) as deal", [DEAL])).rows[0]
+		.deal;
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url)
@@ -197,11 +317,9 @@ after(async () => {
 });
 
 test("everything about the LOI deal comes back in one read, rounds in order", async () => {
-	const { rows } = await db.query("select everything_about_deal($1) as deal", [
-		DEAL,
-	]);
-	assert.deepEqual(rows[0].deal, {
+	assert.deepEqual(await readDeal(), {
 		deal: { id: DEAL, name: "Example Dental Springfield Deal" },
+		phases,
 		properties: [{ id: PROPERTY, address: "100 Example Way, Springfield" }],
 		parties: [
 			{
@@ -224,8 +342,31 @@ test("everything about the LOI deal comes back in one read, rounds in order", as
 for (const [rule, cases] of Object.entries(RULES))
 	test(rule, async () => {
 		for (const [sql, constraint] of cases)
-			await assert.rejects(db.query(sql), { constraint });
+			await rolledBack(() => assert.rejects(db.query(sql), { constraint }));
 	});
+
+test("a deal that dies after acceptance keeps its accepted round, and a revival accepts a new one", () =>
+	rolledBack(async () => {
+		await db.query(
+			`insert into deal_phase_change values
+				($1, '2026-04-01T15:00:00+00:00', 'dead', 'Example financing fell through'),
+				($1, '2026-05-01T15:00:00+00:00', 'negotiation', 'Talks restarted')`,
+			[DEAL],
+		);
+		assert.equal((await readDeal()).offers[2].status, "accepted");
+		await db.query("update offer set status = 'superseded' where round = 3");
+		await db.query(NEXT_ROUND);
+		await db.query("update offer set status = 'accepted' where round = 4");
+		const deal = await readDeal();
+		assert.deepEqual(
+			deal.offers.map(({ status }: { status: string }) => status),
+			["countered", "countered", "superseded", "accepted"],
+		);
+		assert.deepEqual(
+			deal.phases.map(({ phase }: { phase: string }) => phase),
+			["negotiation", "legal", "dead", "negotiation"],
+		);
+	}));
 
 test("two partners adding different lenders to one deal at once both keep them", async () => {
 	const writers = [await connect(), await connect()];
