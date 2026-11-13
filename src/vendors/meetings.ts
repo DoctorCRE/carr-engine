@@ -85,7 +85,8 @@ function candidates(db: Reader, { view, q, limit, after }: MeetingsQuery) {
 		order by vendor_id, contact_key limit ${limit + 1}) page`.execute(db);
 }
 
-const isId = (id: unknown) => typeof id === "string" && UUID.test(id);
+const isId = (id: unknown): id is string =>
+	typeof id === "string" && UUID.test(id);
 
 // Where a page starts: the first, or after the row a cursor for the same
 // view and search names.

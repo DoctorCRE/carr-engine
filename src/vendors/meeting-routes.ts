@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { answer, checkFields, Refusal, refuse } from "../answer.ts";
-import { PARTNERS } from "../clients/read.ts";
+import { isOneOf, PARTNERS } from "../clients/read.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import {
 	type MeetingsQuery,
@@ -38,7 +38,7 @@ vendorMeetings.get("/vendor-meetings", async (c) => {
 	if (refused) return refuse(c, refused);
 	const partner = c.get("partner").slug;
 	return answer(c, "read-vendor-meetings", async (db) => {
-		if (!PARTNERS.some((slug) => slug === partner))
+		if (!isOneOf(PARTNERS, partner))
 			return new Refusal(403, "AUTHORIZATION_REFUSED");
 		const query = queryOf(params);
 		if (!query) return new Refusal(400, "vendor_meetings_query_invalid");

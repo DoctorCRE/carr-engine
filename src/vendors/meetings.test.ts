@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import pg from "pg";
 import { withSnapshot } from "../../scripts/test-database.ts";
+import { readSnapshot } from "../reader.ts";
 import worker from "../worker.ts";
+import { readVendorMeetings } from "./meetings.ts";
 
 const meetings = (search: string, connectionString: string, slug = "joe") =>
 	worker.request(
@@ -45,9 +47,7 @@ const finding = (status: string) =>
 		city: "Austin",
 		state: "TX",
 	});
-// The schema copy's check names made-up partners; the read serves joe and dell.
-const SEED = `alter table board_snapshot drop constraint board_snapshot_sponsoring_human_slug_check;
-	set session_replication_role = replica;
+const SEED = `set session_replication_role = replica;
 	insert into actor (id, slug, kind, display_name) values
 		('${ACTOR}', 'joe', 'human', 'Example'), (gen_random_uuid(), 'claude', 'human', 'Example');
 	insert into vendor_category (slug, label, sort) values ('lender', 'Example Lender', 1);
@@ -73,7 +73,7 @@ const SNAPSHOT = JSON.stringify({
 });
 const withMeeting = `insert into board_snapshot (organization_tenant_id, sponsoring_human_slug,
 	board_id, snapshot_json, updated_by_actor_id)
-	values ('carr-internal', 'joe', 'calendar-agenda', '${SNAPSHOT}', '${ACTOR}')`;
+	values ('carr-internal', 'partner_one', 'calendar-agenda', '${SNAPSHOT}', '${ACTOR}')`;
 
 type Answer = {
 	total: number;
@@ -109,10 +109,24 @@ test("suggested people come with the partner's meetings their email attends", ()
 		assert.equal(unplanned.calendar.scheduling.reason, "source_unavailable");
 
 		await run(url, withMeeting);
-		const suggested = await ready(await meetings("", url));
-		assert.deepEqual(people(suggested), [["Pat Example", [], ["Example 0"]]]);
-		assert.equal(suggested.calendar.state, "ready");
-		assert.equal(suggested.calendar.scheduling.state, "ready");
+		const zero = "00000000-0000-0000-0000-000000000000";
+		const suggested = await readSnapshot(url, (db) =>
+			readVendorMeetings(db, "partner_one", {
+				view: "suggested",
+				q: "",
+				limit: 25,
+				after: [zero, zero],
+			}),
+		);
+		assert.deepEqual(
+			suggested?.items.map((item) => [
+				item.contact?.id,
+				item.possible_meetings.map((m) => m.title),
+			]),
+			[[PAT, ["Example 0"]]],
+		);
+		assert.equal(suggested?.calendar.state, "ready");
+		assert.equal(suggested?.calendar.scheduling.state, "ready");
 	}));
 
 test("pages follow their cursor", () =>
