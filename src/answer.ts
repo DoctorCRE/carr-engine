@@ -235,7 +235,8 @@ type Verb =
 	| "quiet-follow-ups"
 	| "read-invoice-tracker"
 	| "read-vendor-markets-v1"
-	| "territory-state-board";
+	| "territory-state-board"
+	| "today-triage";
 
 export async function answer(
 	c: Context<DatabaseEnv>,

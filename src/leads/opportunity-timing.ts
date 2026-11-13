@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { isCalendarDate } from "../calendar-date.ts";
 
 type OpportunityEvent = {
 	date: string;
@@ -59,15 +60,6 @@ const BASES = new Map([
 	["nppes", new Set(["enumeration", "registry_update"])],
 	["pecos", new Set(["publication"])],
 ]);
-
-function isCalendarDate(value: string | undefined) {
-	return (
-		value !== undefined &&
-		/^\d{4}-\d{2}-\d{2}$/.test(value) &&
-		Number.isFinite(Date.parse(`${value}T00:00:00Z`)) &&
-		new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
-	);
-}
 
 function isInstant(value: string) {
 	const match = INSTANT.exec(value);
