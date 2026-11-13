@@ -17,6 +17,10 @@
 	"hyperdrive": [
 		{ "binding": "DATABASE", "id": "371e07c33382489c9ffc401a05f2358e" }
 	],
+	"r2_buckets": [
+		{ "binding": "POST_MEDIA", "bucket_name": "doctorcre-post-media" }
+	],
+	"vars": { "POST_MEDIA_BUCKET": "doctorcre-post-media" },
 	"env": {
 		"staging": {
 			"name": "doctorcre-engine-staging",
@@ -28,7 +32,14 @@
 					"binding": "DATABASE_WRITER",
 					"id": "a3ea8df2724b46198309bf464bcc89ed"
 				}
-			]
+			],
+			"r2_buckets": [
+				{
+					"binding": "POST_MEDIA",
+					"bucket_name": "doctorcre-post-media-staging"
+				}
+			],
+			"vars": { "POST_MEDIA_BUCKET": "doctorcre-post-media-staging" }
 		}
 	}
 }
