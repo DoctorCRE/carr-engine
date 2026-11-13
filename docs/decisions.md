@@ -46,4 +46,4 @@
 
 23. **Not measured is a reason, never a zero (2026-11-13).** In the new database, a marketing reading that could not be taken is stored with a reason and no value, and a row with both or neither is refused. Ratios such as engagement per view are calculated when read. A read leaves out a post that is missing a number it needs, rather than counting the gap as zero (#204).
 
-24. **Posts are compared at day 7 (2026-11-13).** A post's numbers grow for days, so `posts_at_day_7` judges each post by its latest reading at or before 168 hours after publishing, and only once it is that old. The cut is in hours, not days, so a clock change cannot move it (#204).
+24. **Posts are compared at day 7 (2026-11-13).** A post's numbers grow for days, so `posts_at_day_7` judges each post by its latest reading at or before 168 hours after publishing, and only once it is that old. The cut is in hours, not days, so a clock change cannot move it (#204). A post must have every metric its platform reports, from the `platform_metric` rows, so a platform that reports no saves still compares. Each ranked post shows the age of its oldest reading, rather than the read setting a minimum.

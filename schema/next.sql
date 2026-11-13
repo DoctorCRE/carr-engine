@@ -310,11 +310,28 @@ create table social_account (
 	id uuid primary key default gen_random_uuid(),
 	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
 	owner_party_id uuid not null references party,
-	handle text not null
+	handle text not null,
+	unique (id, platform)
 );
 
 -- Platforms ignore case in handles.
 create unique index social_account_one_per_handle on social_account (platform, lower(handle));
+
+-- The seed is a guess until checked against each platform's API.
+create table platform_metric (
+	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
+	metric text not null
+		check (metric in ('views', 'reactions', 'comments', 'shares', 'saves', 'clicks', 'follows')),
+	primary key (platform, metric)
+);
+
+insert into platform_metric
+select platform, unnest(metrics) from (values
+	('x', array['views', 'reactions', 'comments', 'shares', 'clicks', 'follows']),
+	('linkedin', array['views', 'reactions', 'comments', 'shares', 'clicks', 'follows']),
+	('facebook', array['views', 'reactions', 'comments', 'shares', 'clicks']),
+	('instagram', array['views', 'reactions', 'comments', 'shares', 'saves', 'follows'])
+) as reported (platform, metrics);
 
 create table idea (
 	id uuid primary key default gen_random_uuid(),
@@ -330,7 +347,8 @@ create table design_template (
 
 create table post (
 	id uuid primary key default gen_random_uuid(),
-	social_account_id uuid not null references social_account,
+	social_account_id uuid not null,
+	platform text not null,
 	idea_id uuid references idea,
 	design_template_id uuid references design_template,
 	scheduled_at timestamptz not null,
@@ -339,7 +357,9 @@ create table post (
 	published_at timestamptz,
 	constraint post_published_has_id_and_time
 		check (num_nonnulls(platform_post_id, published_at) = case status when 'published' then 2 else 0 end),
-	unique (social_account_id, platform_post_id)
+	unique (social_account_id, platform_post_id),
+	unique (id, platform),
+	foreign key (social_account_id, platform) references social_account (id, platform)
 );
 
 -- A retry is a new post, so a failure stays on record.
@@ -350,15 +370,17 @@ create trigger post_status_final before update of status on post
 	for each row when (old.status <> 'scheduled' and new.status <> old.status) execute function keeps_history();
 
 create table measurement (
-	post_id uuid not null references post,
-	metric text not null
-		check (metric in ('views', 'reactions', 'comments', 'shares', 'saves', 'clicks', 'follows')),
+	post_id uuid not null,
+	platform text not null,
+	metric text not null,
 	taken_at timestamptz not null,
 	source text not null,
 	value bigint check (value >= 0),
 	not_measured_reason text,
 	constraint measurement_value_or_reason check (num_nonnulls(value, not_measured_reason) = 1),
-	primary key (post_id, metric, taken_at, source)
+	primary key (post_id, metric, taken_at, source),
+	foreign key (post_id, platform) references post (id, platform),
+	foreign key (platform, metric) references platform_metric
 );
 
 create trigger measurement_keeps_history before update or delete on measurement
@@ -366,35 +388,39 @@ create trigger measurement_keeps_history before update or delete on measurement
 create trigger measurement_keeps_history_on_truncate before truncate on measurement
 	for each statement execute function keeps_history();
 
--- Posts at least 7 days old by as_of, each judged by its latest reading per metric at day 7.
+-- Posts at least 7 days old by as_of, each judged by its latest reading of each metric its platform reports.
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable
 begin atomic
 	with day_7 as (
-		select distinct on (m.post_id, m.metric) p.*, m.metric, m.value
-		from post p join measurement m on m.post_id = p.id
+		select distinct on (p.id, r.metric) p.*, r.metric, m.value, m.taken_at
+		from post p
+		join platform_metric r on r.platform = p.platform
+			and r.metric in ('views', 'reactions', 'comments', 'shares', 'saves')
 		-- Hours, not days, so the session's time zone cannot move day 7 across a clock change.
-		where p.published_at + interval '168 hours' <= as_of
+		left join measurement m on m.post_id = p.id and m.metric = r.metric
 			and m.taken_at <= p.published_at + interval '168 hours'
-			and m.metric in ('views', 'reactions', 'comments', 'shares', 'saves')
-		order by m.post_id, m.metric, m.taken_at desc, m.source
+		where p.published_at + interval '168 hours' <= as_of
+		order by p.id, r.metric, m.taken_at desc, m.source
 	),
 	compared as (
 		select id, social_account_id, idea_id, design_template_id, published_at,
 			sum(value) filter (where metric <> 'views') / max(value) filter (where metric = 'views')
-				as engagement_per_view
+				as engagement_per_view,
+			-- The oldest reading used: under 168 shows the post was judged before day 7.
+			round(extract(epoch from min(taken_at) - published_at) / 3600, 1) as reading_age_hours
 		from day_7
 		group by id, social_account_id, idea_id, design_template_id, published_at
-		-- A metric not measured at day 7 leaves the post out; it never counts as zero.
-		having count(value) = 5 and max(value) filter (where metric = 'views') > 0
+		-- A reported metric missing or not measured at day 7 leaves the post out; it never counts as zero.
+		having count(value) = count(*) and max(value) filter (where metric = 'views') > 0
 	),
 	ranked as (
 		select social_account_id, count(*) as posts,
 			jsonb_agg(c order by engagement_per_view desc, id) -> 0 as best,
 			jsonb_agg(c order by engagement_per_view, id) -> 0 as worst
 		from (
-			select id, social_account_id, idea_id, design_template_id, published_at,
-				round(engagement_per_view, 4) as engagement_per_view
+			select id, social_account_id, published_at, idea_id, design_template_id,
+				round(engagement_per_view, 4) as engagement_per_view, reading_age_hours
 			from compared
 		) c
 		group by social_account_id
@@ -405,24 +431,6 @@ begin atomic
 				'posts', r.posts, 'best', r.best - 'social_account_id', 'worst', r.worst - 'social_account_id'
 			) order by a.platform, a.handle), '[]')
 			from social_account a join ranked r on r.social_account_id = a.id
-		),
-		'ideas', (
-			select coalesce(jsonb_agg(to_jsonb(i) || jsonb_build_object('posts', g.posts, 'engagement_per_view', g.average)
-				order by g.average desc, i.id), '[]')
-			from idea i join (
-				select idea_id, count(*) as posts, round(avg(engagement_per_view), 4) as average
-				from compared
-				group by idea_id
-			) g on g.idea_id = i.id
-		),
-		'design_templates', (
-			select coalesce(jsonb_agg(to_jsonb(t) || jsonb_build_object('posts', g.posts, 'engagement_per_view', g.average)
-				order by g.average desc, t.id), '[]')
-			from design_template t join (
-				select design_template_id, count(*) as posts, round(avg(engagement_per_view), 4) as average
-				from compared
-				group by design_template_id
-			) g on g.design_template_id = t.id
 		)
 	);
 end;
