@@ -1,6 +1,6 @@
 import { type Expression, type Kysely, sql } from "kysely";
 import type { DB } from "../database.d.ts";
-import { asText } from "../reader.ts";
+import { asText, inJsonbOrder } from "../reader.ts";
 
 type DealId = string | Expression<string | null>;
 
@@ -12,10 +12,11 @@ export const nextStepRequired =
 		"next_step_required",
 	);
 
+// The old cards were jsonb, so the columns follow its key order.
 export const vendorsOf = (db: Kysely<DB>, deal: DealId) =>
 	db
 		.selectFrom("v_deal_room_vendor as v")
-		.select(["party_id", "role", "company", "contact", "note", "updated_at"])
+		.select(["note", "role", "company", "contact", "party_id", "updated_at"])
 		.where("v.deal_id", "=", deal)
 		.orderBy("v.role")
 		.orderBy(sql`v.company->>'name'`)
@@ -28,10 +29,20 @@ export const clientPortalUrlOf = (db: Kysely<DB>, deal: DealId) =>
 		.select("cp.client_portal_url")
 		.where("cp.deal_id", "=", deal);
 
+// The old read printed this row as jsonb, so the columns follow its key order.
 export const phaseChangeOf = (db: Kysely<DB>, deal: DealId) =>
 	db
 		.selectFrom("v_deal_room_phase_change as pc")
-		.selectAll("pc")
+		.select([
+			"pc.phase",
+			"pc.reason",
+			"pc.deal_id",
+			"pc.event_id",
+			"pc.automatic",
+			"pc.prior_phase",
+			"pc.recorded_at",
+			"pc.evidence_date",
+		])
 		.where("pc.deal_id", "=", deal);
 
 export const phaseStartsOf = (db: Kysely<DB>, deal: DealId) =>
@@ -45,7 +56,8 @@ export const phaseStartsOf = (db: Kysely<DB>, deal: DealId) =>
 
 export const phaseStartedOn = (
 	starts: { phase: string | null; started_on: string | null }[],
-) => Object.fromEntries(starts.map((s) => [s.phase, s.started_on]));
+) =>
+	inJsonbOrder(Object.fromEntries(starts.map((s) => [s.phase, s.started_on])));
 
 // "Dr. Jo Example (Example Clinic)" in Springfield reads "Dr. Example's
 // Springfield Deal"; any other client keeps the deal's own name.

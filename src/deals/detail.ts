@@ -1,4 +1,5 @@
 import { type Kysely, sql } from "kysely";
+import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../database.d.ts";
 import { asText } from "../reader.ts";
 import { readChecklist } from "./checklist.ts";
@@ -33,9 +34,6 @@ export async function readDealDetail(db: Kysely<DB>, deal: string) {
 	const record = live ?? (await archivedDeal(db, id).executeTakeFirst());
 	if (!record) return { error: "not_found" as const };
 
-	const vendors = await vendorsOf(db, id).execute();
-	const phaseChange = await phaseChangeOf(db, id).executeTakeFirst();
-	const phaseStarts = await phaseStartsOf(db, id).execute();
 	const thread = await notesOf(db, id).execute();
 	const criticalDates = await criticalDatesOf(db, id).execute();
 	const events = await eventsOf(db, id).execute();
@@ -65,9 +63,7 @@ export async function readDealDetail(db: Kysely<DB>, deal: string) {
 		lease: lease ?? null,
 		deal_id: id,
 		...record,
-		vendors,
-		...(live ? { phase_change: phaseChange ?? null } : {}),
-		phase_started_on: phaseStartedOn(phaseStarts),
+		phase_started_on: phaseStartedOn(record.phase_started_on),
 		short_name: shortName({ ...record, market: live?.city ?? null }),
 		thread: thread.slice(0, HISTORY_CAP),
 		thread_truncated: thread.length > HISTORY_CAP,
@@ -301,6 +297,7 @@ const liveDeal = (db: Kysely<DB>, id: string) =>
 			"b.market as city",
 			"b.segment",
 			"b.attention",
+			jsonArrayFrom(vendorsOf(db, eb.ref("b.id"))).as("vendors"),
 			asText(eb.ref("b.next_date")).as("next_date"),
 			"b.next_step",
 			nextStepRequired,
@@ -323,6 +320,8 @@ const liveDeal = (db: Kysely<DB>, id: string) =>
 			"b.lane",
 			"b.outcome",
 			clientPortalUrlOf(db, eb.ref("b.id")).as("client_portal_url"),
+			jsonObjectFrom(phaseChangeOf(db, eb.ref("b.id"))).as("phase_change"),
+			jsonArrayFrom(phaseStartsOf(db, eb.ref("b.id"))).as("phase_started_on"),
 			asText(eb.ref("b.parked_at")).as("parked_at"),
 			"b.parked_by",
 			"r.salesforce_id",
@@ -351,6 +350,7 @@ const archivedDeal = (db: Kysely<DB>, id: string) =>
 			"b.phase",
 			"b.lead_owner as owner",
 			"b.deal_type as type",
+			jsonArrayFrom(vendorsOf(db, eb.ref("b.id"))).as("vendors"),
 			"b.client_ref",
 			"b.client_name",
 			"b.client_id",
@@ -367,6 +367,7 @@ const archivedDeal = (db: Kysely<DB>, id: string) =>
 			"b.outcome",
 			"b.lane",
 			clientPortalUrlOf(db, eb.ref("b.id")).as("client_portal_url"),
+			jsonArrayFrom(phaseStartsOf(db, eb.ref("b.id"))).as("phase_started_on"),
 			"r.salesforce_id",
 			"r.base_version",
 			"ce.client_status",

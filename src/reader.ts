@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import {
 	type Expression,
 	Kysely,
@@ -47,6 +48,21 @@ const types = {
 // "2026-01-05T00:00:00+00:00", not PostgreSQL's own text form.
 export const asText = (value: Expression<unknown>) =>
 	sql<string | null>`to_jsonb(${value})#>>'{}'`;
+
+const byJsonbKey = ([a]: [string, unknown], [b]: [string, unknown]) =>
+	Buffer.byteLength(a) - Buffer.byteLength(b) ||
+	Buffer.compare(Buffer.from(a), Buffer.from(b));
+
+// The order jsonb keeps an object's keys in: shortest first, then by bytes.
+export function inJsonbOrder<T>(value: T): T {
+	if (Array.isArray(value)) return value.map(inJsonbOrder) as T;
+	if (value === null || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value)
+			.sort(byJsonbKey)
+			.map(([key, nested]) => [key, inJsonbOrder(nested)]),
+	) as T;
+}
 
 export function connect(connectionString: string): Kysely<DB> {
 	const pool = new pg.Pool({ connectionString, max: 1, types });

@@ -267,17 +267,28 @@ test("an open deal reads with text dates, decimal strings and capped history", a
 			recorded_at: "2030-01-02T03:04:06+00:00",
 			evidence_date: "2030-01-02T03:04:05.678+00:00",
 		};
-		assert.equal(JSON.stringify(detail.phase_change), JSON.stringify(phaseChange));
+		assert.equal(
+			JSON.stringify(detail.phase_change),
+			JSON.stringify(phaseChange),
+		);
 		const [vendor] = detail.vendors;
 		assert.equal(detail.vendors.length, 1);
-		assert.match(String(vendor?.updated_at), /^\d{4}-\d\d-\d\dT[\d:.]+\+00:00$/);
+		assert.match(
+			String(vendor?.updated_at),
+			/^\d{4}-\d\d-\d\dT[\d:.]+\+00:00$/,
+		);
 		assert.equal(
 			JSON.stringify(vendor),
 			JSON.stringify({
 				note: null,
 				role: "title",
 				company: { id: company.id, name: "Example Title Co" },
-				contact: { id: contact.id, name: "Example Closer", email: null, phone: null },
+				contact: {
+					id: contact.id,
+					name: "Example Closer",
+					email: null,
+					phone: null,
+				},
 				party_id: contact.id,
 				updated_at: vendor?.updated_at,
 			}),
