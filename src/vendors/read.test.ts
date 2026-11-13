@@ -76,7 +76,7 @@ insert into vendor (id, vendor_ref, party_id, category, category_slug, territory
 	verticals, stage, relationship_level, deal_history_verified_at, created_by, updated_by, updated_at)
 	values
 	('${id(1)}', 'V-1', '${id(101)}', 'lender', null, 'Austin', '${id(901)}', '{Dental,Ortho}',
-		'warm', 1, '2024-01-01', '${id(901)}', '${id(901)}', '2026-01-02 03:04:05.123456+00'),
+		'warm', 1, '2024-01-01 00:00:00+00', '${id(901)}', '${id(901)}', '2026-01-02 03:04:05.123456+00'),
 	('${id(2)}', null, '${id(102)}', 'legacy-x', null, null, null, null,
 		null, null, null, '${id(901)}', '${id(901)}', '2026-01-01 00:00:00+00'),
 	('${id(3)}', null, '${id(103)}', 'Lender', 'architect', 'Boston', '${id(902)}', '{}',
