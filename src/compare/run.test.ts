@@ -54,6 +54,9 @@ const fixed = {
 		pages: [{ items: [], total: 0, has_more: false, next_cursor: null }],
 	},
 	"meeting prep": { state: "empty", observed_at: clock, items: [] },
+	"vendor meetings": {
+		pages: [{ items: [], calendar: { state: "empty" }, next_cursor: null }],
+	},
 };
 const [l1, l2] = [uuid(31), uuid(32)];
 const [c1, c2, v1] = [uuid(51), uuid(52), uuid(53)];
@@ -136,6 +139,8 @@ function label(ask: Ask) {
 			return ask.vendor;
 		case "recent activity":
 			return `activity ${ask.record}`;
+		case "vendor meetings":
+			return `vendor meetings ${ask.view}`;
 		default:
 			return ask.read;
 	}
@@ -190,6 +195,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"today's reminders",
 		"today's reminders",
 		"meeting prep",
+		"vendor meetings suggested",
+		"vendor meetings research",
 		d1,
 		d2,
 		d3,
@@ -203,8 +210,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 25);
-	assert.deepEqual([run.oldReads, run.engineReads], [26, 52]);
+	assert.equal(pauses, 27);
+	assert.deepEqual([run.oldReads, run.engineReads], [28, 56]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -289,6 +296,8 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"today's reminders matched",
 			"today's reminders matched",
 			"meeting prep matched",
+			"vendor meetings suggested matched",
+			"vendor meetings research matched",
 			`${d1} matched`,
 			`${d2} matched`,
 			`${d3} matched`,
@@ -361,7 +370,7 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 26, engine reads made: 52
+old reads made: 28, engine reads made: 56
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
@@ -382,6 +391,7 @@ vendor markets                                   1         1         0         0
 relationships                                    1         1         0         0         0         0         0
 today's reminders                                2         2         0         0         0         0         0
 meeting prep                                     1         1         0         0         0         0         0
+vendor meetings                                  2         2         0         0         0         0         0
 deal detail                                      3         0         0         0         3         0         0
 lead detail                                      2         2         0         0         0         0         0
 
@@ -664,6 +674,23 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 				],
 				follow_up_reviews: [{ key: m(s), prompt: m(s) }],
 			},
+			"vendor meetings": {
+				pages: [
+					{
+						items: [
+							{
+								vendor_id: uuid(63),
+								ref: m(s),
+								contact: { id: uuid(64), email: m(s) },
+								missing: [m(s)],
+								possible_meetings: [{ start: m(s), title: m(s) }],
+							},
+						],
+						calendar: { state: m(s), notes: [m(s)] },
+						next_cursor: m(s),
+					},
+				],
+			},
 		},
 	});
 	const answers = (s: string) => {
@@ -699,7 +726,8 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 											ask.read === "reasons to reach out"
 										? leads[ask.read]
 										: ask.read === "today's reminders" ||
-												ask.read === "meeting prep"
+												ask.read === "meeting prep" ||
+												ask.read === "vendor meetings"
 											? today[ask.read]
 											: directory[ask.read];
 	};
@@ -1278,5 +1306,84 @@ test("today's reminders that still have pages after the last page read are at ca
 	assert.match(
 		report("production", run),
 		/\ntoday's reminders +2 +0 +0 +2 +0 +0 +0\n/,
+	);
+});
+
+const [vendorA, vendorB, person] = [uuid(80), uuid(81), uuid(82)];
+const listedVendor = (id: string, contact: string | null, reason: string) => ({
+	vendor_id: id,
+	ref: id === vendorA ? "V-1" : "V-2",
+	contact: contact && { id: contact, email: "person@example.test" },
+	reason,
+	missing: [],
+	possible_meetings: [{ start: clock, title: "Made-up meeting", reason }],
+});
+const vendorMeetings = (reason: string, next_cursor: string | null = null) => ({
+	pages: [
+		{
+			view: "suggested",
+			total: 3,
+			items: [
+				listedVendor(vendorA, null, "Made-up"),
+				listedVendor(vendorA, person, reason),
+				listedVendor(vendorB, person, "Made-up"),
+			],
+			has_more: next_cursor !== null,
+			calendar: { state: "ready", scheduling: { open_slots: [] } },
+			next_cursor,
+		},
+	],
+});
+const withVendorMeetings =
+	(reason: string, next_cursor?: string) =>
+	(ask: Ask): unknown =>
+		ask.read === "vendor meetings"
+			? vendorMeetings(reason, next_cursor)
+			: answer(ask);
+const meetingReads = (run: { outcomes: { ask: Ask; result: string }[] }) =>
+	run.outcomes.flatMap((o) =>
+		o.ask.read === "vendor meetings" ? [o.result] : [],
+	);
+
+test("vendor meetings pair a vendor's rows by vendor and contact and report a changed reason by path and vendor ref", async () => {
+	const alike = await runWith(
+		withVendorMeetings("Made-up"),
+		withVendorMeetings("Made-up"),
+	);
+	assert.deepEqual(meetingReads(alike.run), ["matched", "matched"]);
+	assert.equal(exitCode(alike.run), 0);
+	const { run } = await runWith(
+		withVendorMeetings("Changed"),
+		withVendorMeetings("Made-up"),
+	);
+	assert.deepEqual(meetingReads(run), ["different", "different"]);
+	const text = report("production", run);
+	for (const line of [
+		"vendor meetings                                  2         0         0         0         2         0         0",
+		"meetings.pages[].items[].reason  value differs  2  V-1",
+		"meetings.pages[].items[].possible_meetings[].reason  value differs  2  V-1",
+	])
+		assert.ok(text.includes(`\n${line}\n`), line);
+	assert.ok(!text.includes("Changed") && !text.includes("example.test"));
+});
+
+test("vendor meetings the engine cannot read fail, and the run goes on", async () => {
+	const { run, calls } = await runWith((ask) => {
+		if (ask.read === "vendor meetings") throw new Error("read failed");
+		return answer(ask);
+	});
+	assert.deepEqual(meetingReads(run), ["failed", "failed"]);
+	assert.equal(calls.at(-1), `engine ${l2}`);
+	assert.equal(exitCode(run), 2);
+});
+
+test("vendor meetings that still have pages after the last page read are at cap, not matched", async () => {
+	const cutOff = withVendorMeetings("Made-up", "more");
+	const { run } = await runWith(cutOff, cutOff);
+	assert.deepEqual(meetingReads(run), ["at cap", "at cap"]);
+	assert.equal(exitCode(run), 0);
+	assert.match(
+		report("production", run),
+		/\nvendor meetings +2 +0 +0 +2 +0 +0 +0\n/,
 	);
 });

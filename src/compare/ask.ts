@@ -14,8 +14,8 @@ const FEED_PAGE = 200;
 // A cursor that never advances would otherwise page forever.
 const PAGES = 25;
 const REASONS_PAGES = 100;
-// Only the first pages of a long queue are compared.
-const TODAY_PAGES = 5;
+// Only the first pages of a long queue or list are compared.
+const FIRST_PAGES = 5;
 
 const REFUSALS = new Set([400, 404, 409, 422]);
 
@@ -24,8 +24,9 @@ export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
 // A board for a listed workspace, the invoices, the directory lists, today's
-// reminders and meeting prep have no refusal to compare. Comparing one would
-// match two empty answers, and an empty board or list samples no records.
+// reminders, meeting prep and vendor meetings have no refusal to compare.
+// Comparing one would match two empty answers, and an empty board or list
+// samples no records.
 const UNREFUSED = new Set<Ask["read"]>([
 	"board",
 	"invoices",
@@ -33,6 +34,7 @@ const UNREFUSED = new Set<Ask["read"]>([
 	"vendor list",
 	"today's reminders",
 	"meeting prep",
+	"vendor meetings",
 ]);
 
 function refusal(ask: ToolAsk, body: unknown) {
@@ -96,18 +98,28 @@ const reasonsPage = (before_id?: string) =>
 		before_id === undefined ? { limit: 25 } : { limit: 25, before_id },
 	);
 
-const todayPage = (
-	{ owners }: Extract<Ask, { read: "today's reminders" }>,
-	cursor?: string,
-) =>
-	mirrored("/api/engine/today-triage", "today-triage", {
-		...(owners && { owners }),
-		...(cursor !== undefined && { cursor }),
-	});
+type Walked = Extract<
+	Ask,
+	{ read: "today's reminders" } | { read: "vendor meetings" }
+>;
+const walkedPage = (ask: Walked, cursor?: string) => {
+	const more = cursor !== undefined && { cursor };
+	return ask.read === "vendor meetings"
+		? mirrored("/api/engine/vendor-meetings", "read-vendor-meetings", {
+				view: ask.view,
+				...more,
+			})
+		: mirrored("/api/engine/today-triage", "today-triage", {
+				...(ask.owners && { owners: ask.owners }),
+				...more,
+			});
+};
 
-function requestOf(
-	ask: Exclude<ToolAsk, { read: "lead" | "today's reminders" }>,
-): Request {
+// Two unavailable calendars would match while comparing no meetings.
+const unavailable = (calendar: unknown) =>
+	isRecord(calendar) && calendar.state === "unavailable";
+
+function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 	switch (ask.read) {
 		case "board":
 			return mirrored("/api/engine/deals", "deal-room-board", {
@@ -226,25 +238,25 @@ async function answerOf(
 			),
 		};
 	}
-	if (ask.read === "today's reminders") {
-		const pages = [await read(todayPage(ask))];
+	if (ask.read === "today's reminders" || ask.read === "vendor meetings") {
+		const pages = [await read(walkedPage(ask))];
 		let cursor = nextCursor(pages[0]);
-		while (cursor !== undefined && pages.length < TODAY_PAGES) {
+		while (cursor !== undefined && pages.length < FIRST_PAGES) {
 			await beforePage();
-			const page = await read(todayPage(ask, cursor));
+			const page = await read(walkedPage(ask, cursor));
 			pages.push(page);
 			cursor = nextCursor(page);
 		}
+		if (
+			ask.read === "vendor meetings" &&
+			pages.some((page) => isRecord(page) && unavailable(page.calendar))
+		)
+			throw new Error("calendar unavailable");
 		return { pages };
 	}
 	const first = await read(requestOf(ask));
-	// Two unavailable calendars would match while comparing no meetings.
-	if (
-		ask.read === "meeting prep" &&
-		isRecord(first) &&
-		first.state === "unavailable"
-	)
-		throw new Error("meeting prep unavailable");
+	if (ask.read === "meeting prep" && unavailable(first))
+		throw new Error("calendar unavailable");
 	if (ask.read !== "reasons to reach out") return first;
 	return {
 		pages: [

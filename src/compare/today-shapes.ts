@@ -10,3 +10,18 @@ export const meetingPrepShape = {
 		"follow_up_reviews[]": { id: "key", sortedBy: [] },
 	},
 };
+
+// A vendor appears once per listed person, or once with no contact.
+export const vendorMeetingsShape = {
+	rows: {
+		"pages[].items[]": {
+			key: ["vendor_id", "contact.id"],
+			ref: "ref",
+			sortedBy: [],
+		},
+		"pages[].items[].possible_meetings[]": {
+			key: ["start", "title"],
+			sortedBy: [],
+		},
+	},
+};

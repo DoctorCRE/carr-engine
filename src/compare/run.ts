@@ -31,7 +31,11 @@ import {
 	territoryShape,
 } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
-import { meetingPrepShape, todayShape } from "./today-shapes.ts";
+import {
+	meetingPrepShape,
+	todayShape,
+	vendorMeetingsShape,
+} from "./today-shapes.ts";
 
 export class StopRun extends Error {}
 
@@ -58,7 +62,8 @@ export type Ask =
 	| { read: "recent activity"; name: string; record: string }
 	// With no owners, the old default queue of every owner.
 	| { read: "today's reminders"; owners?: "partners" }
-	| { read: "meeting prep" };
+	| { read: "meeting prep" }
+	| { read: "vendor meetings"; view: "suggested" | "research" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -107,6 +112,7 @@ export const READS: Record<Ask["read"], Read> = {
 	"recent activity": { shape: activityShape, prefix: "activity" },
 	"today's reminders": { shape: todayShape, prefix: "today" },
 	"meeting prep": { shape: meetingPrepShape, prefix: "prep" },
+	"vendor meetings": { shape: vendorMeetingsShape, prefix: "meetings" },
 };
 
 // Each opened lead re-sends the whole board, so a fixed number spread over the
@@ -206,6 +212,8 @@ export async function compareDeals(
 		{ read: "today's reminders", owners: "partners" },
 		// Both systems read the signed-in partner's own calendar.
 		{ read: "meeting prep" },
+		{ read: "vendor meetings", view: "suggested" },
+		{ read: "vendor meetings", view: "research" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
