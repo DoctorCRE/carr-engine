@@ -497,7 +497,7 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			"social_account_one_per_handle",
 		],
 		[
-			`insert into social_account (platform, owner_party_id, handle) values ('x', '${PARTNER}', ' ')`,
+			`insert into social_account (platform, owner_party_id, handle) values ('x', '${PARTNER}', '\t')`,
 			"social_account_handle_check",
 		],
 	],
@@ -562,9 +562,9 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 				newReading({ value: 0, not_measured_reason: "Example" }),
 				"measurement_value_or_reason",
 			],
-			[newReading({ source: "" }), "measurement_source_check"],
+			[newReading({ source: "\n" }), "measurement_source_check"],
 			[
-				newReading({ ...NOT_MEASURED, not_measured_reason: " " }),
+				newReading({ ...NOT_MEASURED, not_measured_reason: " \t\n" }),
 				"measurement_not_measured_reason_check",
 			],
 		],

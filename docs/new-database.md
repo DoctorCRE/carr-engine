@@ -49,10 +49,10 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 14. An activity is an email, a call, a meeting or a note. Each `activity_about` row names exactly one deal, party or property, and is stored once.
 15. An email's Message-ID is stored once and never has spaces around it, an email belongs to an email activity, and an attachment names an email. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing, moving or emptying away its last link.
 16. A next step is about exactly one deal, party or property.
-17. A social account is on a known platform, its handle is not blank, and a handle is used once per platform, in any case.
+17. A social account is on a known platform, its handle is never empty or only whitespace, and a handle is used once per platform, in any case.
 18. A post is on its account's platform and is scheduled, published or failed. Only a published post has the platform's post id and its publish time, and that id is stored once per account.
 19. A post is never removed, and a published or failed post never changes. A retry is a new post.
-20. A reading is of a published post, taken no earlier than it was published, of a metric its platform reports, and never negative. It names its source. A reading that could not be taken has a reason and no value, never a zero. A source or reason is never blank.
+20. A reading is of a published post, taken no earlier than it was published, of a metric its platform reports, and never negative. It names its source. A reading that could not be taken has a reason and no value, never a zero. A source or reason is never empty or only whitespace.
 21. A reading is stored once and never rewritten or removed.
 22. Each platform's reported metrics come from the known platforms and metrics, each once, with the time from which posts must have it, and only a schema change adds one.
 23. A record or link keeps when it was stored.
@@ -137,7 +137,7 @@ The owner's automation keeps posting as it does today. These tables record what 
 - **`post`**: one post on one account, with its idea, its design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
 - **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading of a metric the post's platform does not report is refused, and so is a reading before the post is published. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
 
-Ratios are calculated when read, never stored. Engagement is the sum of the reactions, comments, shares and saves that the post's platform reported when it was published, and engagement per view divides it by views.
+Ratios are calculated when read, never stored. Engagement is the sum of the reactions, comments, shares and saves that the post's platform reported when it was published, and engagement per view divides it by views. After a metric is added, newer posts sum more metrics than older ones, so best and worst across that date lean toward newer posts.
 
 `posts_at_day_7(as_of)` compares posts at the same age, because a post's numbers keep growing for days. Each post is judged by its latest reading of each metric at or before 168 hours after it was published. It returns, per account, how many posts it compared and the best and worst by engagement per view.
 

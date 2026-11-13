@@ -279,7 +279,7 @@ create table social_account (
 	created_at timestamptz not null default now(),
 	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
 	owner_party_id uuid not null references party,
-	handle text not null check (btrim(handle) <> ''),
+	handle text not null check (handle ~ '\S'),
 	unique (id, platform)
 );
 
@@ -351,9 +351,9 @@ create table measurement (
 	platform text not null,
 	metric text not null,
 	taken_at timestamptz not null,
-	source text not null check (btrim(source) <> ''),
+	source text not null check (source ~ '\S'),
 	value bigint check (value >= 0),
-	not_measured_reason text check (btrim(not_measured_reason) <> ''),
+	not_measured_reason text check (not_measured_reason ~ '\S'),
 	constraint measurement_value_or_reason check (num_nonnulls(value, not_measured_reason) = 1),
 	primary key (post_id, metric, taken_at, source),
 	foreign key (post_id, platform) references post (id, platform),
