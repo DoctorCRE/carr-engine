@@ -47,6 +47,11 @@ Each rule has a test in `src/next-database.test.ts` that fails without it.
 14. An activity is an email, a call, a meeting or a note. Each `activity_about` row names exactly one deal, party or property, and is stored once.
 15. An email's Message-ID is stored once and never has spaces around it, an email belongs to an email activity, and an attachment names an email. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing, moving or emptying away its last link. Emptying `email` cannot reach a round's documents.
 16. A next step is about exactly one deal, party or property.
+17. A social account is on a known platform, and a handle is used once per platform, in any case.
+18. A post is scheduled, published or failed. Only a published post has the platform's post id and its publish time, and that id is stored once per account.
+19. A post is never removed, and a published or failed post keeps its status. A retry is a new post.
+20. A reading is a known metric and never negative. A reading that could not be taken has a reason and no value, never a zero.
+21. A reading is stored once and never rewritten or removed.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -97,6 +102,22 @@ The partners toured 100 Example Way with their client and sent an LOI. The listi
 
 The tests run rounds 1 to 3, the acceptance, the email with its attachment, a call and the next steps, and read them back in order.
 
+## Marketing
+
+The owner's automation keeps posting as it does today. These tables record what went out and how each post did, so each week's posts can learn from earlier ones.
+
+- **`social_account`**: a partner's presence on X, LinkedIn, Facebook or Instagram, by its handle, owned by a party. "Account" alone means a national account (`docs/glossary.md`).
+- **`idea`**: what a post says, as its angle, hook and pillar. One idea can run on several accounts.
+- **`design_template`**: a reusable look that a post's image is made from.
+- **`post`**: one post on one account, with its idea, its design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
+- **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
+
+Ratios are calculated when read, never stored. Engagement is reactions, comments, shares and saves, and engagement per view divides it by views.
+
+`posts_at_day_7(as_of)` compares posts at the same age, because a post's numbers keep growing for days. Each post is judged by its latest reading of each metric at or before 168 hours after it was published. It returns, per account, the best and worst post by engagement per view, and per idea and per design template the average, each with how many posts it rests on. A post is left out while it is younger than 7 days, when any of the five numbers was not measured at day 7, or when it had no views. A post read only on day 3 is judged on day 3, so readings should be taken daily.
+
+Pillars and hooks are text for now. They become lists, like roles and phases, with the rotation rules.
+
 ## Later slices
 
-Partners as people, and who changed what. Deal type, owner and dates. Emails and phone numbers per person. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`.
+Partners as people, and who changed what. Deal type, owner and dates. Emails and phone numbers per person. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
