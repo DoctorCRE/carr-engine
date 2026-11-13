@@ -55,8 +55,8 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 20. A reading is of a published post, taken no earlier than it was published, of a metric its platform reports, and never negative. It names its source. A reading that could not be taken has a reason and no value, never a zero. A source or reason is never empty or only whitespace.
 21. A reading is stored once and never rewritten or removed.
 22. Each platform's reported metrics come from the known platforms and metrics, each once, with the time from which posts must have it, and only a schema change adds one.
-23. A post moves from scheduled to publishing or cancelled, and from publishing to published or failed. Nothing else moves.
-24. A post is scheduled, or claimed for publishing, only when its account's `engine_publishes_from` is at or before its time. None means never. The account's time cannot change while a claim is being saved.
+23. A post starts scheduled, published or failed, moves from scheduled to publishing or cancelled, and from publishing to published or failed. Nothing else moves.
+24. A post is scheduled, or claimed for publishing, only when its account's `engine_publishes_from` is at or before its time. None means never. The account's time cannot change while a claim is being saved, and only the owner sets it.
 25. A sign-in is as its account's own platform account id, ends after it starts, and is never rewritten or removed.
 26. Each platform's formats come from the known platforms and formats, each once, and only a schema change adds one.
 27. A record or link keeps when it was stored.
@@ -68,7 +68,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `platform_metric` and `platform_format`, and empties none. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. It removes rows only outside history, and changes only these columns:
 
 - a role's or a phase's label;
 - a party's, deal's, document's or design template's name, and a property's address;
@@ -145,7 +145,7 @@ The owner's automation keeps posting as it does today. These tables record what 
 
 A post goes out unless a partner cancels it. `scheduled` means the engine will publish it. At its time the publisher claims it by moving it to `publishing` with `where status = 'scheduled'`, so only one run can send it. It then becomes `published`, with the platform's id and time, or `failed`, with the platform's error as its reason. A post stuck in `publishing` is resolved by a partner to one or the other, never sent again. A cancelled post keeps its reason. A post another publisher sent, such as Blotato, is stored as `published` or `failed` from the start.
 
-One publisher holds each account at each minute. The database refuses a scheduled post, or a claim, before its account's `engine_publishes_from`, and an account without one never gets an engine post. The weekly batch sends earlier posts elsewhere. Moving the time later stops new claims at once, and the engine cancels the posts it no longer holds. The engine's role cannot change the time; the owner sets it at each cut-over.
+One publisher holds each account at each minute. The database refuses a scheduled post, or a claim, before its account's `engine_publishes_from`, and an account without one never gets an engine post. The weekly batch sends earlier posts elsewhere. Moving the time later stops new claims at once, and the engine cancels the posts it no longer holds. The engine's role cannot set or change the time, even on an account it adds; the owner sets it at each cut-over.
 
 Ratios are calculated when read, never stored. Engagement is the sum of the reactions, comments, shares and saves that the post's platform reported when it was published, and engagement per view divides it by views. After a metric is added, newer posts sum more metrics than older ones, so best and worst across that date lean toward newer posts.
 
