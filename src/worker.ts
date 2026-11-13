@@ -14,6 +14,7 @@ import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
+import { vendorMeetings } from "./vendors/meeting-routes.ts";
 
 type WorkerEnv = WriterEnv & {
 	Bindings: { CF_VERSION_METADATA: { id: string } };
@@ -43,5 +44,6 @@ app.route("/api/engine", relationships);
 app.route("/api/engine", search);
 app.route("/api/engine", today);
 app.route("/api/engine", vendorMarkets);
+app.route("/api/engine", vendorMeetings);
 
 export default app;

@@ -1,9 +1,8 @@
 import { sql } from "kysely";
 import type { Reader } from "../reader.ts";
 import { type Meeting, meetingsFromSnapshot, UNAVAILABLE } from "./meetings.ts";
+import { attempt, storedSnapshot } from "./snapshot.ts";
 
-const TENANT = "carr-internal";
-const BOARD = "calendar-agenda";
 const SHOWN = 1000;
 
 type Checked<T> = { value: T } & (
@@ -16,20 +15,6 @@ type Prep = { state: "ready" } & Record<
 	"phase" | "next_step" | "next_date" | "last_touch" | "market",
 	string | null
 >;
-
-// A failed query, such as one the login has no grant for, answers in part.
-// Its savepoint keeps the answer's transaction able to commit.
-async function attempt<T>(db: Reader, read: () => Promise<T>) {
-	await sql`savepoint calendar_meeting_prep`.execute(db);
-	try {
-		const value = await read();
-		await sql`release savepoint calendar_meeting_prep`.execute(db);
-		return value;
-	} catch {
-		await sql`rollback to savepoint calendar_meeting_prep`.execute(db);
-		return null;
-	}
-}
 
 const emailsOf = (meeting: Meeting) =>
 	[meeting.organizer, ...meeting.attendees].flatMap((p) => p.email ?? []);
@@ -117,17 +102,10 @@ async function prepareDeals(
 // The partner's meetings with the open deals their attendees' emails match.
 // A match is a suggestion, never a recorded link between meeting and deal.
 export async function readMeetingPrep(db: Reader, partner: string) {
-	const stored = await attempt(db, () =>
-		db
-			.selectFrom("board_snapshot")
-			.select("snapshot_json")
-			.where("organization_tenant_id", "=", TENANT)
-			.where("sponsoring_human_slug", "=", partner)
-			.where("board_id", "=", BOARD)
-			.execute(),
+	const section = meetingsFromSnapshot(
+		await storedSnapshot(db, partner),
+		new Date(),
 	);
-	const section =
-		stored && meetingsFromSnapshot(stored[0]?.snapshot_json, new Date());
 	if (!section || section.state === "unavailable") return UNAVAILABLE;
 
 	const addresses = [...new Set(section.items.flatMap(emailsOf))];
