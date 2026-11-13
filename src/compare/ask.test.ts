@@ -638,3 +638,84 @@ test("an unavailable calendar, a refusal or a server error fails today's reminde
 			(error: Error) => !(error instanceof StopRun),
 		);
 });
+
+const meetingViews: Ask[] = [
+	{ read: "vendor meetings", view: "suggested" },
+	{ read: "vendor meetings", view: "research" },
+];
+const meetingsPage = (cursor: string | null) => ({
+	items: [{ vendor_id: cursor ?? "first" }],
+	calendar: { state: "ready" },
+	next_cursor: cursor === null ? "a" : null,
+});
+
+test("vendor meetings ask each view with the default limit and follow each side's next_cursor", async () => {
+	const engine = fake(({ url }) =>
+		json(meetingsPage(url.searchParams.get("cursor"))),
+	);
+	for (const read of meetingViews)
+		assert.deepEqual(await engine.askEngine(read), {
+			pages: [meetingsPage(null), meetingsPage("a")],
+		});
+	assert.deepEqual(
+		engine.sent.map((s) => s.url.pathname + s.url.search),
+		[
+			"/api/engine/vendor-meetings?view=suggested",
+			"/api/engine/vendor-meetings?view=suggested&cursor=a",
+			"/api/engine/vendor-meetings?view=research",
+			"/api/engine/vendor-meetings?view=research&cursor=a",
+		],
+	);
+	const old = fake(({ init }) =>
+		content(
+			meetingsPage(
+				JSON.parse(String(init.body)).params.arguments.cursor ?? null,
+			),
+		),
+	);
+	for (const read of meetingViews) await old.askOld(read);
+	assert.deepEqual(
+		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		[
+			{ view: "suggested" },
+			{ view: "suggested", cursor: "a" },
+			{ view: "research" },
+			{ view: "research", cursor: "a" },
+		].map((args) => ({ name: "read-vendor-meetings", arguments: args })),
+	);
+	assert.deepEqual(old.waits, [1, 3]);
+
+	const long = fake(() => json({ ...meetingsPage(null), next_cursor: "1" }));
+	for (const read of meetingViews) await long.askEngine(read);
+	assert.equal(long.sent.length, 10);
+});
+
+test("an unavailable calendar on any page, a refusal or a server error fails vendor meetings instead of comparing, on either side", async () => {
+	const refused = { error: "vendor_meetings_query_invalid" };
+	const secondPage = (cursor: unknown) =>
+		cursor
+			? {
+					...meetingsPage("a"),
+					calendar: { state: "unavailable", reason: "source_unavailable" },
+				}
+			: meetingsPage(null);
+	const failures = meetingViews.flatMap((read) =>
+		[
+			fake(({ url }) => json(secondPage(url.searchParams.get("cursor"))))
+				.askEngine,
+			fake(({ init }) =>
+				content(
+					secondPage(JSON.parse(String(init.body)).params.arguments.cursor),
+				),
+			).askOld,
+			fake(() => json(refused, 400)).askEngine,
+			fake(() => content(refused, true)).askOld,
+			fake(() => json(failedRead("read-vendor-meetings"), 500)).askEngine,
+		].map((ask) => [read, ask] as const),
+	);
+	for (const [read, ask] of failures)
+		await assert.rejects(
+			ask(read),
+			(error: Error) => !(error instanceof StopRun),
+		);
+});

@@ -89,7 +89,9 @@ function baseOf(value: unknown, rows: Rows): string {
 	const id = fieldOf(value, rows.id);
 	if (typeof id === "string" || typeof id === "number") return `id:${id}`;
 	const key =
-		rows.key && isRecord(value) ? rows.key.map((k) => value[k]) : value;
+		rows.key && isRecord(value)
+			? rows.key.map((k) => fieldOf(value, k))
+			: value;
 	return `row:${canonical(key)}`;
 }
 
