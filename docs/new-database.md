@@ -49,14 +49,18 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 14. An activity is an email, a call, a meeting or a note. Each `activity_about` row names exactly one deal, party or property, and is stored once.
 15. An email's Message-ID is stored once and never has spaces around it, an email belongs to an email activity, and an attachment names an email. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing, moving or emptying away its last link.
 16. A next step is about exactly one deal, party or property.
-17. A social account is on a known platform, its handle is never empty or only whitespace, and a handle is used once per platform, in any case.
-18. A post is on its account's platform and is scheduled, published or failed. Only a published post has the platform's post id and its publish time, and that id is stored once per account.
-19. A post is never removed, and a published or failed post never changes. A retry is a new post.
+17. A social account is on a known platform, its handle is never empty or only whitespace, and a handle is used once per platform, in any case. Its platform account id is never blank, is used once per platform, and never changes once someone has signed in as it.
+18. A post is on its account's platform, in a format that platform offers, and is scheduled, publishing, published, failed or cancelled. Only a published post has the platform's post id and its publish time, and that id is stored once per account. A failed or cancelled post says why, and no other post has a reason.
+19. A post is never removed, and a published, failed or cancelled post never changes. A retry is a new post.
 20. A reading is of a published post, taken no earlier than it was published, of a metric its platform reports, and never negative. It names its source. A reading that could not be taken has a reason and no value, never a zero. A source or reason is never empty or only whitespace.
 21. A reading is stored once and never rewritten or removed.
 22. Each platform's reported metrics come from the known platforms and metrics, each once, with the time from which posts must have it, and only a schema change adds one.
-23. A record or link keeps when it was stored.
-24. The engine empties no table, removes no history, and changes only the columns that may change.
+23. A post starts scheduled, published or failed, moves from scheduled to publishing or cancelled, and from publishing to published or failed. Nothing else moves.
+24. A post is scheduled, or claimed for publishing, only when its account's `engine_publishes_from` is at or before its time. None means never. The account's time cannot change while a claim is being saved, and only the owner sets it.
+25. A sign-in is as its account's own platform account id, ends after it starts, and is never rewritten or removed.
+26. Each platform's formats come from the known platforms and formats, each once, and only a schema change adds one.
+27. A record or link keeps when it was stored.
+28. The engine empties no table, removes no history, and changes only the columns that may change.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -64,7 +68,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `platform_metric`, and empties none. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. It removes rows only outside history, and changes only these columns:
 
 - a role's or a phase's label;
 - a party's, deal's, document's or design template's name, and a property's address;
@@ -72,10 +76,10 @@ The role reads rows in every table, adds rows in every table except `platform_me
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
 - a round's status;
-- a social account's handle, and an idea's angle, hook and pillar;
-- a scheduled post's status, platform post id and publish time.
+- a social account's handle and platform account id, and an idea's angle, hook and pillar;
+- a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post` and `measurement`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post that is no longer scheduled, and a reading of a published post.
+History is `deal_phase_change`, `offer`, `offer_document`, `post`, `measurement` and `social_sign_in`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, and a reading of a published post.
 
 The owner's own login can still change anything. That path is not the engine's concern.
 
@@ -130,12 +134,18 @@ The tests run rounds 1 to 3, the acceptance, the email with its attachment, a ca
 
 The owner's automation keeps posting as it does today. These tables record what went out and how each post did, so each week's posts can learn from earlier ones.
 
-- **`social_account`**: a partner's presence on X, LinkedIn, Facebook or Instagram, by its handle, owned by a party. "Account" alone means a national account (`docs/glossary.md`).
+- **`social_account`**: a partner's presence on X, LinkedIn, Facebook or Instagram, by its handle, owned by a party. "Account" alone means a national account (`docs/glossary.md`). It holds the platform's own id for it, learned at sign-in, and `engine_publishes_from`, the time from which the engine publishes its posts.
+- **`social_sign_in`**: one row each time a partner signs in to a platform for an account: who, as which platform account, when, when it expires, and the scopes granted. The token itself lives in Workers KV, never in the database. A Facebook Page's sign-in does not expire, so it has no expiry.
+- **`platform_format`**: the formats each platform takes, one row each: text, photo, photo set (several photos or a carousel), document (a PDF carousel, LinkedIn only) and video (a Reel on Instagram). Instagram takes no text-only post, and Facebook no photo set. X keeps its rows for the posts already sent there. Only a schema change adds one.
 - **`idea`**: what a post says, as its angle, hook and pillar. One idea can run on several accounts.
 - **`design_template`**: a reusable look that a post's image is made from.
 - **`platform_metric`**: the metrics each platform reports, one row each. LinkedIn and X do not report saves, for example. The rows are a guess, to be confirmed against each platform's API. Each row says from when posts must have the metric. The first rows hold from the start, and a row added later holds from when it is added, so older posts, which have no reading of it, stay in the day-7 comparison. Only a schema change adds one.
-- **`post`**: one post on one account, with its idea, its design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
+- **`post`**: one post on one account, with its format, idea, design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
 - **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading of a metric the post's platform does not report is refused, and so is a reading before the post is published. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
+
+A post goes out unless a partner cancels it. `scheduled` means the engine will publish it. At its time the publisher claims it by moving it to `publishing` with `where status = 'scheduled'`, so only one run can send it. It then becomes `published`, with the platform's id and time, or `failed`, with the platform's error as its reason. A post stuck in `publishing` is resolved by a partner to one or the other, never sent again. A cancelled post keeps its reason. A post another publisher sent, such as Blotato, is stored as `published` or `failed` from the start.
+
+One publisher holds each account at each minute. The database refuses a scheduled post, or a claim, before its account's `engine_publishes_from`, and an account without one never gets an engine post. The weekly batch sends earlier posts elsewhere. Moving the time later stops new claims at once, and the engine cancels the posts it no longer holds. The engine's role cannot set or change the time, even on an account it adds; the owner sets it at each cut-over.
 
 Ratios are calculated when read, never stored. Engagement is the sum of the reactions, comments, shares and saves that the post's platform reported when it was published, and engagement per view divides it by views. After a metric is added, newer posts sum more metrics than older ones, so best and worst across that date lean toward newer posts.
 
@@ -151,4 +161,4 @@ Pillars and hooks are text for now. They become lists, like roles and phases, wi
 
 ## Later slices
 
-Partners as people, and who changed what. Deal type, owner and dates. Emails and phone numbers per person. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Partners as people, and who changed what. Deal type, owner and dates. Emails and phone numbers per person. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: each post's text versions, media and review (#218), rotation rules, lead attribution and the weekly agent loop.

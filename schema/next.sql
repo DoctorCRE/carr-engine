@@ -280,11 +280,29 @@ create table social_account (
 	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
 	owner_party_id uuid not null references party,
 	handle text not null check (handle ~ '\S'),
-	unique (id, platform)
+	platform_account_id text check (platform_account_id ~ '\S'),
+	-- One publisher per account per minute: the engine publishes posts scheduled from this time, and none means never.
+	engine_publishes_from timestamptz,
+	unique (id, platform),
+	unique (id, platform_account_id),
+	unique (platform, platform_account_id)
 );
 
 -- Platforms ignore case in handles.
 create unique index social_account_one_per_handle on social_account (platform, lower(handle));
+
+-- The token lives in Workers KV, never in the database.
+create table social_sign_in (
+	social_account_id uuid not null,
+	platform_account_id text not null,
+	signed_in_by_party_id uuid not null references party,
+	signed_in_at timestamptz not null default now(),
+	-- None for a sign-in that does not expire, such as a Facebook Page's.
+	expires_at timestamptz check (expires_at > signed_in_at),
+	scopes text[] not null,
+	primary key (social_account_id, signed_in_at),
+	foreign key (social_account_id, platform_account_id) references social_account (id, platform_account_id)
+);
 
 -- The seed is a guess until checked against each platform's API.
 create table platform_metric (
@@ -318,33 +336,91 @@ create table design_template (
 	name text not null unique
 );
 
+-- A photo set is several photos or a carousel, a document is a PDF carousel, and an Instagram video is a Reel.
+create table platform_format (
+	platform text not null check (platform in ('x', 'linkedin', 'facebook', 'instagram')),
+	format text not null check (format in ('text', 'photo', 'photo_set', 'document', 'video')),
+	primary key (platform, format)
+);
+
+insert into platform_format
+select platform, unnest(formats) from (values
+	('x', array['text', 'photo', 'photo_set', 'video']),
+	('linkedin', array['text', 'photo', 'photo_set', 'document', 'video']),
+	('facebook', array['text', 'photo', 'video']),
+	('instagram', array['photo', 'photo_set', 'video'])
+) as offered (platform, formats);
+
 create table post (
 	id uuid primary key default gen_random_uuid(),
 	social_account_id uuid not null,
 	platform text not null,
+	format text not null,
 	idea_id uuid references idea,
 	design_template_id uuid references design_template,
 	scheduled_at timestamptz not null,
-	status text not null default 'scheduled' check (status in ('scheduled', 'published', 'failed')),
+	status text not null default 'scheduled'
+		check (status in ('scheduled', 'publishing', 'published', 'failed', 'cancelled')),
+	reason text check (reason ~ '\S'),
 	platform_post_id text,
 	published_at timestamptz,
 	constraint post_published_has_id_and_time
 		check (num_nonnulls(platform_post_id, published_at) = case status when 'published' then 2 else 0 end),
+	constraint post_failed_or_cancelled_says_why check ((status in ('failed', 'cancelled')) = (reason is not null)),
 	unique (social_account_id, platform_post_id),
 	unique (id, platform),
-	foreign key (social_account_id, platform) references social_account (id, platform)
+	foreign key (social_account_id, platform) references social_account (id, platform),
+	foreign key (platform, format) references platform_format
 );
 
 create function post_final() returns trigger
 language plpgsql as $$
 begin
-	raise exception 'a published or failed post never changes'
+	raise exception 'a published, failed or cancelled post never changes'
 		using errcode = 'check_violation', constraint = 'post_final';
 end $$;
 
 -- A retry is a new post, so a failure stays on record, and a published post keeps the time its readings count from.
 create trigger post_final before update on post
-	for each row when (old.status <> 'scheduled' and old.* is distinct from new.*) execute function post_final();
+	for each row when (old.status in ('published', 'failed', 'cancelled') and old.* is distinct from new.*)
+	execute function post_final();
+
+create function post_status_moves() returns trigger
+language plpgsql as $$
+begin
+	if not (case tg_op
+		when 'INSERT' then new.status not in ('publishing', 'cancelled')
+		else old.status = new.status
+			or old.status = 'scheduled' and new.status in ('publishing', 'cancelled')
+			or old.status = 'publishing' and new.status in ('published', 'failed')
+	end) then
+		raise exception 'a post starts scheduled, published or failed, moves from scheduled to publishing or cancelled, and from publishing to published or failed'
+			using errcode = 'check_violation', constraint = 'post_status_moves';
+	end if;
+	return new;
+end $$;
+
+-- Only the publisher's claim reaches publishing, so a post is sent at most once.
+create trigger post_status_moves before insert or update of status on post
+	for each row execute function post_status_moves();
+
+create function post_engine_publishes_from() returns trigger
+language plpgsql as $$
+begin
+	-- Shared, so the account's engine_publishes_from cannot move until this save ends.
+	perform from social_account
+	where id = new.social_account_id and engine_publishes_from <= new.scheduled_at
+	for share;
+	if not found then
+		raise exception 'the engine holds only posts scheduled from its account''s engine_publishes_from'
+			using errcode = 'check_violation', constraint = 'post_engine_publishes_from';
+	end if;
+	return new;
+end $$;
+
+-- Scheduled means the engine will publish it; a post another publisher sent is stored as published or failed.
+create trigger post_engine_publishes_from before insert or update of status on post
+	for each row when (new.status in ('scheduled', 'publishing')) execute function post_engine_publishes_from();
 
 create table measurement (
 	post_id uuid not null,
@@ -422,8 +498,8 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but platform_metric, never empties a table, and changes or removes only what the grants below name.
--- History (deal_phase_change, offer, offer_document, post, measurement) is never removed.
+-- It reads everywhere, adds everywhere but platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
+-- History (deal_phase_change, offer, offer_document, post, measurement, social_sign_in) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -442,8 +518,12 @@ do $$ begin
 	execute format('grant usage on schema %1$I to engine;
 		grant select, insert on all tables in schema %1$I to engine', current_schema());
 end $$;
--- Which metrics a platform reports, and since when, is a schema decision.
-revoke insert on platform_metric from engine;
+-- Which metrics and formats a platform offers is a schema decision.
+revoke insert on platform_metric, platform_format from engine;
+
+-- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
+revoke insert on social_account from engine;
+grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
 grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
 	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;
@@ -457,6 +537,6 @@ grant update (title, started_on, ended_on) on party_company to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
 grant update (status) on offer to engine;
-grant update (handle) on social_account to engine;
+grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
-grant update (status, platform_post_id, published_at) on post to engine;
+grant update (status, reason, platform_post_id, published_at) on post to engine;
