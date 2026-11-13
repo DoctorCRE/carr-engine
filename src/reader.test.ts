@@ -26,6 +26,7 @@ import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 import { readTodayTriage } from "./today/triage.ts";
 import { readVendorMarkets } from "./vendors/markets.ts";
+import { readVendorMeetings } from "./vendors/meetings.ts";
 import { readVendor, readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
@@ -235,7 +236,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings and today's reminders and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -508,6 +509,16 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				deal_suggestions: { state: "ready" },
 				meeting_prep: { state: "ready" },
 			});
+			const zero = "00000000-0000-0000-0000-000000000000";
+			const vendorMeetings = await readSnapshot(login, (db) =>
+				readVendorMeetings(db, "partner_one", {
+					view: "research",
+					q: "",
+					limit: 25,
+					after: [zero, zero],
+				}),
+			);
+			assert.equal(vendorMeetings?.calendar.state, "ready");
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(

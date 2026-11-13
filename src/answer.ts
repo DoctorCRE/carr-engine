@@ -35,6 +35,11 @@ const HINTS = {
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
 	field_required:
 		"Supply the required field using the documented operation shape.",
+	AUTHORIZATION_REFUSED: "This operation requires partner authority.",
+	vendor_meetings_query_invalid:
+		"Check the vendor meeting filters and restart paging if the query changed.",
+	vendor_meetings_unavailable:
+		"Vendor meetings are temporarily unavailable. Quote the correlation_id when reporting it.",
 };
 
 export class Refusal {
@@ -235,6 +240,7 @@ type Verb =
 	| "list-practice-origination"
 	| "quiet-follow-ups"
 	| "read-invoice-tracker"
+	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"
 	| "territory-state-board"
 	| "today-triage";
