@@ -148,7 +148,8 @@ create table document (
 	r2_key text not null,
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
-	email_activity_id uuid references email
+	email_activity_id uuid references email,
+	unique (id, content_type)
 );
 
 create table offer (
@@ -458,11 +459,17 @@ create table post_media (
 	post_id uuid not null,
 	format text not null,
 	position smallint not null check (position between 1 and 20),
-	document_id uuid not null references document,
+	document_id uuid not null,
+	content_type text not null,
 	created_at timestamptz not null default now(),
 	constraint post_media_fits_format check (format <> 'text' and (position = 1 or format = 'photo_set')),
+	constraint post_media_type_fits_format check (case format
+		when 'video' then content_type = 'video/mp4'
+		when 'document' then content_type = 'application/pdf'
+		else content_type in ('image/jpeg', 'image/png') end),
 	primary key (post_id, position),
-	foreign key (post_id, format) references post (id, format)
+	foreign key (post_id, format) references post (id, format),
+	foreign key (document_id, content_type) references document (id, content_type)
 );
 
 -- A post goes out unless cancelled. At review's close a post nobody edited or cancelled gets no_response.

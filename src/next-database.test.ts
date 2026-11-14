@@ -162,6 +162,7 @@ const STAT_CARD = id(520);
 const PHOTO = id(521);
 const post = (n: number) => id(530 + n);
 const PHOTO_FILE = id(540);
+const PDF_FILE = id(541);
 // Review closes an hour before a post's time, judged by the real clock.
 const OPEN = post(13);
 const CLOSED = post(14);
@@ -220,8 +221,11 @@ values ${POST_ROWS.map(
 				: "null, null"
 		})`,
 )};
-insert into document (id, name, r2_key) values ('${PHOTO_FILE}', 'Example photo.jpg', 'example/photo.jpg');
-insert into post_media (post_id, format, position, document_id) values ('${post(8)}', 'photo', 1, '${PHOTO_FILE}');
+insert into document (id, name, r2_key, content_type) values
+	('${PHOTO_FILE}', 'Example photo.jpg', '${PHOTO_FILE}', 'image/jpeg'),
+	('${PDF_FILE}', 'Example carousel.pdf', '${PDF_FILE}', 'application/pdf');
+insert into post_media (post_id, format, position, document_id, content_type)
+values ('${post(8)}', 'photo', 1, '${PHOTO_FILE}', 'image/jpeg');
 insert into post (id, social_account_id, platform, format, scheduled_at) values
 	('${OPEN}', '${LINKEDIN}', 'linkedin', 'photo', now() + interval '2 hours'),
 	('${CLOSED}', '${LINKEDIN}', 'linkedin', 'photo', now() + interval '30 minutes');
@@ -281,6 +285,7 @@ const newMedium = (row: Record<string, string | number>) =>
 		format: "photo",
 		position: 1,
 		document_id: PHOTO_FILE,
+		content_type: "image/jpeg",
 		...row,
 	});
 const newReview = (row: Record<string, string | number | null>) =>
@@ -728,22 +733,39 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			["update post_text set body = 'Example'", notGranted("post_text")],
 			["delete from post_text", notGranted("post_text")],
 		],
-	"a post's media fit its format, in order, and never change": [
-		[newMedium({ post_id: post(5), format: "text" }), "post_media_fits_format"],
-		[newMedium({ position: 2 }), "post_media_fits_format"],
+	"a post's media fit its format, in order, are the files' own type, and never change":
 		[
-			`${newPost({ id: post(12), format: "photo_set" })};
+			[
+				newMedium({ post_id: post(5), format: "text" }),
+				"post_media_fits_format",
+			],
+			[newMedium({ position: 2 }), "post_media_fits_format"],
+			[
+				`${newPost({ id: post(12), format: "photo_set" })};
 			${newMedium({ post_id: post(12), format: "photo_set", position: 21 })}`,
-			"post_media_position_check",
+				"post_media_position_check",
+			],
+			[
+				newMedium({
+					post_id: post(1),
+					format: "document",
+					document_id: PDF_FILE,
+					content_type: "application/pdf",
+				}),
+				"post_media_post_id_format_fkey",
+			],
+			[newMedium({}), "post_media_pkey"],
+			[
+				`${newPost({ id: post(12) })}; ${newMedium({ post_id: post(12), document_id: PDF_FILE })}`,
+				"post_media_document_id_content_type_fkey",
+			],
+			[
+				`${newPost({ id: post(12) })}; ${newMedium({ post_id: post(12), document_id: PDF_FILE, content_type: "application/pdf" })}`,
+				"post_media_type_fits_format",
+			],
+			["update post_media set position = 2", notGranted("post_media")],
+			["delete from post_media", notGranted("post_media")],
 		],
-		[
-			newMedium({ post_id: post(1), format: "video" }),
-			"post_media_post_id_format_fkey",
-		],
-		[newMedium({}), "post_media_pkey"],
-		["update post_media set position = 2", notGranted("post_media")],
-		["delete from post_media", notGranted("post_media")],
-	],
 	"a review is a partner's edit or cancel before review closes, or no response alone at its close, each once":
 		[
 			[newReview({ outcome: "approved" }), "post_review_outcome_check"],
