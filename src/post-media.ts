@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { AwsClient } from "aws4fetch";
 import { UUID } from "./uuid.ts";
 
@@ -10,10 +11,16 @@ type Refusal =
 	| "too_many_pages"
 	| "already_stored";
 type Rule = {
-	is(bytes: Uint8Array): boolean;
+	is(head: Uint8Array): boolean;
 	minBytes?: number;
 	maxBytes: number;
-	refuses?(bytes: Uint8Array): Refusal | undefined;
+	refuses?(head: Uint8Array): Refusal | undefined;
+	watch?(): Watch;
+};
+// Sees every byte on its way to storage, and stops the upload on a refusal.
+type Watch = {
+	stream: TransformStream<Uint8Array, Uint8Array>;
+	refused(): Refusal | undefined;
 };
 
 // Decimal megabytes, the stricter reading of each platform's limit.
@@ -70,19 +77,37 @@ function refusesPixels(pixels: number | undefined): Refusal | undefined {
 }
 
 const PAGE = /\/Type\s*\/Page(?![A-Za-z])/g;
-const WINDOW = 1 << 20;
+// A page marker that starts this close to a piece's end may run into the next.
+const OVERLAP = 64;
 const latin1 = new TextDecoder("latin1");
 
-// Read in windows so a 100 MB file is never one string. This finds the page
-// objects Chrome's print-to-PDF writes; pages packed in compressed object
-// streams are not seen, and LinkedIn judges those itself.
-function pdfPages(bytes: Uint8Array) {
+// This finds the page objects Chrome's print-to-PDF writes; pages packed in
+// compressed object streams are not seen, and LinkedIn judges those itself.
+function pageWatch(): Watch {
 	let pages = 0;
-	for (let at = 0; at < bytes.length; at += WINDOW) {
-		const text = latin1.decode(bytes.subarray(at, at + WINDOW + 64));
-		for (const match of text.matchAll(PAGE)) if (match.index < WINDOW) pages++;
-	}
-	return pages;
+	let carry = "";
+	const refused = (): Refusal | undefined =>
+		pages > MAX_PAGES ? "too_many_pages" : undefined;
+	const count = (text: string, until: number) => {
+		for (const match of text.matchAll(PAGE)) if (match.index < until) pages++;
+	};
+	return {
+		refused,
+		stream: new TransformStream({
+			transform(piece, controller) {
+				const text = carry + latin1.decode(piece);
+				const until = Math.max(0, text.length - OVERLAP);
+				carry = text.slice(until);
+				count(text, until);
+				if (refused()) controller.error(new Error("too_many_pages"));
+				else controller.enqueue(piece);
+			},
+			flush(controller) {
+				count(carry, carry.length);
+				if (refused()) controller.error(new Error("too_many_pages"));
+			},
+		}),
+	};
 }
 
 // Each type's limits are the strictest of the platforms that take it:
@@ -91,35 +116,42 @@ function pdfPages(bytes: Uint8Array) {
 // 100 MB and 300 pages.
 const MEDIA: Record<MediaType, Rule> = {
 	"image/jpeg": {
-		is: (bytes) => startsWith(bytes, [0xff, 0xd8, 0xff]),
+		is: (head) => startsWith(head, [0xff, 0xd8, 0xff]),
 		maxBytes: 8 * MB,
-		refuses: (bytes) => refusesPixels(jpegPixels(bytes)),
+		refuses: (head) => refusesPixels(jpegPixels(head)),
 	},
 	"image/png": {
-		is: (bytes) =>
-			startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		is: (head) =>
+			startsWith(head, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
 		maxBytes: 10 * MB,
-		refuses: (bytes) => refusesPixels(pngPixels(bytes)),
+		refuses: (head) => refusesPixels(pngPixels(head)),
 	},
 	"video/mp4": {
-		is: (bytes) =>
-			ascii(bytes, 4, 8) === "ftyp" && MP4_BRANDS.has(ascii(bytes, 8, 12)),
+		is: (head) =>
+			ascii(head, 4, 8) === "ftyp" && MP4_BRANDS.has(ascii(head, 8, 12)),
 		minBytes: 76_800,
 		maxBytes: 300 * MB,
 	},
 	"application/pdf": {
-		is: (bytes) => ascii(bytes, 0, 5) === "%PDF-",
+		is: (head) => ascii(head, 0, 5) === "%PDF-",
 		maxBytes: 100 * MB,
-		refuses: (bytes) =>
-			pdfPages(bytes) > MAX_PAGES ? "too_many_pages" : undefined,
+		watch: pageWatch,
 	},
 };
 
-function refusal(type: MediaType, bytes: Uint8Array): Refusal | undefined {
+function judge(
+	head: Uint8Array,
+	length: number,
+): { type: MediaType } | { refused: Refusal } {
+	const type = (Object.keys(MEDIA) as MediaType[]).find((candidate) =>
+		MEDIA[candidate].is(head),
+	);
+	if (type === undefined) return { refused: "unsupported_file" };
 	const rule = MEDIA[type];
-	if (bytes.length < (rule.minBytes ?? 0)) return "too_small";
-	if (bytes.length > rule.maxBytes) return "too_large";
-	return rule.refuses?.(bytes);
+	if (length < (rule.minBytes ?? 0)) return { refused: "too_small" };
+	if (length > rule.maxBytes) return { refused: "too_large" };
+	const refused = rule.refuses?.(head);
+	return refused ? { refused } : { type };
 }
 
 function mediaKey(documentId: string) {
@@ -127,12 +159,42 @@ function mediaKey(documentId: string) {
 	return documentId;
 }
 
+// Enough for the type and an image's size, whose markers come first.
+const HEAD = 1 << 20;
+
+async function readHead(reader: ReadableStreamDefaultReader<Uint8Array>) {
+	const pieces: Uint8Array[] = [];
+	let size = 0;
+	while (size < HEAD) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		pieces.push(value);
+		size += value.length;
+	}
+	return Buffer.concat(pieces);
+}
+
+const rejoined = (
+	head: Uint8Array,
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+) =>
+	new ReadableStream<Uint8Array>({
+		start: (controller) => controller.enqueue(head),
+		async pull(controller) {
+			const { done, value } = await reader.read();
+			if (done) controller.close();
+			else controller.enqueue(value);
+		},
+	});
+
 // The file's own bytes decide its type; a name or extension is never trusted.
+// The file streams to storage, so a large one is never held whole. The caller
+// holds the body to its declared length.
 export async function storeMedia(
 	bucket: {
 		put(
 			key: string,
-			value: Uint8Array,
+			value: ReadableStream<Uint8Array>,
 			options: {
 				httpMetadata: { contentType: MediaType };
 				onlyIf: { etagDoesNotMatch: "*" };
@@ -140,21 +202,33 @@ export async function storeMedia(
 		): Promise<object | null>;
 	},
 	documentId: string,
-	bytes: Uint8Array,
+	body: ReadableStream<Uint8Array>,
+	length: number,
 ): Promise<{ key: string; type: MediaType } | { refused: Refusal }> {
 	const key = mediaKey(documentId);
-	const type = (Object.keys(MEDIA) as MediaType[]).find((candidate) =>
-		MEDIA[candidate].is(bytes),
-	);
-	if (type === undefined) return { refused: "unsupported_file" };
-	const refused = refusal(type, bytes);
-	if (refused) return { refused };
-	// R2 answers null when the precondition fails, so a file is never replaced.
-	const stored = await bucket.put(key, bytes, {
-		httpMetadata: { contentType: type },
-		onlyIf: { etagDoesNotMatch: "*" },
-	});
-	return stored === null ? { refused: "already_stored" } : { key, type };
+	const reader = body.getReader();
+	const head = await readHead(reader);
+	const judged = judge(head, length);
+	if ("refused" in judged) return judged;
+	const { type } = judged;
+	const watch = MEDIA[type].watch?.();
+	const file = rejoined(head, reader);
+	try {
+		// R2 answers null when the precondition fails, so a file is never replaced.
+		const stored = await bucket.put(
+			key,
+			watch ? file.pipeThrough(watch.stream) : file,
+			{
+				httpMetadata: { contentType: type },
+				onlyIf: { etagDoesNotMatch: "*" },
+			},
+		);
+		return stored === null ? { refused: "already_stored" } : { key, type };
+	} catch (error) {
+		const refused = watch?.refused();
+		if (refused) return { refused };
+		throw error;
+	}
 }
 
 export type MediaSigner = {
