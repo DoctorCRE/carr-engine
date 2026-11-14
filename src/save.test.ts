@@ -62,11 +62,10 @@ test("saves", (t) =>
 				const answer = await run(request, async (saving) => {
 					const { rows } = await sql`select
 						current_setting('transaction_isolation') as isolation,
-						current_setting('transaction_read_only') as read_only`.execute(
-						saving.tx,
-					);
+						current_setting('transaction_read_only') as read_only,
+						current_setting('TimeZone') as time_zone`.execute(saving.tx);
 					assert.deepEqual(rows, [
-						{ isolation: "read committed", read_only: "off" },
+						{ isolation: "read committed", read_only: "off", time_zone: "UTC" },
 					]);
 					await saving.record({
 						...subject(saving),
