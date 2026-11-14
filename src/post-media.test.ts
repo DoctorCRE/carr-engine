@@ -13,13 +13,18 @@ const SIGNER = {
 	POST_MEDIA_BUCKET: "example-post-media",
 };
 
-function bucket() {
+// R2 reads the whole file; another reader may stop or swallow a late error.
+const readAll = (file: ReadableStream<Uint8Array>) =>
+	new Response(file).arrayBuffer();
+function bucket(
+	receive: (file: ReadableStream<Uint8Array>) => unknown = readAll,
+) {
 	const stored = new Map<string, string>();
 	return {
 		stored,
 		async put(
 			key: string,
-			_value: Uint8Array,
+			value: ReadableStream<Uint8Array>,
 			options: {
 				httpMetadata: { contentType: string };
 				onlyIf: { etagDoesNotMatch: string };
@@ -27,11 +32,38 @@ function bucket() {
 		) {
 			if (options.onlyIf.etagDoesNotMatch === "*" && stored.has(key))
 				return null;
+			await receive(value);
 			stored.set(key, options.httpMetadata.contentType);
 			return {};
 		},
+		async delete(key: string) {
+			stored.delete(key);
+		},
 	};
 }
+
+const PIECE = 64 * 1024;
+// A file arriving in pieces, as a request body does.
+function arriving(file: Uint8Array) {
+	let pulled = 0;
+	let cancelled = false;
+	const body = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (pulled >= file.length) return controller.close();
+			controller.enqueue(file.subarray(pulled, pulled + PIECE));
+			pulled += PIECE;
+		},
+		cancel() {
+			cancelled = true;
+		},
+	});
+	return { body, pulled: () => pulled, cancelled: () => cancelled };
+}
+const store = (
+	media: ReturnType<typeof bucket>,
+	file: Uint8Array,
+	id = DOCUMENT,
+) => storeMedia(media, id, arriving(file).body, file.length);
 
 const bytes = (size: number, ...parts: (string | number[])[]) => {
 	const file = new Uint8Array(size);
@@ -79,7 +111,7 @@ test("a file's own bytes decide its type, and other files are refused", async ()
 		[pdf(pagesAt(8)), "application/pdf"],
 	] as const) {
 		const media = bucket();
-		assert.deepEqual(await storeMedia(media, DOCUMENT, file), {
+		assert.deepEqual(await store(media, file), {
 			key: DOCUMENT,
 			type,
 		});
@@ -92,7 +124,7 @@ test("a file's own bytes decide its type, and other files are refused", async ()
 		mp4("heic", 200_000),
 		bytes(1000, [0xff, 0xd8, 0xff, 0xd9]),
 	]) {
-		assert.deepEqual(await storeMedia(media, DOCUMENT, file), {
+		assert.deepEqual(await store(media, file), {
 			refused: "unsupported_file",
 		});
 	}
@@ -107,45 +139,93 @@ test("a file outside its type's size limits is refused", async () => {
 		[mp4("mp42", 300 * MB + 1), "too_large"],
 		[mp4("mp42", 76_799), "too_small"],
 	] as const) {
-		assert.deepEqual(await storeMedia(media, DOCUMENT, file), { refused });
+		assert.deepEqual(await store(media, file), { refused });
 	}
 	assert.equal(media.stored.size, 0);
-	assert.ok("key" in (await storeMedia(media, DOCUMENT, pdf([100], 100 * MB))));
+	assert.ok("key" in (await store(media, pdf([100], 100 * MB))));
 });
 
 test("an image over 36 million pixels is refused", async () => {
 	const media = bucket();
-	assert.ok("key" in (await storeMedia(media, DOCUMENT, png(6000, 6000))));
-	assert.deepEqual(await storeMedia(media, DOCUMENT, png(6000, 6001)), {
+	assert.ok("key" in (await store(media, png(6000, 6000))));
+	assert.deepEqual(await store(media, png(6000, 6001)), {
 		refused: "too_many_pixels",
 	});
-	assert.deepEqual(await storeMedia(media, DOCUMENT, jpeg(6001, 6000)), {
+	assert.deepEqual(await store(media, jpeg(6001, 6000)), {
+		refused: "too_many_pixels",
+	});
+});
+
+test("an image's size is read when its frame comes after the first piece", async () => {
+	// Two large metadata segments, as a phone's EXIF and XMP can be.
+	const photo = (width: number, height: number) => {
+		const file = bytes(200_000, [0xff, 0xd8]);
+		for (const at of [2, 60_004]) file.set([0xff, 0xe1, ...u16(60_000)], at);
+		file.set(
+			[0xff, 0xc0, ...u16(17), 8, ...u16(height), ...u16(width)],
+			120_006,
+		);
+		return file;
+	};
+	assert.ok("key" in (await store(bucket(), photo(1080, 1350))));
+	assert.deepEqual(await store(bucket(), photo(6001, 6000)), {
 		refused: "too_many_pixels",
 	});
 });
 
 test("a PDF over 300 pages is refused, wherever its pages sit", async () => {
-	const media = bucket();
-	const straddling = (1 << 20) - 5;
-	assert.ok("key" in (await storeMedia(media, DOCUMENT, pdf(pagesAt(300)))));
-	assert.deepEqual(
-		await storeMedia(media, DOCUMENT, pdf([...pagesAt(300), straddling])),
-		{
+	const straddling = 40 * PIECE - 5;
+	assert.ok("key" in (await store(bucket(), pdf(pagesAt(300)))));
+	for (const last of [straddling, 3 * MB - 12])
+		assert.deepEqual(await store(bucket(), pdf([...pagesAt(300), last])), {
 			refused: "too_many_pages",
-		},
+		});
+});
+
+test("a PDF is refused as soon as it passes 300 pages, and nothing is kept", async () => {
+	const media = bucket();
+	const file = arriving(pdf(pagesAt(301), 100 * MB));
+	assert.deepEqual(await storeMedia(media, DOCUMENT, file.body, 100 * MB), {
+		refused: "too_many_pages",
+	});
+	assert.ok(file.pulled() < 10 * MB);
+	assert.equal(media.stored.size, 0);
+});
+
+test("a PDF found over 300 pages only after R2 took every byte is removed", async () => {
+	const lenient = bucket(async (file) => {
+		const reader = file.getReader();
+		try {
+			while (!(await reader.read()).done);
+		} catch {}
+	});
+	assert.deepEqual(await store(lenient, pdf([...pagesAt(300), 3 * MB - 12])), {
+		refused: "too_many_pages",
+	});
+	assert.equal(lenient.stored.size, 0);
+});
+
+test("when storage stops reading, the upload stops too", async () => {
+	const file = arriving(jpeg(10, 10, 2 * MB));
+	await storeMedia(
+		bucket((stream) => stream.cancel()),
+		DOCUMENT,
+		file.body,
+		2 * MB,
 	);
+	assert.equal(file.cancelled(), true);
 });
 
 test("a stored file is keyed and linked by its document id alone", async () => {
 	const name = "example-clinic-flyer.jpg";
-	await assert.rejects(storeMedia(bucket(), name, jpeg(10, 10)));
+	await assert.rejects(store(bucket(), jpeg(10, 10), name));
 	await assert.rejects(signedMediaUrl(SIGNER, name));
 });
 
 test("a stored file is never replaced", async () => {
 	const media = bucket();
-	assert.ok("key" in (await storeMedia(media, DOCUMENT, jpeg(10, 10))));
-	assert.deepEqual(await storeMedia(media, DOCUMENT, png(10, 10)), {
+	assert.ok("key" in (await store(media, jpeg(10, 10))));
+	assert.deepEqual(await store(media, png(10, 10)), {
 		refused: "already_stored",
 	});
 	assert.equal(media.stored.get(DOCUMENT), "image/jpeg");
