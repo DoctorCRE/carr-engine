@@ -13,6 +13,8 @@ const PARTNER = id(1);
 const LINKEDIN = id(2);
 const INSTAGRAM = id(3);
 const FACEBOOK = id(4);
+// An email attachment, which intake never checked.
+const UNTYPED = id(5);
 // Monday 12/21 at midnight in Central time.
 const ENGINE_FROM = "2026-12-21T06:00:00+00:00";
 const WEEK = "2026-12-28";
@@ -45,7 +47,8 @@ before(async () => {
 		insert into social_account (id, platform, owner_party_id, handle, engine_publishes_from) values
 			('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example', '${ENGINE_FROM}'),
 			('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example', '${ENGINE_FROM}'),
-			('${FACEBOOK}', 'facebook', '${PARTNER}', 'jordan-example-page', null);`);
+			('${FACEBOOK}', 'facebook', '${PARTNER}', 'jordan-example-page', null);
+		insert into document (id, name, r2_key) values ('${UNTYPED}', 'Example attachment.pdf', 'example/attachment.pdf');`);
 	await owner.end();
 	target.searchParams.set("options", "-c search_path=next -c role=engine");
 });
@@ -136,14 +139,18 @@ test("a file is stored under a new document id and recorded with its type", asyn
 	};
 	assert.equal(content_type, "image/jpeg");
 	assert.equal(stored.get(document_id), "image/jpeg");
-	assert.deepEqual(await documents(), [
-		{
-			id: document_id,
-			name: "Example card.jpg",
-			r2_key: document_id,
-			content_type: "image/jpeg",
-		},
-	]);
+	const rows = await documents();
+	assert.deepEqual(
+		rows.filter((row) => row.id === document_id),
+		[
+			{
+				id: document_id,
+				name: "Example card.jpg",
+				r2_key: document_id,
+				content_type: "image/jpeg",
+			},
+		],
+	);
 });
 
 test("a post goes in with its text and picture, and reads back alone and in its week", async () => {
@@ -204,10 +211,32 @@ test("a post goes in with its text and picture, and reads back alone and in its 
 		404,
 		"not_found",
 	]);
-	assert.deepEqual(await refusal(await read("/posts?week=2026-12-29")), [
-		400,
-		"invalid_week",
-	]);
+	// 2027-02-29 does not exist; JavaScript alone would read it as Monday 3/1.
+	for (const day of ["2026-12-29", "2027-02-29"])
+		assert.deepEqual(await refusal(await read(`/posts?week=${day}`)), [
+			400,
+			"invalid_week",
+		]);
+});
+
+test("a week across a clock change runs from midnight to midnight in Central time", async () => {
+	// Clocks go forward on Sunday 3/14, so the week ends at 05:00 UTC, not 06:00.
+	for (const [n, scheduled_at] of [
+		[50, "2027-03-08T05:59:00Z"],
+		[51, "2027-03-08T06:00:00Z"],
+		[52, "2027-03-15T04:59:00Z"],
+		[53, "2027-03-15T05:00:00Z"],
+	] as const) {
+		const post = { ...photoPost(n, []), format: "text", scheduled_at };
+		assert.equal((await create(post)).status, 201);
+	}
+	const week = (await (await read("/posts?week=2027-03-08")).json()) as {
+		posts: { id: string }[];
+	};
+	assert.deepEqual(
+		week.posts.map((post) => post.id),
+		[id(51), id(52)],
+	);
 });
 
 test("a post timed before its account's engine_publishes_from is refused, and nothing is kept", async () => {
@@ -245,6 +274,8 @@ test("a post whose format or files do not fit is refused, and nothing is kept", 
 		[37, { format: "text" }, [400, "invalid_post"]],
 		[38, { scheduled_at: "2026-12-29T15:00:00" }, [400, "invalid_post"]],
 		[39, { alt_text: "Example" }, [400, "invalid_post"]],
+		[41, { scheduled_at: "2027-02-30T15:00:00Z" }, [400, "invalid_post"]],
+		[42, { media: [UNTYPED] }, [422, "unknown_document"]],
 	] as const) {
 		const post = photoPost(n, [photo], fields);
 		assert.deepEqual(await refusal(await create(post)), refused);

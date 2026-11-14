@@ -44,9 +44,19 @@ const POST = `select jsonb_build_object(
 
 const isUuid = (value: unknown): value is string =>
 	typeof value === "string" && UUID.test(value);
+// JavaScript rolls 2027-02-30 into March, so a date must read back as written.
+function calendarDay(date: string) {
+	const day = new Date(`${date}T00:00:00Z`);
+	return /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+		!Number.isNaN(day.getTime()) &&
+		day.toISOString().startsWith(date)
+		? day
+		: undefined;
+}
 const isInstant = (value: unknown): value is string =>
 	typeof value === "string" &&
-	/(Z|[+-]\d\d:\d\d)$/.test(value) &&
+	/T.*(Z|[+-]\d\d:\d\d)$/.test(value) &&
+	calendarDay(value.slice(0, 10)) !== undefined &&
 	!Number.isNaN(Date.parse(value));
 
 function parsePost(body: unknown): NewPost | undefined {
@@ -71,13 +81,7 @@ function parsePost(body: unknown): NewPost | undefined {
 
 // The batch's weeks start on Monday in Central time.
 function isMonday(week: string | undefined): week is string {
-	if (!week || !/^\d{4}-\d{2}-\d{2}$/.test(week)) return false;
-	const day = new Date(`${week}T00:00:00Z`);
-	return (
-		!Number.isNaN(day.getTime()) &&
-		day.toISOString().startsWith(week) &&
-		day.getUTCDay() === 1
-	);
+	return week !== undefined && calendarDay(week)?.getUTCDay() === 1;
 }
 
 // A refusal that undoes the whole save.
@@ -170,9 +174,10 @@ intake.post("/posts", async (c) => {
 			`insert into post_media (post_id, format, position, document_id, content_type)
 			select $1, $2, m.position, d.id, d.content_type
 			from unnest($3::uuid[]) with ordinality m (document_id, position)
-			join document d on d.id = m.document_id`,
+			join document d on d.id = m.document_id and d.content_type is not null`,
 			[post.id, post.format, post.media],
 		);
+		// Only a file intake stored has a type.
 		if (media.rowCount !== post.media.length)
 			throw new Refused("unknown_document");
 		const { rows } = await db.query(`${POST} where p.id = $1`, [post.id]);
