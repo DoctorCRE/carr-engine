@@ -259,3 +259,23 @@ test("the old door's rate limit passes through unchanged", async () => {
 		[429, "60", "made-up limit"],
 	);
 });
+
+test("a token for the compare audience does not open the intake door", async () => {
+	const env = {
+		ACCESS_TEAM_DOMAIN: TEAM,
+		ACCESS_AUD: AUD,
+		INTAKE_ACCESS_AUD: "made-up-intake-audience",
+	};
+	const upload = async (claims: Claims) =>
+		app.request(
+			"https://engine.example.test/intake/media?name=x",
+			{
+				method: "POST",
+				headers: { "Cf-Access-Jwt-Assertion": await token(claims) },
+			},
+			env,
+		);
+	assert.equal((await upload({})).status, 401);
+	// Past the door, a request with no file is refused by the route.
+	assert.equal((await upload({ aud: "made-up-intake-audience" })).status, 411);
+});
