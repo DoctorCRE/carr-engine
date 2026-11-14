@@ -3,11 +3,17 @@ import { Hono } from "hono";
 import { activity } from "./activity/routes.ts";
 import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
-import { type CompareEnv, compareDoor, oldReads } from "./compare-door.ts";
+import {
+	accessDoor,
+	type CompareEnv,
+	compareDoor,
+	oldReads,
+} from "./compare-door.ts";
 import { connection } from "./connection.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
+import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { relationships } from "./relationships/routes.ts";
 import type { WriterEnv } from "./save.ts";
@@ -18,7 +24,8 @@ import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 
 type WorkerEnv = WriterEnv &
-	CompareEnv & {
+	CompareEnv &
+	IntakeEnv & {
 		Bindings: { CF_VERSION_METADATA: { id: string } };
 	};
 
@@ -52,8 +59,19 @@ app.use("/api/engine/*", requireSession);
 app.route("/api/engine", engine);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
-app.use("/compare/*", compareDoor);
+app.use(
+	"/compare/*",
+	accessDoor("compare", (env) => env.ACCESS_AUD),
+	compareDoor,
+);
 app.route("/compare/:partner/engine", engine);
 app.route("/compare/:partner/old", oldReads);
+
+// The Friday batch hands its posts to the engine here.
+app.use(
+	"/intake/*",
+	accessDoor("intake", (env) => env.INTAKE_ACCESS_AUD),
+);
+app.route("/intake", intake);
 
 export default app;

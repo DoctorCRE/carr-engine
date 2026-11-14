@@ -115,6 +115,7 @@ const rounds = ROUNDS.map(
 				id: id(200 + i),
 				name: `LOI round ${i + 1}.pdf`,
 				r2_key: `example/loi-${i + 1}.pdf`,
+				content_type: null,
 				// The counter arrived as an attachment to the agent's email.
 				email_activity_id: i === 1 ? EMAIL : null,
 			},

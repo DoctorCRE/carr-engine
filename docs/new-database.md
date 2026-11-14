@@ -11,7 +11,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
 - **`deal_phase_change`**: one row each time a deal changes phase, with when, the new phase and the reason. A deal's phase is its latest row.
 - **`offer`**: one round of an LOI or other offer on a deal.
-- **`document`**: a file, as its name and its key in object storage (Cloudflare R2). The file itself is never in the database. An email attachment names the email it arrived with.
+- **`document`**: a file, as its name, its key in object storage (Cloudflare R2) and its type, read from the file's own bytes when the engine stores it. The file itself is never in the database. An email attachment names the email it arrived with.
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.

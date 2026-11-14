@@ -146,6 +146,8 @@ create table document (
 	created_at timestamptz not null default now(),
 	name text not null,
 	r2_key text not null,
+	-- Read from the file's own bytes when it is stored.
+	content_type text,
 	email_activity_id uuid references email
 );
 
