@@ -185,6 +185,7 @@ const rejoined = (
 			if (done) controller.close();
 			else controller.enqueue(value);
 		},
+		cancel: (reason) => reader.cancel(reason),
 	});
 
 // The file's own bytes decide its type; a name or extension is never trusted.
@@ -200,6 +201,7 @@ export async function storeMedia(
 				onlyIf: { etagDoesNotMatch: "*" };
 			},
 		): Promise<object | null>;
+		delete(key: string): Promise<void>;
 	},
 	documentId: string,
 	body: ReadableStream<Uint8Array>,
@@ -223,7 +225,12 @@ export async function storeMedia(
 				onlyIf: { etagDoesNotMatch: "*" },
 			},
 		);
-		return stored === null ? { refused: "already_stored" } : { key, type };
+		if (stored === null) return { refused: "already_stored" };
+		// The last pages are counted only after every byte has gone to R2.
+		const refused = watch?.refused();
+		if (!refused) return { key, type };
+		await bucket.delete(key);
+		return { refused };
 	} catch (error) {
 		const refused = watch?.refused();
 		if (refused) return { refused };
