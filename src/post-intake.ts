@@ -129,6 +129,7 @@ intake.post("/media", async (c) => {
 					file.pipeThrough(new FixedLengthStream(length)),
 					options,
 				),
+			delete: (key) => c.env.POST_MEDIA.delete(key),
 		},
 		id,
 		body,
@@ -136,13 +137,19 @@ intake.post("/media", async (c) => {
 	);
 	if ("refused" in stored) return c.json({ error: stored.refused }, 422);
 	// Stored before its row, so a document never names a missing file.
-	return inTransaction(c, async (db) => {
-		await db.query(
-			"insert into document (id, name, r2_key, content_type) values ($1, $2, $3, $4)",
-			[id, name, stored.key, stored.type],
-		);
-		return c.json({ document_id: id, content_type: stored.type }, 201);
-	});
+	try {
+		return await inTransaction(c, async (db) => {
+			await db.query(
+				"insert into document (id, name, r2_key, content_type) values ($1, $2, $3, $4)",
+				[id, name, stored.key, stored.type],
+			);
+			return c.json({ document_id: id, content_type: stored.type }, 201);
+		});
+	} catch (error) {
+		// Best effort: a file no row names is never read, only kept.
+		await c.env.POST_MEDIA.delete(stored.key).catch(() => {});
+		throw error;
+	}
 });
 
 intake.post("/posts", async (c) => {

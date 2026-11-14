@@ -68,6 +68,9 @@ const env = () => ({
 			stored.set(key, options.httpMetadata.contentType);
 			return {};
 		},
+		async delete(key: string) {
+			stored.delete(key);
+		},
 	},
 });
 
@@ -272,6 +275,21 @@ test("a file of the wrong type or size, or one the database cannot record, is re
 		assert.deepEqual(await refusal(await answer), refused);
 	assert.equal(stored.size, files);
 	assert.equal((await documents()).length, rows);
+});
+
+test("a file whose row cannot be written is removed again", async () => {
+	const files = stored.size;
+	const readOnly = new URL(target.href);
+	readOnly.searchParams.set(
+		"options",
+		`${readOnly.searchParams.get("options")} -c default_transaction_read_only=on`,
+	);
+	const answer = await upload(jpeg, jpeg.length, "?name=x", {
+		...env(),
+		NEXT_DATABASE: { connectionString: readOnly.href },
+	});
+	assert.equal(answer.status, 500);
+	assert.equal(stored.size, files);
 });
 
 test("intake answers only through its own Access application", async () => {

@@ -13,7 +13,12 @@ const SIGNER = {
 	POST_MEDIA_BUCKET: "example-post-media",
 };
 
-function bucket() {
+// R2 reads the whole file; another reader may stop or swallow a late error.
+const readAll = (file: ReadableStream<Uint8Array>) =>
+	new Response(file).arrayBuffer();
+function bucket(
+	receive: (file: ReadableStream<Uint8Array>) => unknown = readAll,
+) {
 	const stored = new Map<string, string>();
 	return {
 		stored,
@@ -27,9 +32,12 @@ function bucket() {
 		) {
 			if (options.onlyIf.etagDoesNotMatch === "*" && stored.has(key))
 				return null;
-			await new Response(value).arrayBuffer();
+			await receive(value);
 			stored.set(key, options.httpMetadata.contentType);
 			return {};
+		},
+		async delete(key: string) {
+			stored.delete(key);
 		},
 	};
 }
@@ -38,14 +46,18 @@ const PIECE = 64 * 1024;
 // A file arriving in pieces, as a request body does.
 function arriving(file: Uint8Array) {
 	let pulled = 0;
+	let cancelled = false;
 	const body = new ReadableStream<Uint8Array>({
 		pull(controller) {
 			if (pulled >= file.length) return controller.close();
 			controller.enqueue(file.subarray(pulled, pulled + PIECE));
 			pulled += PIECE;
 		},
+		cancel() {
+			cancelled = true;
+		},
 	});
-	return { body, pulled: () => pulled };
+	return { body, pulled: () => pulled, cancelled: () => cancelled };
 }
 const store = (
 	media: ReturnType<typeof bucket>,
@@ -178,6 +190,30 @@ test("a PDF is refused as soon as it passes 300 pages, and nothing is kept", asy
 	});
 	assert.ok(file.pulled() < 10 * MB);
 	assert.equal(media.stored.size, 0);
+});
+
+test("a PDF found over 300 pages only after R2 took every byte is removed", async () => {
+	const lenient = bucket(async (file) => {
+		const reader = file.getReader();
+		try {
+			while (!(await reader.read()).done);
+		} catch {}
+	});
+	assert.deepEqual(await store(lenient, pdf([...pagesAt(300), 3 * MB - 12])), {
+		refused: "too_many_pages",
+	});
+	assert.equal(lenient.stored.size, 0);
+});
+
+test("when storage stops reading, the upload stops too", async () => {
+	const file = arriving(jpeg(10, 10, 2 * MB));
+	await storeMedia(
+		bucket((stream) => stream.cancel()),
+		DOCUMENT,
+		file.body,
+		2 * MB,
+	);
+	assert.equal(file.cancelled(), true);
 });
 
 test("a stored file is keyed and linked by its document id alone", async () => {
