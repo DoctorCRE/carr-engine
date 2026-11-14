@@ -89,6 +89,8 @@ export async function runSave(
 			.setIsolationLevel("read committed")
 			.setAccessMode("read write")
 			.execute(async (tx) => {
+				// The same clock readSnapshot reads, whatever the login's zone.
+				await sql`select set_config('TimeZone', 'UTC', true)`.execute(tx);
 				const actor = await tx
 					.selectFrom("actor")
 					.select("id")
