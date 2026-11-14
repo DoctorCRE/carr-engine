@@ -60,7 +60,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 25. A sign-in is as its account's own platform account id, ends after it starts, and is never rewritten or removed.
 26. Each platform's formats come from the known platforms and formats, each once, and only a schema change adds one.
 27. A post's text versions run 1, 2, 3 with no gap. A later version is an edit by a partner, written while the post is scheduled and before its review closes, an hour before its time by the database's clock. Text is never blank, rewritten or removed.
-28. A post's media are documents in order, from 1 to 20. A text post has none, and only a photo set has more than one. Each medium is in its post's format and is never changed or removed.
+28. A post's media are documents in order, from 1 to 20. A text post has none, and only a photo set has more than one. Each medium is in its post's format, and its file is of the document's own type: an MP4 for a video, a PDF for a document, and a JPEG or PNG otherwise. A medium is never changed or removed.
 29. A review is an edit, a cancel or no response, judged by the database's clock. An edit names a text version after the first, and a cancel is of a cancelled post; both name a partner and come before review closes. No response names no one, comes at or after the close, only for a scheduled post with no other review. A review holds its post until it is saved, so an edit and the job writing no response take turns. Each version is reviewed once, a post is cancelled and gets no response at most once, and a review is never rewritten or removed.
 30. A record or link keeps when it was stored.
 31. The engine empties no table, removes no history, and changes only the columns that may change.

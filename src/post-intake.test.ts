@@ -7,6 +7,16 @@ import pg from "pg";
 import { intake } from "./post-intake.ts";
 import app from "./worker.ts";
 
+const id = (n: number) =>
+	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const PARTNER = id(1);
+const LINKEDIN = id(2);
+const INSTAGRAM = id(3);
+const FACEBOOK = id(4);
+// Monday 12/21 at midnight in Central time.
+const ENGINE_FROM = "2026-12-21T06:00:00+00:00";
+const WEEK = "2026-12-28";
+
 // The Workers runtime's stream that holds a body to its length.
 Object.assign(globalThis, {
 	FixedLengthStream: class extends TransformStream {
@@ -30,7 +40,12 @@ before(async () => {
 	const owner = new pg.Client({ connectionString: target.href });
 	await owner.connect();
 	await owner.query(`create schema next; set search_path = next;
-		${await readFile(new URL("../schema/next.sql", import.meta.url), "utf8")}`);
+		${await readFile(new URL("../schema/next.sql", import.meta.url), "utf8")}
+		insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Jordan Example');
+		insert into social_account (id, platform, owner_party_id, handle, engine_publishes_from) values
+			('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example', '${ENGINE_FROM}'),
+			('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example', '${ENGINE_FROM}'),
+			('${FACEBOOK}', 'facebook', '${PARTNER}', 'jordan-example-page', null);`);
 	await owner.end();
 	target.searchParams.set("options", "-c search_path=next -c role=engine");
 });
@@ -75,6 +90,25 @@ const upload = (
 		},
 		bindings,
 	);
+const uploaded = async () =>
+	((await (await upload(jpeg)).json()) as { document_id: string }).document_id;
+
+const create = (post: Record<string, unknown>) =>
+	intake.request(
+		"/posts",
+		{ method: "POST", body: JSON.stringify(post) },
+		env(),
+	);
+const photoPost = (n: number, media: string[], fields = {}) => ({
+	id: id(n),
+	social_account_id: LINKEDIN,
+	format: "photo",
+	scheduled_at: "2026-12-29T15:00:00Z",
+	text: "Five example lease questions",
+	media,
+	...fields,
+});
+const read = (path: string) => intake.request(path, {}, env());
 const refusal = async (answer: Response) => [
 	answer.status,
 	((await answer.json()) as { error: string }).error,
@@ -106,6 +140,117 @@ test("a file is stored under a new document id and recorded with its type", asyn
 			r2_key: document_id,
 			content_type: "image/jpeg",
 		},
+	]);
+});
+
+test("a post goes in with its text and picture, and reads back alone and in its week", async () => {
+	const upload1 = await upload(jpeg);
+	assert.equal(upload1.status, 201);
+	const { document_id, content_type } = (await upload1.json()) as {
+		document_id: string;
+		content_type: string;
+	};
+	assert.equal(content_type, "image/jpeg");
+	assert.equal(stored.get(document_id), "image/jpeg");
+	const expected = {
+		id: id(10),
+		social_account_id: LINKEDIN,
+		platform: "linkedin",
+		format: "photo",
+		scheduled_at: "2026-12-29T15:00:00+00:00",
+		status: "scheduled",
+		reason: null,
+		platform_post_id: null,
+		published_at: null,
+		text: { version: 1, body: "Five example lease questions" },
+		media: [{ position: 1, document_id, content_type: "image/jpeg" }],
+	};
+	const created = await create(photoPost(10, [document_id]));
+	assert.equal(created.status, 201);
+	assert.deepEqual(await created.json(), expected);
+	assert.deepEqual(await (await read(`/posts/${id(10)}`)).json(), expected);
+	const partner = new pg.Client({ connectionString: target.href });
+	await partner.connect();
+	await partner.query(
+		`insert into post_text (post_id, version, body, author_party_id)
+		values ($1, 2, 'Six example lease questions', $2)`,
+		[id(10), PARTNER],
+	);
+	await partner.end();
+	assert.deepEqual(await (await read(`/posts/${id(10)}`)).json(), {
+		...expected,
+		text: { version: 2, body: "Six example lease questions" },
+	});
+
+	// Central time's Sunday night and the next Monday fall outside the week.
+	for (const [n, scheduled_at] of [
+		[11, "2026-12-28T05:59:00Z"],
+		[12, "2026-12-28T06:00:00Z"],
+		[13, "2027-01-04T05:59:00Z"],
+		[14, "2027-01-04T06:00:00Z"],
+	] as const)
+		await create({ ...photoPost(n, []), format: "text", scheduled_at });
+	const week = (await (await read(`/posts?week=${WEEK}`)).json()) as {
+		posts: { id: string }[];
+	};
+	assert.deepEqual(
+		week.posts.map((post) => post.id),
+		[id(12), id(10), id(13)],
+	);
+	assert.deepEqual(await refusal(await read(`/posts/${id(99)}`)), [
+		404,
+		"not_found",
+	]);
+	assert.deepEqual(await refusal(await read("/posts?week=2026-12-29")), [
+		400,
+		"invalid_week",
+	]);
+});
+
+test("a post timed before its account's engine_publishes_from is refused, and nothing is kept", async () => {
+	for (const [n, fields] of [
+		[20, { scheduled_at: "2026-12-21T05:59:00Z" }],
+		[21, { social_account_id: FACEBOOK }],
+	] as const) {
+		const post = photoPost(n, [await uploaded()], fields);
+		assert.deepEqual(await refusal(await create(post)), [
+			422,
+			"before_engine_publishes_from",
+		]);
+		assert.equal((await read(`/posts/${id(n)}`)).status, 404);
+	}
+	const ready = await create(
+		photoPost(22, [await uploaded()], { scheduled_at: ENGINE_FROM }),
+	);
+	assert.equal(ready.status, 201);
+});
+
+test("a post whose format or files do not fit is refused, and nothing is kept", async () => {
+	const photo = await uploaded();
+	for (const [n, fields, refused] of [
+		[30, { format: "video" }, [422, "media_type_does_not_fit_format"]],
+		[31, { media: [photo, photo] }, [422, "media_do_not_fit_format"]],
+		[
+			32,
+			{ social_account_id: INSTAGRAM, format: "text", media: [] },
+			[422, "format_not_offered"],
+		],
+		[33, { media: [id(99)] }, [422, "unknown_document"]],
+		[34, { social_account_id: id(99) }, [422, "unknown_account"]],
+		[35, { text: " " }, [422, "blank_text"]],
+		[36, { media: [] }, [400, "invalid_post"]],
+		[37, { format: "text" }, [400, "invalid_post"]],
+		[38, { scheduled_at: "2026-12-29T15:00:00" }, [400, "invalid_post"]],
+		[39, { alt_text: "Example" }, [400, "invalid_post"]],
+	] as const) {
+		const post = photoPost(n, [photo], fields);
+		assert.deepEqual(await refusal(await create(post)), refused);
+		assert.equal((await read(`/posts/${id(n)}`)).status, 404);
+	}
+	assert.equal((await create(photoPost(40, [photo]))).status, 201);
+	assert.deepEqual(await refusal(await create(photoPost(40, [photo]))), [
+		409,
+		"post_exists",
 	]);
 });
 
